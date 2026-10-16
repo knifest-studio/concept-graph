@@ -1,0 +1,12 @@
+node_modules/
+dist/
+releases/
+data/
+backups/
+.env
+.env.*
+!.env.example
+.codex/
+*.conceptgraph
+*.log
+.DS_Store
