@@ -17,7 +17,18 @@ Keep experiments out of a real board directory. Automated tests start an isolate
 
 The frontend is in `src/`. `server.mjs` owns persistence and the queue; `codex.mjs` is the app-server adapter. `graph.mjs`, `workspace.mjs`, and `board-archive.mjs` validate and preserve graph/archive data.
 
-Preserve node IDs, connections, original assets, and saved input snapshots when changing persistence. Include focused regression coverage for behavior/data changes. Do not commit boards, generated images, auth files, `.env` files, logs, `node_modules/`, or local backups.
+Preserve node IDs, connections, original assets, and saved input snapshots when changing persistence. Include focused regression coverage for behavior/data changes. Do not commit personal boards, generated personal images, auth files, `.env` files, logs, `node_modules/`, or local backups. The explicitly reviewed `examples/courier-robot.conceptgraph` is the only bundled board exception; review its full manifest, snapshots, images, and metadata before replacing it, update its checksum, and run its import test.
+
+## English and Ukrainian README
+
+Update `README.md` and `README.uk.md` together when the English instructions change. Keep commands, links, requirements, features, caveats, and privacy statements equivalent. After reviewing the translation, run:
+
+```sh
+npm run docs:mark-synced
+npm run docs:check
+```
+
+Commit both READMEs and `docs/readme-sync.json`. The first command records SHA-256 hashes; it does not translate text. It refuses an English-only change. CI and release packaging reject files that differ from the reviewed hashes, even if later commits touch only application code. Ukrainian-only language corrections can be recorded without changing English. Translation quality still needs review; never edit the hashes simply to bypass an untranslated change. See `AGENTS.md` for the same instructions used by coding agents.
 
 ## Releases (maintainers)
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-10-16
+
+- Added the Ukrainian README and language links.
+- Added repository instructions and a checked synchronization record: CI and release packaging reject stale README translations, and English-only edits cannot be marked synchronized.
+- Bundled the reviewed courier robot demo, its checksum, and an import regression test. Personal boards and every other export remain excluded from source/release packages.
+
 ## 0.1.0 — 2026-10-16
 
 First public release.

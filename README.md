@@ -1,5 +1,7 @@
 # Concept Graph
 
+**English** | [Українська](README.uk.md)
+
 **A local canvas for image ideas and their evolution.**
 
 Write a prompt, connect references, and run it. Generated images appear as connected nodes. Branch from any result, compare directions, and keep the path that led there.
@@ -47,7 +49,7 @@ npm start
 
 Open **http://127.0.0.1:4317**. Keep the terminal open; press **Ctrl+C** to stop.
 
-Prefer a ZIP? Download `concept-graph-v0.1.0.zip` from [Releases](https://github.com/knifest-studio/concept-graph/releases), extract it, run `npm ci --omit=dev`, then `npm start`. Release ZIPs include the built interface; GitHub's automatic **Source code** archives require a build. Node.js and Codex are installed separately.
+Prefer a ZIP? Download `concept-graph-v0.1.1.zip` from [Releases](https://github.com/knifest-studio/concept-graph/releases), extract it, run `npm ci --omit=dev`, then `npm start`. Release ZIPs include the built interface; GitHub's automatic **Source code** archives require a build. Node.js and Codex are installed separately.
 
 For the complete installation, update, backup, and troubleshooting instructions, read the **[setup guide](docs/setup.md)**. Controls and board-file details are in the **[user guide](docs/user-guide.md)**.
 
@@ -63,7 +65,7 @@ Only connected ancestors are sent as context. Unconnected ideas stay out of the 
 
 The screenshot above is a real board with three images generated through Concept Graph: an original courier robot, a rainy-city variation, and a forest-delivery variation. Each branch keeps the original image as its connected reference.
 
-[Download the example board](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) and use **Import** to explore its prompts, connections, and completed run history. Import adds a new board and does not generate anything automatically. [Read the exact prompts](examples/courier-robot.md).
+The [example board](examples/courier-robot.conceptgraph) is included in the repository and release ZIPs from **v0.1.1** onward at `examples/courier-robot.conceptgraph`. Choose **Import** and select that file to explore its prompts, connections, and completed run history. Import adds a new board and does not generate anything automatically. A [standalone download](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) and the [exact prompts](examples/courier-robot.md) are also available.
 
 Open a result to inspect the original prompt and the actual images used by that run:
 

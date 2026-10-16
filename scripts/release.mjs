@@ -16,7 +16,7 @@ if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== `v$
 const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
 if (!files.includes('LICENSE') || !files.includes('README.md')) throw new Error('Track the source, README and license before packaging.');
 const forbidden = /(^|\/)(data|backups|node_modules|releases|\.git|\.codex|\.env(?:\..*)?)(\/|$)|\.(log|conceptgraph)$/i;
-if (files.some(file => forbidden.test(file))) throw new Error('Tracked private or generated files must not be packaged.');
+if (files.some(file => file !== 'examples/courier-robot.conceptgraph' && forbidden.test(file))) throw new Error('Tracked private or generated files must not be packaged.');
 const walk = async directory => {
   for (const entry of await readdir(path.join(root, directory), { withFileTypes: true })) {
     const name = `${directory}/${entry.name}`;

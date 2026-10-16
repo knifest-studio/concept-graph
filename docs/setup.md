@@ -59,6 +59,8 @@ Keep the server terminal open. Stop with **Ctrl+C**. On macOS, after the initial
 
 Read the [user guide](user-guide.md) for connections, shortcuts, groups, history, and board export/import.
 
+Git checkouts and release ZIPs from v0.1.1 include `examples/courier-robot.conceptgraph`. Use **Import** to open this reviewed public demo as a separate board. It contains prompts, three generated images, and completed history; importing it does not start generation.
+
 ## Codex compatibility
 
 Concept Graph uses native Codex image generation over the experimental app-server protocol. A successful sign-in alone does not prove image access. The app checks that the account type is `chatgpt` and that the provider reports `imageGeneration: true`.

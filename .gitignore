@@ -8,5 +8,6 @@ backups/
 !.env.example
 .codex/
 *.conceptgraph
+!/examples/courier-robot.conceptgraph
 *.log
 .DS_Store

@@ -10,7 +10,7 @@ Read the [setup guide](https://github.com/knifest-studio/concept-graph/blob/main
 
 ### Compatibility
 
-Experimental prerelease. Local app and archive tests pass on macOS; the workflow also runs app checks on Linux. Tests use a fake worker and do not consume generation allowance. Public Codex CLI 0.163.0 passed authentication/image-capability checks; the original image workflow was exercised with desktop-bundled 0.162.0-alpha.17.2. Native Windows is unverified.
+Experimental prerelease. Local app and archive tests pass on macOS; the workflow also runs app checks on Linux. Tests use a fake worker and do not consume generation allowance. The three-image demo was generated end-to-end with public Codex CLI 0.163.0 and ChatGPT authentication. Native Windows is unverified.
 
 Use your own ChatGPT login and available Codex allowance. API-key authentication is deliberately rejected; there is no paid API fallback. No personal boards, images, or credentials are bundled.
 
@@ -18,4 +18,8 @@ MIT licensed. See CHANGELOG.md for the full feature list and SHA256SUMS for the 
 
 ### Example board
 
-[Download the courier robot demo](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) and use **Import** in the app. It includes three real Codex-generated images, the branching prompts, and completed input/output history. Import creates a separate board and does not start a generation. [See the prompts and screenshots](https://github.com/knifest-studio/concept-graph/blob/main/examples/courier-robot.md).
+The courier robot demo is bundled in this ZIP at `examples/courier-robot.conceptgraph`; choose **Import** and select it. A [standalone copy](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) is also available. It includes three real Codex-generated images, the branching prompts, and completed input/output history. Import creates a separate board and does not start a generation. [See the prompts and screenshots](https://github.com/knifest-studio/concept-graph/blob/main/examples/courier-robot.md).
+
+### Documentation
+
+[English](https://github.com/knifest-studio/concept-graph/blob/main/README.md) · [Українська](https://github.com/knifest-studio/concept-graph/blob/main/README.uk.md). CI and release packaging require the two READMEs to match their reviewed synchronization record.

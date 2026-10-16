@@ -47,7 +47,7 @@ export class Codex extends EventEmitter {
       }
     });
     await this.request('initialize', {
-      clientInfo: { name: 'concept_graph', title: 'Concept Graph', version: '0.1.0' },
+      clientInfo: { name: 'concept_graph', title: 'Concept Graph', version: '0.1.1' },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     this.send({ method: 'initialized' });
