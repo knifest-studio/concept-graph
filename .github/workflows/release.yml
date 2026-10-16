@@ -42,9 +42,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: >-
-          gh release create "$RELEASE_TAG"
-          --verify-tag --prerelease
-          --title "Concept Graph $RELEASE_TAG"
-          --notes-file .github/release-notes.md
-          releases/concept-graph-*.zip releases/SHA256SUMS
+        run: |
+          sed "s/vVERSION/$RELEASE_TAG/g" .github/release-notes.md > /tmp/concept-graph-release-notes.md
+          gh release create "$RELEASE_TAG" \
+            --verify-tag --prerelease \
+            --title "Concept Graph $RELEASE_TAG" \
+            --notes-file /tmp/concept-graph-release-notes.md \
+            releases/concept-graph-*.zip releases/SHA256SUMS
