@@ -15,3 +15,7 @@ Experimental prerelease. Local app and archive tests pass on macOS; the workflow
 Use your own ChatGPT login and available Codex allowance. API-key authentication is deliberately rejected; there is no paid API fallback. No personal boards, images, or credentials are bundled.
 
 MIT licensed. See CHANGELOG.md for the full feature list and SHA256SUMS for the ZIP checksum.
+
+### Example board
+
+[Download the courier robot demo](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) and use **Import** in the app. It includes three real Codex-generated images, the branching prompts, and completed input/output history. Import creates a separate board and does not start a generation. [See the prompts and screenshots](https://github.com/knifest-studio/concept-graph/blob/main/examples/courier-robot.md).

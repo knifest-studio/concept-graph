@@ -4,7 +4,7 @@
 
 Write a prompt, connect references, and run it. Generated images appear as connected nodes. Branch from any result, compare directions, and keep the path that led there.
 
-![Concept Graph canvas with a sample selection](docs/images/canvas.jpg)
+![A real courier robot concept branching into city and forest variations](docs/images/canvas.jpg)
 
 Concept Graph runs in your browser with a local Node.js server and your signed-in Codex CLI. It is an independent project, not an OpenAI product.
 
@@ -59,6 +59,16 @@ For the complete installation, update, backup, and troubleshooting instructions,
 
 Only connected ancestors are sent as context. Unconnected ideas stay out of the run. Each run saves its original prompt and inputs so later edits do not rewrite history.
 
+## Real example: one character, two directions
+
+The screenshot above is a real board with three images generated through Concept Graph: an original courier robot, a rainy-city variation, and a forest-delivery variation. Each branch keeps the original image as its connected reference.
+
+[Download the example board](https://github.com/knifest-studio/concept-graph/releases/download/v0.1.0/courier-robot.conceptgraph) and use **Import** to explore its prompts, connections, and completed run history. Import adds a new board and does not generate anything automatically. [Read the exact prompts](examples/courier-robot.md).
+
+Open a result to inspect the original prompt and the actual images used by that run:
+
+![Image inspector with the generated city scene, its prompt, and original robot reference](docs/images/run-details.jpg)
+
 ## Data and privacy
 
 The server listens on `127.0.0.1`. Boards live in `data/workspace.json`; images live in `data/assets/`. Back up the **entire data directory**, or export a board for sharing. Exports include prompt text, image originals, and historical inputs: review them before sharing.
@@ -82,7 +92,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release instructions,
 
 One active generation across all boards; up to 10 connected image inputs per run; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA.
 
-The Codex app-server integration is experimental and may need changes after Codex updates. The account handshake was checked with public CLI **0.163.0**; the original image-generation workflow was exercised with **0.162.0-alpha.17.2**. CI checks the app with a fake worker, not a paid account.
+The Codex app-server integration is experimental and may need changes after Codex updates. The example board was generated end-to-end with public CLI **0.163.0** and ChatGPT authentication. CI checks the app with a fake worker; account access and real generation are separate manual checks.
 
 ## License
 

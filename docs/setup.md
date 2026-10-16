@@ -63,7 +63,7 @@ Read the [user guide](user-guide.md) for connections, shortcuts, groups, history
 
 Concept Graph uses native Codex image generation over the experimental app-server protocol. A successful sign-in alone does not prove image access. The app checks that the account type is `chatgpt` and that the provider reports `imageGeneration: true`.
 
-The public npm CLI **0.163.0** passed initialization, account, and image-capability checks during release preparation. The original full image-generation workflow was verified on the desktop-bundled **0.162.0-alpha.17.2**. No new image-generation request was made with 0.163.0 during release preparation. Availability can vary by account, workspace policy, or CLI version.
+The public npm CLI **0.163.0** was verified end-to-end with ChatGPT authentication by generating the three images in the [courier robot demo](../examples/courier-robot.md), including two image-reference branches. Availability can vary by account, workspace policy, or CLI version.
 
 This app uses existing Codex authentication. It does not implement its own Sign in with ChatGPT flow, extract tokens, bypass account limits, or call the paid image API as a fallback. API-key-only authentication is rejected.
 
