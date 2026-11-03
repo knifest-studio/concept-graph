@@ -1,0 +1,7 @@
+.node-template-picker{display:flex;align-items:center;gap:3px;min-width:0;flex:0 1 auto;margin-right:auto}
+.node-template-picker select{field-sizing:content;min-width:0;max-width:190px;padding:3px 19px 3px 7px;border:0;border-radius:5px;background:var(--soft-purple);color:var(--purple);font-size:10px;cursor:pointer;text-overflow:ellipsis}
+.node-template-picker select:focus-visible,.node-template-info:focus-visible{outline:2px solid var(--purple);outline-offset:1px}
+.node-template-info{width:21px;height:21px;border-radius:5px;color:var(--muted);font-size:11px}
+.node-template-info:hover{background:var(--soft-purple);color:var(--purple)}
+.node-template-picker.plain-template{opacity:0;pointer-events:none}.text-node:hover .node-template-picker.plain-template,.react-flow__node.selected .node-template-picker.plain-template,.node-template-picker.plain-template:focus-within{opacity:1;pointer-events:auto}
+.node-template-picker.custom-template select{background:color-mix(in srgb,var(--template-color) 18%,var(--card));color:color-mix(in srgb,var(--template-color) 70%,var(--text));border-radius:12px}.node-template-picker.custom-template .node-template-info{color:color-mix(in srgb,var(--template-color) 70%,var(--text))}

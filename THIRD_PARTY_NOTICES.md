@@ -1,6 +1,6 @@
 # Third-party notices
 
-Production dependencies used by Concept Graph. Copyrights and licenses belong to their respective owners. Node.js and Codex are installed separately and are not bundled in the release.
+Production dependencies used by Concept Graph. Copyrights and licenses belong to their respective owners. The source release does not bundle Node.js or Codex. Desktop previews include Node.js and its license; a separately installed Codex CLI is governed by its own license and notices.
 
 ## @types/d3-color 3.1.3
 

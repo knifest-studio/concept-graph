@@ -9,6 +9,8 @@ createInterface({input:process.stdin}).on('line',line=>{
   let result={};
   if(method==='account/read')result={account:{type:'chatgpt'}};
   if(method==='modelProvider/capabilities/read')result={imageGeneration:true};
+  if(method==='config/read')result={config:{}};
+  if(method==='model/list')result={ data: [{ id: 'gpt-6-luna', model: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }], nextCursor: null };
   if(method==='thread/start')result={thread:{id:`thread-${++next}`}};
   if(method==='turn/start') {
     const turnId=`turn-${next}`; result={turn:{id:turnId}};

@@ -3,12 +3,15 @@ export function formatDuration(milliseconds) {
   return `${seconds}s`;
 }
 
+export function runElapsed(run, now = Date.now()) {
+  const start = Date.parse(run?.startedAt || run?.createdAt);
+  const end = ['running', 'queued'].includes(run?.status) ? now : Date.parse(run?.finishedAt);
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0;
+}
+
 export function runTiming(run, runs, now = Date.now()) {
   if (!run) return { label: '0s', comparison: '' };
-  const start = Date.parse(run.startedAt || run.createdAt);
-  const end = ['running', 'queued'].includes(run.status) ? now : Date.parse(run.finishedAt);
-  const elapsed = Number.isFinite(start) && Number.isFinite(end) ? formatDuration(end - start) : null;
-  const label = elapsed || '0s';
+  const label = formatDuration(runElapsed(run, now));
   // Compare whole requests, including queue time; image count and complexity can vary.
   const durations = runs.filter(previous => previous.id !== run.id && previous.status === 'completed')
     .map(previous => Date.parse(previous.finishedAt) - Date.parse(previous.createdAt))

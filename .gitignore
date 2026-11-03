@@ -1,13 +1,24 @@
 node_modules/
 dist/
+desktop-build/
 releases/
 data/
 backups/
 .env
 .env.*
 !.env.example
+!.env.cloud
 .codex/
 *.conceptgraph
 !/examples/courier-robot.conceptgraph
 *.log
 .DS_Store
+dist-cloud/
+dist-downloads/
+.wrangler/
+.dev.vars
+cloud/.team-code
+
+# Local build artifacts, videos and personal tool config
+deliverables/
+.claude/launch.json

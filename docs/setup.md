@@ -1,6 +1,20 @@
 # Setup guide
 
-## 1. Install prerequisites
+## Desktop preview
+
+The desktop preview includes Node.js and searches for an installed Codex CLI. If none is found, it offers to download and verify an app-managed copy; you can decline and still work with boards. Open Concept Graph and use **Sign in with ChatGPT** when prompted. Keep the app open while using it or its MCP server. Available account capabilities and usage limits still apply.
+
+The macOS preview has been tested on Apple Silicon. It is unsigned and not notarized, so macOS may warn about or block it. The Windows x64 preview is an unsigned portable ZIP that requires WebView2 Runtime; it has been cross-compiled but has not been tested on Windows. Neither preview updates automatically. See [desktop-preview.md](desktop-preview.md) for build details, requirements, and limitations. Download links should only be used when the corresponding preview is actually published.
+
+To retry Codex setup or install an app-managed copy if an existing CLI is incompatible, choose **Concept Graph → Set Up Codex…** on macOS or **Codex → Set Up Compatible Codex…** on Windows. The app may ask you to reopen it before switching copies; it does not overwrite your existing Codex installation.
+
+The desktop app stores boards, history, custom-node templates, and images in `~/Library/Application Support/Concept Graph` on macOS or `%LOCALAPPDATA%\Concept Graph\data` on Windows by default. To change this location, choose **Concept Graph → Storage Location…** on macOS or **Storage → Change Storage Folder…** on Windows. It copies and verifies the data before switching; the old folder is retained. Reopen the app after the change, and back up the entire data directory. Earlier browser installations are not automatically imported into the desktop preview: export and import a board or follow the guidance in [desktop-preview.md](desktop-preview.md).
+
+To let a local agent operate the desktop app, choose **Connect MCP** in the top bar, copy the message, and send it to Codex or Claude Code on the same computer. The agent may need permission to update its configuration and a new session. It can access and modify boards and images and start generation. See [mcp.md](mcp.md) for manual setup and details.
+
+The rest of this guide describes the separate browser app run from source or a source release ZIP.
+
+## 1. Install prerequisites for the browser app
 
 Install [Node.js 22 or newer](https://nodejs.org/en/download), including npm. Open a new terminal and check:
 
@@ -22,7 +36,7 @@ Choose **Sign in with ChatGPT** in the login flow. Every person uses their own a
 
 See the official [Codex CLI guide](https://learn.chatgpt.com/docs/codex/cli) and [authentication guide](https://learn.chatgpt.com/docs/auth). Avoid posting login files or tokens in issues.
 
-macOS is locally tested. CI runs app tests on macOS and Linux. On Windows, use WSL2 and run both Node and Codex inside that environment; native Windows startup and clipboard behavior have not been verified.
+The browser app is locally tested on macOS. CI runs app tests on macOS and Linux. For the source-run app on Windows, WSL2 is an option: run both Node and Codex inside that environment. The separate native Windows desktop preview has not been tested on Windows.
 
 ## 2. Download the app
 
@@ -65,9 +79,11 @@ Git checkouts and release ZIPs from v0.1.1 include `examples/courier-robot.conce
 
 Concept Graph uses native Codex image generation over the experimental app-server protocol. A successful sign-in alone does not prove image access. The app checks that the account type is `chatgpt` and that the provider reports `imageGeneration: true`.
 
+Image-generation threads disable unrelated skills, plugins, configured MCP servers, web search, shell, memory, planning, and multi-agent delegation. They also omit project instruction files and configured developer instructions. These overrides apply only to Concept Graph's generation worker; account authentication, the provider, and global Codex settings are retained. Codex may still include its own required context and global host user instructions, which the current thread API cannot fully exclude. The app refuses to start generation if it cannot read the configuration needed to disable configured MCP servers.
+
 The public npm CLI **0.163.0** was verified end-to-end with ChatGPT authentication by generating the three images in the [courier robot demo](../examples/courier-robot.md), including two image-reference branches. Availability can vary by account, workspace policy, or CLI version.
 
-This app uses existing Codex authentication. It does not implement its own Sign in with ChatGPT flow, extract tokens, bypass account limits, or call the paid image API as a fallback. API-key-only authentication is rejected.
+The app delegates authentication to Codex. The desktop preview can start the Codex sign-in flow from its window; it does not extract tokens, bypass account limits, or call the paid image API as a fallback. API-key-only authentication is rejected.
 
 ## Configuration
 

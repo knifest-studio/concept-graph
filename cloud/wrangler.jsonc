@@ -1,0 +1,27 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "concept-graph-cloud",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "BoardRoom", "class_name": "BoardRoom" },
+      { "name": "Directory", "class_name": "Directory" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "Directory"] }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "concept-graph-files" }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "concept-graph-cloud", "database_id": "cb8f2e9c-34aa-4861-883e-498832370baf" }
+  ],
+  "assets": {
+    "directory": "../dist-cloud",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/concept-graph-helper-downloads.json", "/privacy", "/api/*", "/assets/*", "/downloads/*", "/parties/*"]
+  }
+}

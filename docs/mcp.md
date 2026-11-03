@@ -1,0 +1,123 @@
+# Concept Graph MCP
+
+Concept Graph can expose its local boards to MCP-capable agents through a local stdio server. Open the desktop app before asking an agent to use it. The MCP process connects to that running app and its selected data folder; it does not start a second copy or create another library. Keep both the agent and Concept Graph on the same computer and user account.
+
+The desktop package includes the required Node runtime and MCP server. You do not need to install Node.js, clone this repository, or provide an API key for the MCP connection. Image generation still uses the account signed into Concept Graph and its available Codex limits.
+
+In the desktop app, select **Connect MCP** in the top bar and copy the message into a local agent such as Codex or Claude Code. The message includes the paths for this installation and asks the agent to configure its MCP client. The agent may need permission to update its settings and a new session or restart before it can use the server. If you move the app, copy the message again and update the agent's configuration.
+
+An agent connected to this MCP can read and change your boards and images and start generation. Only connect an agent you trust with that access, and review its requested operations as appropriate. Board content returned to an agent is available to that agent and its provider. The MCP connection itself is local; generating an image still sends the inputs to the configured Codex service. The MCP server does not grant an agent access to Codex login credentials.
+
+The tools cover board listing, creation, renaming, import and export; adding and editing nodes, connections and groups; arranging the board and changing its viewport; reading, uploading and saving original images; inspecting runs, starting and cancelling generation; and managing or inserting custom-node templates. Use `set_node_template` or `clear_node_template` to change an existing prompt's type while keeping its text and connections; `update_node` can collapse or expand an individual node. An existing node keeps its own custom settings if its library template changes. Agents can retrieve images for visual inspection using `get_image` and capture the current app viewport with `get_canvas_screenshot`. A screenshot includes the visible canvas, sidebar, header and web-interface overlays; it does not capture other applications, the native menu bar or native dialogs. The app window must be visible, not minimized, and ready.
+
+The `undo` and `redo` tools operate on the open editor's local history. Operating-system file dialogs and app/account settings are not MCP operations. A simultaneous user edit may cause a conflict; the client must handle the error and preserve its unsaved changes.
+
+## macOS
+
+The following paths assume the app is installed at `/Applications/Concept Graph.app`. If it is elsewhere, use that app's absolute path instead.
+
+### Codex
+
+If the Codex CLI is installed, run:
+
+```sh
+codex mcp add concept-graph -- "/Applications/Concept Graph.app/Contents/Resources/runtime/node" "/Applications/Concept Graph.app/Contents/Resources/app/mcp.mjs"
+```
+
+Alternatively, add this entry to `~/.codex/config.toml`, preserving your other settings:
+
+```toml
+[mcp_servers.concept-graph]
+command = "/Applications/Concept Graph.app/Contents/Resources/runtime/node"
+args = ["/Applications/Concept Graph.app/Contents/Resources/app/mcp.mjs"]
+```
+
+Restart Codex or start a new session, and use `codex mcp list` or `/mcp` in the CLI to check the registration.
+
+### Claude Code
+
+Run the following command in a terminal with Claude Code installed:
+
+```sh
+claude mcp add --transport stdio --scope user concept-graph -- "/Applications/Concept Graph.app/Contents/Resources/runtime/node" "/Applications/Concept Graph.app/Contents/Resources/app/mcp.mjs"
+```
+
+Use `/mcp` in Claude Code to check the connection. User scope makes the registration available across projects on this computer.
+
+### Claude Desktop
+
+Add the following entry under `mcpServers` in `~/Library/Application Support/Claude/claude_desktop_config.json`. Preserve any existing server entries; the complete file must remain valid JSON.
+
+```json
+{
+  "mcpServers": {
+    "concept-graph": {
+      "command": "/Applications/Concept Graph.app/Contents/Resources/runtime/node",
+      "args": ["/Applications/Concept Graph.app/Contents/Resources/app/mcp.mjs"]
+    }
+  }
+}
+```
+
+Quit Claude Desktop completely and reopen it to load the configuration.
+
+## Windows
+
+The Windows preview is portable. The examples below assume it has been extracted to `C:\Users\YOUR_NAME\Apps\Concept Graph`. Replace that example with the **actual absolute path** to the extracted folder containing `Concept Graph.exe`. Do not leave `YOUR_NAME` or `Apps` unchanged unless those really match your system. Moving the app later requires updating the registered paths.
+
+### Codex
+
+In PowerShell with Codex CLI installed:
+
+```powershell
+codex mcp add concept-graph -- "C:\Users\YOUR_NAME\Apps\Concept Graph\runtime\node.exe" "C:\Users\YOUR_NAME\Apps\Concept Graph\app\mcp.mjs"
+```
+
+Alternatively, add this entry to `%USERPROFILE%\.codex\config.toml` with your actual path. Forward slashes work in these TOML strings:
+
+```toml
+[mcp_servers.concept-graph]
+command = "C:/Users/YOUR_NAME/Apps/Concept Graph/runtime/node.exe"
+args = ["C:/Users/YOUR_NAME/Apps/Concept Graph/app/mcp.mjs"]
+```
+
+Restart Codex or start a new session; `codex mcp list` or `/mcp` shows the registration.
+
+### Claude Code
+
+In PowerShell with Claude Code installed:
+
+```powershell
+claude mcp add --transport stdio --scope user concept-graph -- "C:\Users\YOUR_NAME\Apps\Concept Graph\runtime\node.exe" "C:\Users\YOUR_NAME\Apps\Concept Graph\app\mcp.mjs"
+```
+
+Use `/mcp` in Claude Code to check the connection.
+
+### Claude Desktop
+
+Add an entry under `mcpServers` in `%APPDATA%\Claude\claude_desktop_config.json`, preserving existing entries. Replace the example path with the real one; backslashes in JSON must be doubled.
+
+```json
+{
+  "mcpServers": {
+    "concept-graph": {
+      "command": "C:\\Users\\YOUR_NAME\\Apps\\Concept Graph\\runtime\\node.exe",
+      "args": ["C:\\Users\\YOUR_NAME\\Apps\\Concept Graph\\app\\mcp.mjs"]
+    }
+  }
+}
+```
+
+Quit Claude Desktop completely and reopen it. Windows desktop and its MCP integration are preview builds; native Windows validation is still required.
+
+## Troubleshooting
+
+- Open Concept Graph first and verify that the desktop window has loaded. The MCP server cannot operate against a closed or unavailable app.
+- Confirm both configured paths point to files in the installed/extracted app and that the agent runs on the same machine. A cloud-only agent cannot use these local paths.
+- If the app was moved or reinstalled at a different path, update the host's `command` and `args`. Changing the app's data location does not require changing these executable paths.
+- If the host uses a sandbox, allow its MCP process to access the application and local connection under the host's normal permission controls.
+- For isolated development runs using `CONCEPT_GRAPH_DATA`, also provide the same absolute `CONCEPT_GRAPH_MCP_SESSION_FILE` to the desktop app and MCP process. Without that explicit test override, the app does not publish a session for the isolated data directory.
+- If a connection fails after a change or generation request was sent, check the current board or run history before retrying; the request may already have taken effect.
+- Check the agent's MCP status and restart the host after changing configuration. Do not paste authentication files or session tokens into chats or issue reports.
+
+References: [Codex MCP configuration](https://developers.openai.com/codex/mcp), [Claude Code MCP configuration](https://code.claude.com/docs/en/mcp), and [Claude Desktop local MCP setup](https://py.sdk.modelcontextprotocol.io/get-started/real-host/).

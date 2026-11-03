@@ -5,22 +5,38 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "build:site": "node scripts/build-site.mjs",
+    "build:macos": "node scripts/build-macos-desktop.mjs",
+    "package:macos": "node scripts/package-macos-desktop.mjs",
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
     "dev": "vite --host 127.0.0.1",
     "release:pack": "npm run docs:check && npm run build && node scripts/release.mjs",
     "docs:check": "node scripts/check-readmes.mjs",
-    "docs:mark-synced": "node scripts/check-readmes.mjs --update"
+    "docs:mark-synced": "node scripts/check-readmes.mjs --update",
+    "build:cloud": "vite build --mode cloud --outDir dist-cloud",
+    "cloud:dev": "npm run build:cloud && wrangler dev -c cloud/wrangler.jsonc --port 8787",
+    "cloud:deploy": "npm run build:cloud && (test -z \"$CONCEPT_GRAPH_NODE_ARCHIVES\" || npm run cloud:helpers) && (test -z \"$CONCEPT_GRAPH_MAC_SIGN_IDENTITY\" || npm run cloud:helpers:mac) && (test -z \"$CONCEPT_GRAPH_NODE_ARCHIVES$CONCEPT_GRAPH_MAC_SIGN_IDENTITY\" || npm run cloud:helpers:upload) && wrangler deploy -c cloud/wrangler.jsonc",
+    "helper": "node helper.mjs",
+    "cloud:helpers": "node scripts/build-portable-helper.mjs --cloud",
+    "cloud:helpers:mac": "node scripts/build-macos-helper.mjs",
+    "cloud:helpers:upload": "node scripts/upload-cloud-downloads.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.0",
+    "partyserver": "^0.5.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "y-partyserver": "^2.2.0",
+    "y-protocols": "^1.0.7",
     "yauzl": "3.4.0",
-    "yazl": "3.3.1"
+    "yazl": "3.3.1",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
-    "vite": "^6.1.0"
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "vite": "^6.1.0",
+    "wrangler": "^4.156.2"
   },
   "description": "A local node-based canvas for image concepting with Codex.",
   "license": "MIT",

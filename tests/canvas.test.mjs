@@ -1,7 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasView, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor } from '../src/canvas.mjs';
-import { validateGraph, collectInputs } from '../graph.mjs';
+import { canvasView, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
+
+test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
+  const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
+  const second = { id: 'second', type: 'image', data: { runId: 'run' } };
+  const run = { id: 'run', status: 'running', outputIds: ['first', 'second'] };
+  const snapshot = { capturedAt: '2026-01-01T12:00:00.000Z', activeRunIds: ['run'] };
+  const restore = (nodes = [first()], current = [first('My caption'), second], result = run, point = snapshot) => restoreFirstImageFallback(nodes, current, [result], point);
+  assert.equal(restore()[0].data.caption, 'Image 1');
+  assert.equal(restore(undefined, undefined, { ...run, status: 'completed', finishedAt: '2026-01-01T12:00:00.000Z' })[0].data.caption, 'Image 1');
+  assert.equal(restore(undefined, undefined, { ...run, status: 'cancelled', finishedAt: '2026-01-01T12:00:01.000Z' }, { ...snapshot, activeRunIds: [] })[0].data.caption, 'Image 1');
+  assert.equal(restore(undefined, undefined, { ...run, status: 'completed', finishedAt: '2026-01-01T11:59:59.000Z' }, { ...snapshot, activeRunIds: [] })[0].data.caption, undefined);
+  assert.equal(restore(undefined, undefined, { ...run, status: 'running', outputIds: ['first'] })[0].data.caption, undefined);
+  assert.equal(restore([first('')])[0].data.caption, '');
+  assert.equal(restore(undefined, [first(''), second])[0].data.caption, undefined);
+  assert.equal(restore([first('Earlier caption')])[0].data.caption, 'Earlier caption');
+  assert.equal(restore([second])[0].data.caption, undefined);
+  assert.equal(restore(undefined, [second])[0].data.caption, undefined);
+});
+
+test('undo preserves only a subsequently merged generation caption, without undoing manual edits', () => {
+  const image = caption => ({ id: 'image', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
+  const snapshot = [image(undefined)], merged = mergeRemoteImageCaptions(snapshot, [image('Front view')], snapshot);
+  assert.notEqual(merged[0], snapshot[0]);
+  const changes = new Map([['image', { version: 2, before: undefined, after: 'Front view' }]]);
+  const restore = (nodes, current, version = 1) => preserveRemoteImageCaptions(nodes, current, changes, version);
+  assert.equal(restore(snapshot, merged)[0].data.caption, 'Front view');
+  assert.equal(restore(snapshot, merged, 2)[0].data.caption, undefined);
+  assert.equal(restore(snapshot, [image('')])[0].data.caption, undefined);
+  assert.equal(restore(snapshot, [image('My caption')])[0].data.caption, undefined);
+  assert.equal(restore([image('Earlier caption')], merged)[0].data.caption, 'Earlier caption');
+  assert.equal(restore(snapshot, [])[0].data.caption, undefined);
+  const localEdit = image('Locally edited');
+  assert.equal(mergeRemoteImageCaptions([localEdit], [image('Front view')], snapshot)[0], localEdit);
+  assert.equal(preserveRemoteImageCaptions(snapshot, [localEdit], new Map(), 1)[0].data.caption, undefined);
+});
+import { validateGraph, collectInputs, groupRunOutputs, positionFirstOutput, commitGraph } from '../graph.mjs';
 
 const text = (id, x, y) => ({ id, type: 'text', position: { x, y }, data: { text: id }, measured: { width: 310, height: 170 } });
 const image = (id, x, y) => ({ id, type: 'image', position: { x, y }, data: { asset: '12345678-1234-1234-1234-123456789abc.png' }, measured: { width: 310, height: 620 } });
@@ -59,6 +94,82 @@ test('grouped display cycles remain finite; removing members never removes survi
   assert.equal(groupBounds(groups[0], nodes).x, -24);
 });
 
+test('group bounds make room above captioned images without changing their positions or connections', () => {
+  const node = image('a', 100, 200), groups = [group(['a'], false)];
+  const plain = groupBounds(groups[0], [node]);
+  const captioned = { ...node, data: { ...node.data, caption: 'Front view' } };
+  const withCaption = groupBounds(groups[0], [captioned]);
+  assert.equal(withCaption.y, plain.y - 24);
+  assert.equal(withCaption.y + withCaption.height, plain.y + plain.height);
+  assert.deepEqual(canvasView([captioned], [], groups).nodes.find(n => n.id === 'a').position, node.position);
+});
+
+test('new remote generation groups respect local grouping, deletion, and ungrouping', () => {
+  const nodes = ['a', 'b', 'c', 'd'].map((id, i) => image(id, i * 320, 0));
+  const remote = [{ id: 'new', name: 'Generation', nodeIds: ['a', 'b', 'c'], collapsed: false }];
+  assert.deepEqual(mergeAddedGroups([], remote, [], nodes), remote);
+  const local = [{ id: 'manual', name: 'Manual', nodeIds: ['a', 'd'], collapsed: false }];
+  assert.deepEqual(mergeAddedGroups(local, remote, [], nodes).map(g => g.nodeIds), [['a', 'd'], ['b', 'c']]);
+  assert.deepEqual(mergeAddedGroups(local, remote, [], nodes.filter(n => n.id !== 'c')), local);
+  assert.deepEqual(mergeAddedGroups([], remote, remote, nodes), []);
+});
+
+test('generation groups contain only existing, ungrouped outputs and ignore single images', () => {
+  const nodes = ['a', 'b', 'c', 'other'].map((id, i) => image(id, i * 320, 0));
+  const graph = { revision: 1, nodes, groups: [{ id: 'manual', name: 'Group 1', nodeIds: ['a', 'other'], collapsed: false }] };
+  assert.equal(groupRunOutputs(graph, { outputIds: ['a', 'missing', 'b'] }), false);
+  assert.equal(groupRunOutputs(graph, { outputIds: ['a', 'missing', 'b', 'c'] }), true);
+  assert.equal(graph.revision, 2);
+  assert.equal(graph.groups[1].name, 'Group 2');
+  assert.deepEqual(graph.groups[1].nodeIds, ['b', 'c']);
+  assert.equal(groupRunOutputs(graph, { outputIds: ['a', 'b', 'c'] }), false);
+});
+
+test('a save returns its assigned revision even when generation changes the graph during persistence', async () => {
+  const graph = { revision: 3, nodes: [], edges: [], groups: [], viewport: { x: 0, y: 0, zoom: 1 } };
+  let finish;
+  const saving = commitGraph(graph, { nodes: [], edges: [], groups: [] }, () => new Promise(resolve => { finish = resolve; }));
+  assert.equal(graph.revision, 4);
+  graph.revision++;
+  finish();
+  assert.equal(await saving, 4);
+  assert.equal(graph.revision, 5);
+});
+
+test('first output is placed below existing content and group frames in its column', () => {
+  const output = image('out', 400, 0);
+  const graph = { nodes: [image('a', 400, 200), image('b', 800, 900)], groups: [] };
+  positionFirstOutput(output, graph);
+  assert.equal(output.position.y, 892);
+  const grouped = image('next', 400, 0);
+  graph.groups = [{ id: 'group', name: 'Group', nodeIds: ['a', 'b'], collapsed: false }];
+  positionFirstOutput(grouped, graph);
+  assert.equal(grouped.position.y, 1616);
+  const nearby = image('nearby', 400, 0);
+  positionFirstOutput(nearby, { nodes: [image('far', 400, 1000000)], groups: [] });
+  assert.equal(nearby.position.y, 0);
+});
+
+test('undo retains the group of outputs that arrived after its snapshot', () => {
+  const nodes = ['a', 'b', 'c'].map((id, i) => image(id, i * 320, 0));
+  const current = [{ id: 'new', name: 'Generation', nodeIds: ['a', 'b', 'c'], collapsed: false }];
+  assert.deepEqual(preserveFreshOutputGroups([], current, nodes, [nodes[1], nodes[2]]), current);
+  const oldGroup = [{ id: 'manual', name: 'Manual', nodeIds: ['a'], collapsed: false }];
+  assert.deepEqual(preserveFreshOutputGroups(oldGroup, current, nodes, [nodes[1], nodes[2]]).map(g => g.nodeIds), [['a'], ['b', 'c']]);
+  assert.deepEqual(preserveFreshOutputGroups([], current, nodes, []), []);
+  assert.deepEqual(preserveFreshOutputGroups([], current, nodes, [], new Set(['new'])), current);
+});
+
+test('undo preserves generated outputs created in the same millisecond as a checkpoint', () => {
+  const capturedAt = '2026-11-01T10:00:00.000Z';
+  const existing = image('existing', 0, 0), same = image('same-ms', 0, 0), newer = image('newer', 0, 0), older = image('older', 0, 0);
+  existing.data = { ...existing.data, runId: 'run', createdAt: capturedAt };
+  same.data = { ...same.data, runId: 'run', createdAt: capturedAt };
+  newer.data = { ...newer.data, runId: 'run', createdAt: '2026-11-01T10:00:00.001Z' };
+  older.data = { ...older.data, runId: 'run', createdAt: '2026-11-01T09:59:59.999Z' };
+  assert.deepEqual(freshOutputNodes([existing, same, newer, older], { nodes: [existing], capturedAt }).map(node => node.id), ['same-ms', 'newer']);
+});
+
 test('saved groups reject missing, duplicate, nested and multiply grouped nodes', () => {
   const nodes = [text('a', 0, 0), text('b', 0, 0)], graph = { nodes, edges: [] };
   assert.equal(validateGraph({ ...graph, groups: [group(['a', 'b'])] }).groups.length, 1);
@@ -109,4 +220,66 @@ test('shared references and skipped generations keep every node once, remain sep
   assert.deepEqual(alignNodes(result, edges, []), result);
   for (const e of edges) assert.ok(result.find(n => n.id === e.source).position.x < result.find(n => n.id === e.target).position.x);
   assert.deepEqual(alignNodes([], [], []), []);
+});
+
+test('branches stay next to their parents; age orders only sibling branches and separate trees', () => {
+  const dated = (id, day) => ({ ...text(id, 0, 0), data: { text: id, createdAt: `2026-01-${String(day).padStart(2, '0')}T00:00:00.000Z` } });
+  const nodes = [dated('new-root', 9), dated('new-child', 8), dated('old-child', 2), dated('old-root', 1), dated('middle-child', 4)];
+  const edges = [edge('new-root', 'old-child'), edge('old-root', 'new-child'), edge('old-root', 'middle-child')];
+  const result = alignNodes(nodes, edges, []), byId = new Map(result.map(node => [node.id, node]));
+  assert.ok(byId.get('old-root').position.y < byId.get('new-root').position.y);
+  assert.ok(byId.get('middle-child').position.y < byId.get('new-child').position.y);
+  // old-child belongs to the newer tree, so structure keeps it below old-root's branch despite its age.
+  assert.ok(byId.get('new-child').position.y < byId.get('old-child').position.y);
+  for (const item of edges) assert.ok(byId.get(item.source).position.x < byId.get(item.target).position.x);
+  assertSeparated(result); assert.deepEqual(alignNodes(result, edges, []), result);
+  const legacy = [text('z', 0, 300), text('a', 0, 0), text('m', 0, -200)];
+  const fallback = alignNodes(legacy, [], []);
+  assert.ok(fallback[0].position.y < fallback[1].position.y && fallback[1].position.y < fallback[2].position.y);
+});
+
+test('group chronology uses its oldest member while preserving internal offsets in both states', () => {
+  const nodes = [text('new', 0, 0), text('member-new', 400, 50), text('member-old', 400, 250)];
+  ['2026-02-01', '2026-01-20', '2026-01-01'].forEach((date, i) => { nodes[i].data.createdAt = `${date}T00:00:00.000Z`; });
+  for (const collapsed of [false, true]) {
+    const groups = [group(['member-new', 'member-old'], collapsed)], result = alignNodes(nodes, [], groups);
+    const bounds = groupBounds(groups[0], result);
+    assert.ok(bounds.y < result[0].position.y);
+    assert.equal(result[2].position.y - result[1].position.y, 200);
+    assert.deepEqual(alignNodes(result, [], groups), result);
+  }
+});
+
+test('undo treats freshly dated image duplicates as local edits and preserves only real generated output IDs', () => {
+  const createdAt = '2026-01-01T00:00:01.000Z';
+  const nodes = ['output', 'duplicate'].map(id => ({ id, type: 'image', data: { runId: 'run', createdAt } }));
+  assert.deepEqual(freshOutputNodes(nodes, { nodes: [], capturedAt: '2026-01-01T00:00:00.000Z' }, [{ id: 'run', outputIds: ['output'] }]).map(node => node.id), ['output']);
+});
+
+test('an uploaded reference sits in the column just before the prompt that first uses it, beside it', () => {
+  const nodes = [text('wolf', 0, 0), image('model', 0, 0), text('style', 0, 0), image('styled', 0, 0), text('mix', 0, 0), image('reference', 0, 0), image('early', 0, 0), text('first', 0, 0)];
+  const edges = [edge('wolf', 'model'), edge('model', 'style'), edge('style', 'styled'), edge('styled', 'mix'), edge('reference', 'mix'), edge('early', 'first')];
+  const result = alignNodes(nodes, edges, []), byId = new Map(result.map(node => [node.id, node]));
+  // mix is in column 4, so the reference moves to column 3 next to styled instead of column 0.
+  assert.equal(byId.get('reference').position.x, byId.get('styled').position.x);
+  assert.ok(byId.get('reference').position.x < byId.get('mix').position.x);
+  const center = id => byId.get(id).position.y + (byId.get(id).measured.height / 2);
+  assert.ok(Math.abs(center('reference') - center('mix')) < 700);
+  // A source already right before its consumer stays in column 0, and the main chain keeps its parent links.
+  assert.equal(byId.get('early').position.x, byId.get('wolf').position.x);
+  assert.ok(byId.get('styled').position.x < byId.get('mix').position.x);
+  assertSeparated(result); assert.deepEqual(alignNodes(result, edges, []), result);
+});
+
+test('a prompt made only from a moved reference follows it instead of pulling it back to column 0', () => {
+  const nodes = [text('wolf', 0, 0), image('model', 0, 0), text('style', 0, 0), image('styled', 0, 0), text('mix', 0, 0), image('reference', 0, 0), text('own', 0, 0)];
+  const edges = [edge('wolf', 'model'), edge('model', 'style'), edge('style', 'styled'), edge('styled', 'mix'), edge('reference', 'mix'), edge('reference', 'own')];
+  const result = alignNodes(nodes, edges, []), byId = new Map(result.map(node => [node.id, node]));
+  assert.equal(byId.get('reference').position.x, byId.get('styled').position.x);
+  assert.equal(byId.get('own').position.x, byId.get('mix').position.x);
+  // The reference sits between the two prompts it feeds.
+  const center = id => byId.get(id).position.y + byId.get(id).measured.height / 2;
+  const [low, high] = [center('mix'), center('own')].sort((a, b) => a - b);
+  assert.ok(center('reference') >= low - 1 && center('reference') <= high + 1);
+  assertSeparated(result); assert.deepEqual(alignNodes(result, edges, []), result);
 });

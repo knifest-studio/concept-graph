@@ -8,23 +8,36 @@ Write a prompt, connect references, and run it. Generated images appear as conne
 
 ![A real courier robot concept branching into city and forest variations](docs/images/canvas.jpg)
 
-Concept Graph runs in your browser with a local Node.js server and your signed-in Codex CLI. It is an independent project, not an OpenAI product.
+Concept Graph is available as a desktop preview with a local server that uses Codex CLI, or can be run from source in a browser. It is an independent project, not an OpenAI product.
 
 ## What you can do
 
 - Connect text and image nodes to build context for a generation or edit.
-- Paste text or images directly onto the canvas; duplicate and copy/paste selections.
+- Paste text or images directly onto the canvas; duplicate nodes, copy images, and copy node IDs for agents.
 - Branch by dragging an output into empty space, then type the next prompt.
 - Keep separate boards, fold groups, align branches, and fit the current selection.
+- Images from the same generation are grouped automatically as they arrive.
+- Collapse individual text and image nodes into compact squares.
 - Inspect original prompts and input images for earlier runs; download image originals.
+- Open a run's diagnostics in History to inspect available agent messages, model settings, events and errors.
+- Keep unrelated Codex skills, plugins and configured MCP servers out of image-generation threads without changing global settings.
 - Export a board and its images as one `.conceptgraph` file, then import it as a new board.
+- Save custom text nodes with reusable instructions and reference images, and switch existing prompts between saved types.
+- Generated images receive captions automatically when useful; multiple images from one run always have editable captions.
+- Connect a local MCP-capable agent to read and change boards, inspect images and start generation.
 - Switch between light and dark themes. Boards save automatically on your computer.
 
-## Requirements
+## Desktop preview
+
+The desktop preview includes Node.js and looks for an existing Codex CLI. If it cannot find one, it offers to download a separate verified copy; boards remain available if you decline. Sign in with your own ChatGPT account when prompted. Apple Silicon macOS has been tested locally; the public Apple Silicon download is signed with Developer ID and notarized by Apple. The Windows x64 preview requires WebView2 Runtime and has been cross-compiled but not tested on Windows. Windows builds are unsigned portable ZIPs and may show an operating-system security warning. The previews do not update automatically. See [desktop preview setup and build instructions](docs/desktop-preview.md).
+
+On desktop, use **Connect MCP** in the top bar to copy setup instructions for a local Codex or Claude Code agent. Keep Concept Graph open. A connected agent can read and modify boards and images and start generation; see the [MCP guide](docs/mcp.md).
+
+## Requirements from source
 
 - **Node.js 22 or newer** and npm.
 - **Codex CLI with native image-generation support**, signed in with your own ChatGPT account.
-- A browser. macOS is locally tested; Linux is covered by automated CI. Native Windows is not currently verified; use WSL2 for a Unix environment.
+- A browser. The source-run app has been tested locally on macOS; Linux is covered by automated CI. Native Windows has not been verified; WSL2 is an option for a Unix environment.
 
 This app deliberately rejects API-key authentication for generation. It uses the capabilities and usage allowance available to your Codex account; a subscription does not guarantee access to every feature or unlimited generations. The app checks image-generation support before running. See the [setup guide](docs/setup.md#codex-compatibility) for the tested CLI version and troubleshooting.
 
@@ -59,7 +72,7 @@ For the complete installation, update, backup, and troubleshooting instructions,
 2. Drag the result's output dot into empty space. A connected prompt opens with the cursor ready.
 3. Describe the change and run it. Both the original and the new result stay on the board.
 
-Only connected ancestors are sent as context. Unconnected ideas stay out of the run. Each run saves its original prompt and inputs so later edits do not rewrite history.
+Only nodes connected directly to the prompt are sent; what produced a connected image is not resent. Unconnected ideas stay out of the run. Each run saves its original prompt and inputs so later edits do not rewrite history.
 
 ## Real example: one character, two directions
 
@@ -73,7 +86,9 @@ Open a result to inspect the original prompt and the actual images used by that 
 
 ## Data and privacy
 
-The server listens on `127.0.0.1`. Boards live in `data/workspace.json`; images live in `data/assets/`. Back up the **entire data directory**, or export a board for sharing. Exports include prompt text, image originals, and historical inputs: review them before sharing.
+The server listens on `127.0.0.1`. A source-run app stores boards in `data/workspace.json` and images in `data/assets/`. The desktop preview instead uses `~/Library/Application Support/Concept Graph` on macOS or `%LOCALAPPDATA%\Concept Graph\data` on Windows by default. Change the desktop location via **Concept Graph → Storage Location…** on macOS or **Storage → Change Storage Folder…** on Windows. Back up the **entire data directory**, or export a board for sharing. Exports include prompts, image originals, historical inputs, and any custom-node instructions and reference images: review them before sharing.
+
+Run diagnostics are saved locally and included in board exports. Agent messages and errors may contain sensitive information; review exports before sharing.
 
 Connected prompts and images are sent to OpenAI when you run a prompt. Codex manages authentication separately; this app does not bundle or distribute login credentials. See [security notes](SECURITY.md) for the local trust model. Do not expose this server as a public or shared service.
 
@@ -92,7 +107,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release instructions,
 
 ## Current limits
 
-One active generation across all boards; up to 10 connected image inputs per run; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA.
+One active generation across all boards; up to 10 reference images per run, including custom-node references; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board when running from source. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA. Automatic captions describe the requested result, not verified image content; they may be inaccurate. If Codex omits a caption in a multi-image run, a generic label is used; captions can be edited manually. Custom-node exports use board format version 2; boards with captions or legacy caption settings use version 3. Older app versions cannot import newer formats.
 
 The Codex app-server integration is experimental and may need changes after Codex updates. The example board was generated end-to-end with public CLI **0.163.0** and ChatGPT authentication. CI checks the app with a fake worker; account access and real generation are separate manual checks.
 

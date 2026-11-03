@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,26 @@ test('board-scoped saves and queued generation stay isolated across edits and re
     return {status:response.status,value:await response.json()};
   };
   await start();
+  // A browser opening an external link can label the initial document cross-site.
+  const navigationHeaders={'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'};
+  // Node fetch overwrites Sec-Fetch-Mode, so use raw HTTP for browser metadata.
+  const browserRequest=(url,method,headers)=>new Promise((resolve,reject)=>{
+    const req=httpRequest('http://127.0.0.1:14319'+url,{method,headers},res=>{
+      res.resume();res.on('end',()=>resolve({status:res.statusCode,type:res.headers['content-type']}));
+    });
+    req.on('error',reject);req.end();
+  });
+  const navigation=await browserRequest('/','GET',navigationHeaders);
+  assert.equal(navigation.status,200);assert.match(navigation.type,/text\/html/);
+  for(const [url,method,headers] of [
+    ['/api/workspace','GET',navigationHeaders],
+    ['/api/boards','POST',navigationHeaders],
+    ['/assets/missing.png','GET',navigationHeaders],
+    ['/','GET',{'Sec-Fetch-Site':'cross-site','Sec-Fetch-Dest':'document'}],
+    ['/','GET',{'Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'iframe'}],
+    ['/','POST',navigationHeaders],
+    ['/','GET',{...navigationHeaders,Origin:'https://example.invalid'}],
+  ])assert.equal((await browserRequest(url,method,headers)).status,403);
   const workspace=(await request('/api/workspace')).value;
   const a=workspace.defaultBoardId, b=(await request('/api/boards','POST',{name:'Separate tests'})).value.id;
   const prompt=id=>({id,type:'text',position:{x:0,y:0},data:{text:'Make a test image'}});
@@ -42,6 +63,7 @@ test('board-scoped saves and queued generation stay isolated across edits and re
   }
   for(const [index,g] of final.entries()){
     assert.equal(g.runs[0].status,'completed');assert.ok(g.runs[0].startedAt);
+    assert.deepEqual(g.runs[0].diagnostics.events.map(e=>e.type),['worker_context','turn_started','image_started','image_completed','turn_completed']);
     assert.equal(g.nodes.length,2);assert.equal(g.edges[0].source,index===0?'a':'b');
     assert.equal(g.runs[0].target.data.text,'Make a test image');
   }
@@ -55,7 +77,9 @@ test('board-scoped saves and queued generation stay isolated across edits and re
   assert.equal((await request(`/api/boards/${a}/graph`,'PUT',oldClient)).status,200);
   final[0]=(await request(`/api/boards/${a}`)).value.board.graph;
   assert.deepEqual(final[0].groups,groups);
-  assert.equal((await request(`/api/boards/${a}`,'PATCH',{name:'🧙'.repeat(40)})).status,200);
+  const oldName=(await request(`/api/boards/${a}`)).value.board.name;
+  assert.equal((await request(`/api/boards/${a}`,'PATCH',{name:'🧙'.repeat(40),expectedName:oldName})).status,200);
+  assert.equal((await request(`/api/boards/${a}`,'PATCH',{name:'Stale rename',expectedName:oldName})).status,409);
   const exportResponse=await fetch(`http://127.0.0.1:14319/api/boards/${a}/export`);
   assert.equal(exportResponse.status,200);assert.match(exportResponse.headers.get('content-disposition'),/conceptgraph/);
   const archive=Buffer.from(await exportResponse.arrayBuffer());

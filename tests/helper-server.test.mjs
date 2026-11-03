@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const site = 'https://concept-graph-local.knifest.chatgpt.site';
+
+test('helper pairs one site while keeping workspace, assets and events private', { timeout: 15000 }, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'concept-helper-test-'));
+  const port = 26000 + Math.floor(Math.random() * 15000);
+  const child = spawn(process.execPath, ['helper.mjs'], { cwd: root, env: { ...process.env, PORT: String(port), CONCEPT_GRAPH_DATA: directory, CODEX_BIN: path.join(root, 'tests/fixtures/codex.mjs') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { child.kill(); await new Promise(resolve => child.exitCode === null ? child.once('exit', resolve) : resolve()); await rm(directory, { recursive: true, force: true }); });
+  let output = '', stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.once('exit', code => reject(new Error(`Helper exited ${code}: ${stderr}`)));
+    child.stdout.on('data', chunk => { output += chunk; if (output.includes('is ready')) resolve(); });
+  });
+  const token = output.match(/connection code: ([a-f0-9]{64})/)?.[1];
+  assert.ok(token);
+  const local = `http://127.0.0.1:${port}`;
+  const call = (url, options = {}) => fetch(local + url, options);
+  const origin = { Origin: site };
+  const headers = { ...origin, 'X-Concept-Graph-Token': token };
+  const status = await (await call('/api/status', { method: 'POST', headers })).json();
+  assert.equal(status.helperVersion, null);
+  let response = await call('/api/workspace', { method: 'OPTIONS', headers: origin });
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), site);
+  assert.match(response.headers.get('access-control-allow-headers'), /x-concept-graph-token/i);
+  assert.equal((await call('/api/workspace', { headers: origin })).status, 403);
+  assert.equal((await call('/api/workspace', { headers: { ...headers, Origin: 'https://attacker.example' } })).status, 403);
+  response = await call('/api/workspace', { headers });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('access-control-allow-origin'), site);
+  const { defaultBoardId } = await response.json();
+  response = await call('/api/assets', { method: 'POST', headers, body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) });
+  const { asset } = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal((await call('/assets/' + asset, { headers: origin })).status, 403);
+  response = await call('/assets/' + asset + '?token=' + token, { headers: origin });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cross-origin-resource-policy'), 'cross-origin');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const controller = new AbortController();
+  response = await call(`/api/boards/${defaultBoardId}/events?token=${token}`, { headers: origin, signal: controller.signal });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  controller.abort();
+});

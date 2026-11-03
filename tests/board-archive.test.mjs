@@ -86,7 +86,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 2;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 4;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));
@@ -100,6 +100,68 @@ test('invalid archives, missing/history images, checksums and malformed history 
     assert.deepEqual(await readFile(path.join(destination, current)), png);
     assert.deepEqual((await readdir(directory)).sort(), ['destination', 'source']);
   }
+});
+
+test('caption-aware board archives preserve labels and opt-ins in live nodes and run snapshots', async t => {
+  const { source, destination } = await fixture(t), labeled = structuredClone(board);
+  labeled.graph.nodes[1].data.labelOutputs = true;
+  labeled.graph.nodes[2].data.caption = 'Front view';
+  labeled.graph.runs[0].snapshot[1].data.caption = 'Back view';
+  labeled.graph.runs[0].target.data.labelOutputs = true;
+  const bytes = await collect(await exportBoardArchive(labeled, source)), files = await unpack(bytes);
+  const manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 3);
+  const imported = await importBoardArchive(bytes, destination);
+  assert.equal(imported.graph.nodes[1].data.labelOutputs, true);
+  assert.equal(imported.graph.nodes[2].data.caption, 'Front view');
+  assert.equal(imported.graph.runs[0].snapshot[1].data.caption, 'Back view');
+  assert.equal(imported.graph.runs[0].target.data.labelOutputs, true);
+  for (const version of [1, 2]) {
+    manifest.version = version; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+    await assert.rejects(importBoardArchive(await pack(files), destination), /image captions.*newer board format/);
+  }
+  const disabled = structuredClone(board);
+  disabled.graph.nodes[1].data.labelOutputs = false;
+  disabled.graph.nodes[2].data.caption = '';
+  assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(disabled, source)))).get('board.json')).version, 1);
+  for (const configure of [
+    graph => { graph.runs[0].snapshot[1].data.caption = 'Historical only'; },
+    graph => { graph.runs[0].target.data.labelOutputs = true; },
+    graph => { graph.runs[0].target.data.template = { name: 'Views', instructions: '', assets: [], labelOutputs: true }; },
+  ]) {
+    const historyOnly = structuredClone(board);
+    historyOnly.graph.runs[0].target = structuredClone(historyOnly.graph.runs[0].target);
+    historyOnly.graph.runs[0].snapshot = structuredClone(historyOnly.graph.runs[0].snapshot);
+    configure(historyOnly.graph);
+    assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(historyOnly, source)))).get('board.json')).version, 3);
+  }
+});
+
+test('custom node archives preserve hidden references in live nodes and historical snapshots', async t => {
+  const { source, destination } = await fixture(t), custom = structuredClone(board);
+  custom.graph.nodes[1] = structuredClone(custom.graph.nodes[1]);
+  custom.graph.runs[0].snapshot[2] = structuredClone(custom.graph.runs[0].snapshot[2]);
+  custom.graph.runs[0].target = structuredClone(custom.graph.runs[0].target);
+  custom.graph.nodes[1].data.template = { name: 'Multiview', instructions: 'Front and back', assets: [unused] };
+  custom.graph.runs[0].snapshot[2].data.template = { name: 'Old preset', instructions: 'Earlier instruction', assets: [historical] };
+  custom.graph.runs[0].target.data.template = { name: 'Old preset', instructions: 'Earlier instruction', assets: [current] };
+  const bytes = await collect(await exportBoardArchive(custom, source)), files = await unpack(bytes), manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 2);
+  assert.ok(files.has(`assets/${unused}`) && files.has(`assets/${historical}`) && files.has(`assets/${current}`));
+  const imported = await importBoardArchive(bytes, destination), importedNode = imported.graph.nodes[1];
+  const live = importedNode.data.template.assets[0], old = imported.graph.runs[0].snapshot[2].data.template.assets[0], target = imported.graph.runs[0].target.data.template.assets[0];
+  assert.notEqual(live, unused); assert.notEqual(old, historical); assert.notEqual(target, current);
+  assert.deepEqual(await readFile(path.join(destination, live)), await readFile(path.join(source, unused)));
+  assert.deepEqual(await readFile(path.join(destination, old)), await readFile(path.join(source, historical)));
+  assert.deepEqual(await readFile(path.join(destination, target)), await readFile(path.join(source, current)));
+  assert.equal(importedNode.data.template.instructions, 'Front and back');
+  assert.equal(imported.graph.runs[0].snapshot[2].data.template.instructions, 'Earlier instruction');
+  manifest.version = 1;
+  files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /newer board format/);
+  custom.graph.nodes[1].data.template.assets = [];
+  custom.graph.runs = [];
+  assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(custom, source)))).get('board.json')).version, 2);
 });
 
 test('path traversal, symlinks and oversized entries are rejected before extraction', async t => {

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../DesktopProtocol.cs" Link="DesktopProtocol.cs" />
+    <Compile Include="../StorageLocation.cs" Link="StorageLocation.cs" />
+    <Compile Include="../CodexInstallation.cs" Link="CodexInstallation.cs" />
+  </ItemGroup>
+</Project>

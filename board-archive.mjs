@@ -36,6 +36,8 @@ function validateArchiveGraph(graph) {
     for (const key of ['label', 'message', 'error', 'prompt']) {
       if (run[key] !== undefined && (typeof run[key] !== 'string' || run[key].length > 150000)) fail('Invalid generation text.');
     }
+    if (run.captionMissing !== undefined && (!Number.isSafeInteger(run.captionMissing) || run.captionMissing < 0 || run.captionMissing > 2000)) fail('Invalid image caption count.');
+    if (run.autoGroupId !== undefined && !validId(run.autoGroupId)) fail('Invalid automatic group reference.');
     for (const key of ['startedAt', 'finishedAt']) if (run[key] !== undefined && !Number.isFinite(Date.parse(run[key]))) fail('Invalid generation timestamp.');
     if (run.images !== undefined && (!Array.isArray(run.images) || run.images.length > 10 || !run.images.every(asset => typeof asset === 'string' && assetPattern.test(asset)))) fail('Invalid saved image inputs.');
     if (run.snapshot !== undefined) {
@@ -49,15 +51,36 @@ function validateArchiveGraph(graph) {
   }
 }
 
-function referencedAssets(graph) {
-  const assets = new Set();
-  const visit = node => { if (node?.type === 'image') assets.add(node.data.asset); };
+function visitNodes(graph, visit) {
   graph.nodes.forEach(visit);
   for (const run of graph.runs) {
-    run.images?.forEach(asset => assets.add(asset));
     run.snapshot?.forEach(visit);
     visit(run.target);
   }
+}
+
+function hasTemplate(graph) {
+  let found = false;
+  visitNodes(graph, node => { if (node?.type === 'text' && node.data.template !== undefined) found = true; });
+  return found;
+}
+
+function hasCaptions(graph) {
+  let found = false;
+  visitNodes(graph, node => {
+    if ((node?.type === 'image' && node.data.caption?.trim())
+      || (node?.type === 'text' && (node.data.labelOutputs === true || node.data.template?.labelOutputs === true))) found = true;
+  });
+  return found;
+}
+
+function referencedAssets(graph) {
+  const assets = new Set();
+  visitNodes(graph, node => {
+    if (node?.type === 'image') assets.add(node.data.asset);
+    if (node?.type === 'text') node.data.template?.assets.forEach(asset => assets.add(asset));
+  });
+  for (const run of graph.runs) run.images?.forEach(asset => assets.add(asset));
   return assets;
 }
 
@@ -80,7 +103,7 @@ export async function exportBoardArchive(board, assetsDir) {
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -125,9 +148,11 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || manifest.version !== 1) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
+    if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
+    if (manifest.version < 3 && hasCaptions(board.graph)) fail('This board uses image captions and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');
@@ -146,7 +171,10 @@ export async function importBoardArchive(bytes, assetsDir) {
       remap.set(asset, name);
     }
     const graph = structuredClone(board.graph);
-    const remapNode = node => { if (node?.type === 'image') node.data.asset = remap.get(node.data.asset); };
+    const remapNode = node => {
+      if (node?.type === 'image') node.data.asset = remap.get(node.data.asset);
+      if (node?.type === 'text' && node.data.template) node.data.template.assets = node.data.template.assets.map(asset => remap.get(asset));
+    };
     graph.nodes.forEach(remapNode);
     for (const run of graph.runs) {
       if (run.images) run.images = run.images.map(asset => remap.get(asset));

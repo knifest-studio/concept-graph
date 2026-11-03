@@ -9,6 +9,7 @@ export function ButtonHelp() {
     const show = event => {
       const button = event.target.closest?.('button,[data-tooltip]');
       if (!button) return hide();
+      if (button.closest('[role="menu"]')) return hide();
       if (button === current) return;
       const text = button.dataset.tooltip || button.getAttribute('aria-label') || button.textContent.trim();
       if (!text) return hide();

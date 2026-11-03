@@ -1,0 +1,5 @@
+GOOGLE_CLIENT_ID="replace-with-your-web-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="replace-with-your-google-client-secret"
+SESSION_SECRET="replace-with-a-long-random-secret"
+# Optional localhost/127.0.0.1-only test sign-in. Never enable in deployed vars.
+# DEV_LOGIN="1"
