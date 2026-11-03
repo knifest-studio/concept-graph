@@ -123,6 +123,7 @@ test('cloud jobs validate, persist, queue with local runs, cancel and acknowledg
     const job = await completed(first);
     assert.equal(job.boardId, input.boardId); assert.equal(job.nodeId, input.nodeId);
     assert.ok(job.startedAt); assert.ok(job.finishedAt); assert.ok(job.elapsedMs >= 0);
+    assert.equal(job.model, generationSettings.model); assert.equal(job.effort, generationSettings.effort);
     assert.deepEqual(job.outputs, [{ index: 0, format: 'png' }]);
     assert.equal(job.prompt, undefined); assert.equal(job.images, undefined);
     const output = await request(jobRoute(first) + '/outputs/0');

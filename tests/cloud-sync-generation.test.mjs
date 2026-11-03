@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
-import { validateGraph } from '../graph.mjs';
+import { generationSettings, validateGraph } from '../graph.mjs';
 
 const asset = '12345678-1234-1234-1234-123456789abc.png';
 const otherAsset = '12345678-1234-1234-1234-123456789def.png';
@@ -283,4 +283,27 @@ test('starting with a session user stores only display name and color in the sha
   await generation.start('p');
   const run = [...doc.getMap('runs').values()][0]; assert.deepEqual(run.by, user); assert.equal(JSON.stringify(run).includes('private@example.com'), false);
   generation.stop(); await new Promise(resolve => setImmediate(resolve)); doc.destroy();
+});
+
+test('runs record the generation settings and template at submission, then what the helper reports', async () => {
+  const { doc, generation, state } = setup();
+  const before = readCloudGraph(doc), graph = structuredClone(before);
+  graph.nodes.find(node => node.id === 'p').data.template = { name: 'Character sheet', instructions: 'Turnaround', assets: [] };
+  applyLocalGraph(doc, graph, before, {});
+  await generation.start('p'); await new Promise(resolve => setImmediate(resolve));
+  const id = state.jobs[0].id, run = () => doc.getMap('runs').get(id);
+  // Legacy prompt-node settings are not what generation uses.
+  assert.equal(run().model, generationSettings.model); assert.equal(run().effort, generationSettings.effort); assert.equal(run().template, 'Character sheet');
+  // An older helper reports no settings, so the submitted ones stay.
+  await generation.tick();
+  assert.equal(run().model, generationSettings.model); assert.equal(run().effort, generationSettings.effort);
+  // A newer helper reports what it really used; invalid values are ignored.
+  state.jobs = [{ ...state.jobs[0], model: 'helper-model', effort: '../bad' }];
+  await generation.tick();
+  assert.equal(run().model, 'helper-model'); assert.equal(run().effort, generationSettings.effort);
+  state.jobs = [{ ...completed(id), model: 'helper-model', startedAt: '2026-11-03T10:00:04.000Z', finishedAt: '2026-11-03T10:01:16.000Z' }];
+  await generation.tick();
+  assert.equal(run().status, 'completed'); assert.equal(run().model, 'helper-model'); assert.equal(run().template, 'Character sheet');
+  assert.equal(run().startedAt, '2026-11-03T10:00:04.000Z'); assert.equal(run().finishedAt, '2026-11-03T10:01:16.000Z');
+  generation.stop(); doc.destroy();
 });

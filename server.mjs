@@ -165,8 +165,9 @@ function saveCloudJob(job) {
   return operation;
 }
 function cloudJobSummary(job) {
-  const { id, boardId, nodeId, status, startedAt, finishedAt, progress, error, outputs } = job;
-  return { id, boardId, nodeId, status, startedAt, ...(finishedAt ? { finishedAt } : {}), progress,
+  const { id, boardId, nodeId, model, effort, status, startedAt, finishedAt, progress, error, outputs } = job;
+  // Settings are reported so the board records what this helper really used; older helpers omit them.
+  return { id, boardId, nodeId, ...(model ? { model } : {}), ...(effort ? { effort } : {}), status, startedAt, ...(finishedAt ? { finishedAt } : {}), progress,
     ...(error ? { error } : {}), elapsedMs: Math.max(0, Date.parse(finishedAt || new Date().toISOString()) - Date.parse(startedAt)),
     outputs: outputs.map(output => ({ ...output })) };
 }
@@ -415,7 +416,7 @@ async function processQueue() {
       try {
         const result = await codex.generate({
           prompt: run.prompt, images: run.images.map(asset => path.join(assetsDir, asset)), signal: controller.signal,
-          ...generationSettings,
+          model: run.model || generationSettings.model, effort: run.effort || generationSettings.effort,
           onDiagnostic: diagnostics.receive,
           onProgress: message => { run.message = message; publish('run', publicRun(run), board.id); },
           onImage: async item => {
@@ -501,7 +502,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || '';
-  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
+  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
   graph.runs.push(run);
   try { await persist(); } catch (error) { graph.runs.splice(graph.runs.indexOf(run), 1); throw error; }
   publish('run', publicRun(run), board.id);

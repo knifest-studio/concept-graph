@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { generationSettings } from '../graph.mjs';
 
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 test('board-scoped saves and queued generation stay isolated across edits and restarts', {timeout:15000}, async t=>{
@@ -66,6 +67,7 @@ test('board-scoped saves and queued generation stay isolated across edits and re
     assert.deepEqual(g.runs[0].diagnostics.events.map(e=>e.type),['worker_context','turn_started','image_started','image_completed','turn_completed']);
     assert.equal(g.nodes.length,2);assert.equal(g.edges[0].source,index===0?'a':'b');
     assert.equal(g.runs[0].target.data.text,'Make a test image');
+    assert.equal(g.runs[0].model,generationSettings.model);assert.equal(g.runs[0].effort,generationSettings.effort);
   }
   assert.equal(final[0].nodes[0].data.text,changed.data.text);
   assert.equal(final[1].nodes[0].data.text,'Make a test image');

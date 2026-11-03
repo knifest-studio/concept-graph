@@ -1,10 +1,13 @@
-import { collectInputs, imageNode, imageSize, positionRunOutput, groupRunOutputs } from '../graph.mjs';
+import { collectInputs, generationSettings, imageNode, imageSize, positionRunOutput, groupRunOutputs } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 const terminal = status => ['completed', 'failed', 'cancelled'].includes(status);
 const timestamp = () => new Date().toISOString();
+// The helper reports the settings it used; older helpers do not, so the submitted defaults stay.
+const jobSettings = job => ({ ...(typeof job.model === 'string' && /^[\w.\/:+-]{1,128}$/.test(job.model) ? { model: job.model } : {}),
+  ...(typeof job.effort === 'string' && /^[a-z0-9_-]{1,32}$/.test(job.effort) ? { effort: job.effort } : {}) });
 
 async function base64(response) {
   if (!response.ok) throw new Error('Could not load a reference image.');
@@ -34,7 +37,7 @@ export class CloudGeneration {
     const { prompt, images, target } = collectInputs(graph, nodeId);
     const inputs = await Promise.all(images.map(async asset => ({ asset, data: await base64(await this.request(`/assets/${asset}`)) })));
     if (!this.active || !this.ready()) throw new Error('Board disconnected. Try generating when it is live.');
-    const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), status: 'queued', by: this.user, startedAt: timestamp() };
+    const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}), ...generationSettings, status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
     this.setRun(run); this.submitting.add(run.id);
     this.onStart?.(run);
@@ -79,7 +82,7 @@ export class CloudGeneration {
         if (terminal(current?.status) || current?.outputIds?.includes(id)) return;
         const before = readCloudGraph(this.doc), graph = structuredClone(before);
         const target = graph.nodes.find(node => node.id === job.nodeId) || { position: { x: 0, y: 0 } };
-        const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || this.user), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
+        const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || this.user), ...jobSettings(job), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
         let node = graph.nodes.find(node => node.id === id);
         if (!node) {
           node = imageNode({ id: job.id, target, by: run.by }, uploaded.asset, output.index, uploaded.dimensions);
@@ -107,7 +110,7 @@ export class CloudGeneration {
     if (!this.active || !this.ready()) return false;
     const current = map.get(job.id);
     if (!terminal(current?.status)) {
-      const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation' }), by: boardAuthor(current?.by || this.user), createdAt: current?.createdAt || current?.startedAt || job.startedAt, startedAt: job.startedAt || current?.startedAt, status: job.status,
+      const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation' }), by: boardAuthor(current?.by || this.user), ...jobSettings(job), createdAt: current?.createdAt || current?.startedAt || job.startedAt, startedAt: job.startedAt || current?.startedAt, status: job.status,
         ...(terminal(job.status) ? { finishedAt: job.finishedAt || timestamp(), count: current?.outputIds?.length || 0 } : {}), ...(job.error ? { error: job.error } : {}) };
       if (JSON.stringify(run) !== JSON.stringify(current)) this.setRun(run);
     }

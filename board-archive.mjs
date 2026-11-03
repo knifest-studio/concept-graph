@@ -41,6 +41,8 @@ function validateArchiveGraph(graph) {
     if (run.autoGroupId !== undefined && !validId(run.autoGroupId)) fail('Invalid automatic group reference.');
     if (run.page !== undefined && !validPageId(run.page)) fail('Invalid generation page.');
     for (const key of ['startedAt', 'finishedAt']) if (run[key] !== undefined && !Number.isFinite(Date.parse(run[key]))) fail('Invalid generation timestamp.');
+    if ((run.model !== undefined && (typeof run.model !== 'string' || !/^[\w.\/:+-]{1,128}$/.test(run.model)))
+      || (run.effort !== undefined && (typeof run.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(run.effort)))) fail('Invalid generation settings.');
     if (run.images !== undefined && (!Array.isArray(run.images) || run.images.length > 10 || !run.images.every(asset => typeof asset === 'string' && assetPattern.test(asset)))) fail('Invalid saved image inputs.');
     if (run.snapshot !== undefined) {
       validateGraph({ nodes: run.snapshot, edges: [] });

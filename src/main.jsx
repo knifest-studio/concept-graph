@@ -16,6 +16,7 @@ import { NodeContextMenu } from './NodeContextMenu.jsx';
 import { AnnotationTools, AuthorBadge, ColorPicker, DrawingNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
 import { boardAuthor, drawingFromStroke, groupPalette, imageAuthor, isAnnotation, penPalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
+import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
 import { generationFocusNodes } from './generation-tray.mjs';
@@ -138,7 +139,9 @@ function ExpandedTextNode({ id, data, selected }) {
 
 function ImageNode(props) {
   const actions = useContext(Actions);
-  return <NodeFeedback id={props.id} effects={actions.effects}>{props.data.collapsed ? <CollapsedNode {...props} kind="image"/> : <ExpandedImageNode {...props}/>}<span className={`image-author${props.data.collapsed ? ' collapsed' : ''}`}>{cloud && <AuthorBadge author={imageAuthor(props.data, actions.runs)} compact={props.data.collapsed}/>}</span></NodeFeedback>;
+  const author = cloud && imageAuthor(props.data, actions.runs);
+  // The author sits under the card and appears only on hover or selection, so it never covers the image.
+  return <NodeFeedback id={props.id} effects={actions.effects}>{props.data.collapsed ? <CollapsedNode {...props} kind="image"/> : <ExpandedImageNode {...props}/>}{author && <span className={`image-author${props.data.collapsed ? ' collapsed' : ''}`}><AuthorBadge author={author}/></span>}</NodeFeedback>;
 }
 
 function ExpandedImageNode({ id, data }) {
@@ -431,7 +434,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const [pageDelete, setPageDelete] = useState(null);
   const [status, setStatus] = useState({}), [saved, setSaved] = useState('Loading…'), [loaded, setLoaded] = useState(false);
   const [limitsVersion, setLimitsVersion] = useState(0);
-  const [toast, setToast] = useState(''), [viewId, setViewId] = useState(null), [starting, setStarting] = useState(null);
+  const [toast, setToast] = useState(''), [viewId, setViewId] = useState(null), [viewSize, setViewSize] = useState(null), [starting, setStarting] = useState(null);
   const [tab, setTab] = useState('canvas');
   const [diagnosticsId, setDiagnosticsId] = useState(null);
   const diagnosticsReturnFocus = useRef(null);
@@ -1491,6 +1494,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const viewNode = nodes.find(node => node.id === viewId);
   const viewRun = runs.find(run => run.id === viewNode?.data.runId);
   const viewInputs = viewRun?.snapshot?.filter(node => node.id !== viewRun.nodeId) || [];
+  const viewInfo = viewNode && imageInfo(viewNode, runs, viewSize?.asset === viewNode.data.asset ? viewSize : undefined);
   const selectedNodes = scoped.nodes.filter(n => n.selected), selectedCount = selectedNodes.length + scoped.groups.filter(group => group.selected).length;
   const canGroup = selectedNodes.length >= 2 && !groups.some(group => group.selected || group.nodeIds.some(id => selectedNodes.some(node => node.id === id)));
   const inputs = useMemo(() => directInputCounts({ nodes, edges }), [nodes, edges]);
@@ -1544,9 +1548,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     {toast && <div className="toast" role="status">{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
     {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image details" onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
       <button className="lightbox-close icon-button" autoFocus aria-label="Close image" onClick={() => setViewId(null)}><Icon name="close"/></button>
-      <div className="lightbox-image"><img src={assetUrl(viewNode.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.label || 'Concept image'}/></div>
-      <div className="lightbox-details"><span className="eyebrow">{viewRun ? 'GENERATED CONCEPT' : 'REFERENCE IMAGE'}</span>
-        {viewRun && <><span className="detail-label">{cloud ? 'Generation' : 'Original prompt'}</span><p className="prompt-snapshot">{viewRun.target?.data.text || viewRun.label}</p>
+      <div className="lightbox-image"><img src={assetUrl(viewNode.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || 'Concept image'} onLoad={event => setViewSize({ asset: viewNode.data.asset, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}/></div>
+      <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? 'GENERATED CONCEPT' : 'UPLOADED REFERENCE'}</span>
+        {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? 'Generated by' : 'Added by'}</span><AuthorBadge author={viewInfo.author}/></div>}
+        {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}
+        {viewInfo.rows.length > 0 && <dl className="image-info">{viewInfo.rows.map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}{row.note && <small>{row.note}</small>}</dd></div>)}</dl>}
+        {viewRun && <>{viewInfo.prompt && <><span className="detail-label">{cloud ? 'Prompt' : 'Original prompt'}</span><p className="prompt-snapshot">{viewInfo.prompt}</p></>}
           {!cloud && <><span className="detail-label">Inputs at the time of this run</span>
           <div className="run-inputs">{viewInputs.length ? viewInputs.map((node, index) => node.type === 'image'
             ? <img key={node.id} src={assetUrl(node.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`Input image ${index + 1}`} loading="lazy"/>
@@ -1555,8 +1562,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
             <span className="detail-label">Custom node: {node.data.template.name}</span>
             {node.data.template.instructions && <p>{node.data.template.instructions}</p>}
             {node.data.template.assets?.length > 0 && <div className="run-inputs">{node.data.template.assets.map((asset, index) => <img key={`${asset}-${index}`} src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`${node.data.template.name} reference ${index + 1}`} loading="lazy"/>)}</div>}
-          </div>)}
-          <small>{new Date(viewRun.createdAt).toLocaleString()}</small></>}
+          </div>)}</>}
         <div className="lightbox-actions"><button data-tooltip="Download original image" onClick={() => downloadImage(viewNode.data.asset)}><Icon name="download" size={17}/> Download original</button></div>
       </div>
     </div></div>}

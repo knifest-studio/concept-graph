@@ -99,6 +99,19 @@ test('empty boards round trip and unfinished imported jobs never resume', async 
   assert.equal(pending.graph.runs[0].status, 'running');
 });
 
+test('recorded generation settings round trip and malformed settings are rejected', async t => {
+  const { source, destination } = await fixture(t), recorded = structuredClone(board);
+  Object.assign(recorded.graph.runs[0], { model: 'gpt-6-luna', effort: 'low', startedAt: '2026-10-15T12:00:05.000Z' });
+  const files = await unpack(await collect(await exportBoardArchive(recorded, source)));
+  const imported = await importBoardArchive(await pack(files), destination);
+  assert.equal(imported.graph.runs[0].model, 'gpt-6-luna'); assert.equal(imported.graph.runs[0].effort, 'low');
+  for (const [key, value] of [['model', '../bad model'], ['effort', 'High!']]) {
+    const changed = new Map(files), manifest = JSON.parse(changed.get('board.json'));
+    manifest.board.graph.runs[0][key] = value; changed.set('board.json', Buffer.from(JSON.stringify(manifest)));
+    await assert.rejects(importBoardArchive(await pack(changed), destination), /Invalid generation settings/);
+  }
+});
+
 test('invalid archives, missing/history images, checksums and malformed history leave existing data intact', async t => {
   const { directory, source, destination } = await fixture(t);
   await writeFile(path.join(destination, current), png);
