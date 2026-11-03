@@ -1,0 +1,8 @@
+.board-pages{padding:0 18px 14px}.board-pages-heading{display:flex;align-items:center;justify-content:space-between}.board-pages-heading button{color:var(--purple)}
+.board-pages-list{list-style:none;margin:4px 0 0;padding:0;max-height:176px;overflow:auto}.board-pages-list li{min-width:0}
+.board-page{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:7px 6px;border-radius:7px;text-align:left;font-size:11px;color:var(--text)}.board-page:hover{background:var(--bg)}.board-page.active{background:var(--soft-purple);color:var(--purple);font-weight:600}
+.board-page-icon{flex:0 0 auto;color:var(--muted)}.board-page.active .board-page-icon{color:var(--purple)}.board-page-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.board-page-people{display:flex;flex:0 0 auto;padding-left:4px}.board-page-person{display:grid;place-items:center;width:16px;height:16px;margin-left:-4px;border-radius:50%;border:1.5px solid var(--panel);font-size:7px;font-weight:700;line-height:1}.board-page-person.more{background:var(--border);color:var(--muted)}
+.board-page-input{width:100%;min-width:0;padding:6px 6px;border:1px solid var(--purple);border-radius:7px;background:var(--card);font-size:11px;outline:none}
+.page-delete-card .danger{background:#c6544d;color:#fff}
+@media(max-width:950px){.board-pages{padding:0 13px 12px}}@media(max-width:650px){.board-pages{padding:0 8px 10px}.board-page{font-size:10px;gap:5px}.board-page-icon{display:none}}

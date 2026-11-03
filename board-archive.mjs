@@ -6,6 +6,7 @@ import yauzl from 'yauzl';
 import yazl from 'yazl';
 import { validateGraph, imageFormat } from './graph.mjs';
 import { boardName } from './workspace.mjs';
+import { hasPageData, validPageId } from './src/pages.mjs';
 
 export const maxBoardArchiveBytes = 512 * 1024 * 1024;
 const maxManifestBytes = 32 * 1024 * 1024, maxImageBytes = 30 * 1024 * 1024, maxEntries = 5000;
@@ -23,7 +24,7 @@ function validateArchiveGraph(graph) {
   validateGraph(graph);
   if (!Number.isSafeInteger(graph.revision) || graph.revision < 0 || !graph.viewport || graph.viewport.zoom <= 0
     || !Array.isArray(graph.runs) || graph.runs.length > 5000) fail('Invalid board history or viewport.');
-  const editable = JSON.stringify({ revision: graph.revision, nodes: graph.nodes, edges: graph.edges, groups: graph.groups, viewport: graph.viewport });
+  const editable = JSON.stringify({ revision: graph.revision, nodes: graph.nodes, edges: graph.edges, groups: graph.groups, pages: graph.pages, viewport: graph.viewport });
   if (Buffer.byteLength(editable) > 4 * 1024 * 1024) fail('The editable board content exceeds the 4 MB limit.');
   graph.nodes.forEach(validateNodeMetadata);
   const runIds = new Set();
@@ -38,6 +39,7 @@ function validateArchiveGraph(graph) {
     }
     if (run.captionMissing !== undefined && (!Number.isSafeInteger(run.captionMissing) || run.captionMissing < 0 || run.captionMissing > 2000)) fail('Invalid image caption count.');
     if (run.autoGroupId !== undefined && !validId(run.autoGroupId)) fail('Invalid automatic group reference.');
+    if (run.page !== undefined && !validPageId(run.page)) fail('Invalid generation page.');
     for (const key of ['startedAt', 'finishedAt']) if (run[key] !== undefined && !Number.isFinite(Date.parse(run[key]))) fail('Invalid generation timestamp.');
     if (run.images !== undefined && (!Array.isArray(run.images) || run.images.length > 10 || !run.images.every(asset => typeof asset === 'string' && assetPattern.test(asset)))) fail('Invalid saved image inputs.');
     if (run.snapshot !== undefined) {
@@ -74,6 +76,12 @@ function hasCaptions(graph) {
   return found;
 }
 
+function hasAnnotations(graph) {
+  let found = !!graph.groups?.some(group => group.color !== undefined);
+  visitNodes(graph, node => { if (node && (['drawing', 'sticky', 'stamp'].includes(node.type) || node.data.author !== undefined)) found = true; });
+  return found;
+}
+
 function referencedAssets(graph) {
   const assets = new Set();
   visitNodes(graph, node => {
@@ -103,7 +111,7 @@ export async function exportBoardArchive(board, assetsDir) {
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -148,11 +156,14 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
     if (manifest.version < 3 && hasCaptions(board.graph)) fail('This board uses image captions and requires a newer board format.');
+    if (manifest.version < 4 && hasAnnotations(board.graph)) fail('This board uses annotations or author metadata and requires a newer board format.');
+    // Older archives have no page data, so every node opens on the default first page.
+    if (manifest.version < 5 && hasPageData(board.graph)) fail('This board uses pages and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createBoard, loadWorkspace, writeWorkspace, boardName } from '../workspace.mjs';
 import { edgeDropCreatesPrompt } from '../src/canvas.mjs';
+import { drawingFromStroke } from '../src/annotations.mjs';
 
 test('legacy migration preserves every node, edge, run and viewport and is idempotent', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'concept-board-migration-'));
@@ -34,6 +35,20 @@ test('corrupt storage is rejected without replacing it; board names are validate
   assert.throws(() => boardName('  '));
   assert.throws(() => boardName('x'.repeat(81)));
   assert.equal(boardName('  Characters  '), 'Characters');
+});
+
+test('local workspace persistence retains annotations, group fills and author snapshots', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'concept-board-annotations-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const board = createBoard('Annotations'), author = { name: 'Artist', color: '#2563eb' };
+  board.graph.nodes = [
+    { id: 'drawing', ...drawingFromStroke([[-10, 10], [100, 200]], '#2563eb', 4) },
+    { id: 'sticky', type: 'sticky', position: { x: 10, y: 20 }, data: { text: 'Note', color: '#fff3ad', author } },
+    { id: 'stamp', type: 'stamp', position: { x: 10, y: 30 }, data: { kind: 'star', author, attachedTo: 'sticky' } },
+  ];
+  board.graph.groups = [{ id: 'g', name: 'Annotations', color: '#e9e2ff', nodeIds: ['drawing', 'sticky', 'stamp'], collapsed: true }];
+  const workspace = { version: 1, defaultBoardId: board.id, boards: [board] };
+  await writeWorkspace(directory, workspace); assert.deepEqual(await loadWorkspace(directory), workspace);
 });
 
 test('text and image output drops on empty canvas create prompts without duplicates', () => {

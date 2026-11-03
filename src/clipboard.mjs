@@ -1,4 +1,5 @@
 import { validateGraph, duplicateNodes } from '../graph.mjs';
+import { detachMissingStampTargets } from './annotations.mjs';
 
 export const nodeClipboardType = 'application/x-concept-graph-nodes';
 
@@ -29,7 +30,7 @@ export function copyImageToClipboard(response) {
 export function selectedGraph(nodes, edges) {
   const selected = nodes.filter(node => node.selected), ids = new Set(selected.map(node => node.id));
   return structuredClone({ format: nodeClipboardType, version: 1,
-    nodes: selected.map(({ id, type, position, data }) => ({ id, type, position, data })),
+    nodes: detachMissingStampTargets(selected.map(({ id, type, position, data, z }) => ({ id, type, position, data, ...(z === undefined ? {} : { z }) }))),
     edges: edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).map(({ id, source, target }) => ({ id, source, target })),
   });
 }

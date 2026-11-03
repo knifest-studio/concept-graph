@@ -52,7 +52,7 @@ try {
       await cp(path.join(extract, 'LICENSE'), path.join(app, 'NODE-LICENSE'));
       await writeFile(path.join(app, 'Start Concept Graph.cmd'), windowsHelperLauncher(site));
     }
-    for (const file of helperFiles) await cp(path.join(root, file), path.join(app, file));
+    for (const file of helperFiles) { await mkdir(path.dirname(path.join(app, file)), { recursive: true }); await cp(path.join(root, file), path.join(app, file)); }
     await writeFile(path.join(app, 'helper-version.json'), JSON.stringify({ version: helperVersion }) + '\n');
     for (const dependency of dependencies) await cp(path.join(root, 'node_modules', dependency), path.join(app, 'node_modules', dependency), { recursive: true });
     const zip = path.join(temp, `concept-graph-helper-${target.name}.zip`);

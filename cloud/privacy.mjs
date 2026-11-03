@@ -20,7 +20,7 @@ export const privacyHtml = `<!doctype html>
     <h2>Google sign-in</h2>
     <p>We store your Google account name, email address, and Google account ID to sign you in, show who is on a board, and let the site owner see registered users. We also store your first and most recent sign-in times and sign-in count. A session cookie keeps you signed in.</p>
     <h2>Boards and images</h2>
-    <p>Board content and uploaded or generated images are stored on Cloudflare. All signed-in users currently have access to all shared boards, images, and templates.</p>
+    <p>Board content and uploaded or generated images are stored on Cloudflare. Boards also store display names and avatar colors for generation authors, sticky notes, and stamps; these board identities do not include email addresses. All signed-in users currently have access to all shared boards, images, and templates.</p>
     <h2>Image generation</h2>
     <p>Image generation runs on your own computer through the local helper, using your own Codex/ChatGPT account. Prompts and reference images are sent to OpenAI under your account.</p>
     <h2>How data is used</h2>

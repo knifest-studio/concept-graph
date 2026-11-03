@@ -2,6 +2,7 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateGraph } from './graph.mjs';
+import { hasPageData } from './src/pages.mjs';
 
 export const emptyGraph = () => ({ revision: 0, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 }, runs: [] });
 export function boardName(value) {
@@ -24,7 +25,7 @@ export async function loadWorkspace(directory) {
     const board = createBoard(graph ? 'My concepts' : 'Untitled board', graph || emptyGraph());
     workspace = { version: 1, defaultBoardId: board.id, boards: [board] };
   }
-  if (workspace.version !== 1 || !Array.isArray(workspace.boards) || !workspace.boards.length) throw new Error('Invalid board storage; no data was overwritten.');
+  if (![1, 2].includes(workspace.version) || !Array.isArray(workspace.boards) || !workspace.boards.length) throw new Error('Invalid board storage; no data was overwritten.');
   const ids = new Set();
   for (const board of workspace.boards) {
     if (!/^[\da-f-]{36}$/.test(board.id) || ids.has(board.id)) throw new Error('Invalid board ID.');
@@ -34,8 +35,10 @@ export async function loadWorkspace(directory) {
   if (!ids.has(workspace.defaultBoardId)) throw new Error('Default board is missing.');
   return workspace;
 }
+// Version 2 marks page data; older apps refuse it instead of reopening boards and dropping page membership.
+export const workspaceVersion = workspace => workspace.boards.some(board => hasPageData(board.graph)) ? 2 : 1;
 export async function writeWorkspace(directory, workspace) {
   const file = path.join(directory, 'workspace.json');
-  await writeFile(file + '.tmp', JSON.stringify(workspace, null, 2));
+  await writeFile(file + '.tmp', JSON.stringify({ ...workspace, version: workspaceVersion(workspace) }, null, 2));
   await rename(file + '.tmp', file);
 }

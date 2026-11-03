@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import YProvider from 'y-partyserver/provider';
 import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
 import { CloudGeneration } from './cloud-generation.mjs';
+import { boardAuthor } from './annotations.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
 import { coverHue, relativeTime } from './cloud-boards.mjs';
@@ -98,12 +99,13 @@ function Cursors({ peers }) {
   </div>)}</ViewportPortal>;
 }
 
-function CloudBoard({ boardId, user, paired, pairing, pairCancel, helperStatus, openPair, unpair, onBack, onLogout, services, Editor, ...editorProps }) {
+function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helperStatus, openPair, unpair, onBack, onLogout, services, Editor, ...editorProps }) {
+  const user = boardAuthor(account) || { name: 'Teammate' };
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState('');
   useEffect(() => {
     const doc = new Y.Doc(), origin = {};
     const provider = new YProvider(location.host, boardId, doc, { party: 'board-room', disableBc: true, protocol: location.protocol === 'https:' ? 'wss' : 'ws' });
-    const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups')], { trackedOrigins: new Set([origin]) });
+    const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages')], { trackedOrigins: new Set([origin]) });
     const next = {
       doc, provider, undo, origin, user, paired, openPair, unpair,
       read: local => readCloudGraph(doc, local),
@@ -124,6 +126,7 @@ function CloudBoard({ boardId, user, paired, pairing, pairCancel, helperStatus, 
       if (position && Date.now() - lastPointer < 110) return;
       lastPointer = Date.now(); provider.awareness.setLocalStateField('cursor', position);
     };
+    next.page = page => { if (provider.awareness.getLocalState()?.page !== page) provider.awareness.setLocalStateField('page', page); };
     next.selection = selection => {
       const value = JSON.stringify(selection);
       if (value !== lastSelection) { lastSelection = value; provider.awareness.setLocalStateField('selection', selection); }
@@ -153,7 +156,7 @@ function CloudBoard({ boardId, user, paired, pairing, pairCancel, helperStatus, 
   }, [session, paired]);
   if (!session) return <div className="startup">Connecting to board…</div>;
   Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error });
-  session.cursors = <Cursors peers={peers}/>;
+  session.cursors = visible => <Cursors peers={peers.filter(visible)}/>;
   session.toolbar = <>
     <div className="cloud-presence" aria-label="People on this board">{[{ id: 'me', user }, ...peers].map(peer => <span key={peer.id} className="cloud-person" title={peer.user.name} style={{ '--person-color': peer.user.color }}>{peer.user.name}</span>)}</div>
     <button className="cloud-nav" onClick={() => session.leave?.(onBack)}>Boards</button><button className="cloud-nav" onClick={() => session.leave?.(onLogout)}>Sign out</button>

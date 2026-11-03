@@ -11,6 +11,7 @@ import { collectInputs, imageNode, imageSize, imageFormat, validateGraph, valida
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
+import { boardPages, nodePage, pageField, samePage } from './src/pages.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.CONCEPT_GRAPH_DATA || path.join(root, 'data'));
@@ -431,7 +432,7 @@ async function processQueue() {
             }
             positionRunOutput(node, graph, run);
             graph.nodes.push(node);
-            if (graph.nodes.some(n => n.id === run.nodeId)) graph.edges.push({ id: randomUUID(), source: run.nodeId, target: node.id });
+            if (samePage(graph, graph.nodes.find(n => n.id === run.nodeId), node)) graph.edges.push({ id: randomUUID(), source: run.nodeId, target: node.id });
             graph.revision++;
             run.outputIds.push(node.id);
             groupRunOutputs(graph, run, node.id);
@@ -476,6 +477,8 @@ async function applyGraph(board, next, ensureConnected = () => {}) {
   const graph = board.graph;
   if (next.revision !== graph.revision) throw conflict(graph);
   const nodeIds = new Set((next.nodes || []).map(node => node.id));
+  // Editors that do not send pages keep the board's page list.
+  next.pages ??= graph.pages;
   next.groups ??= (graph.groups || []).map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => nodeIds.has(id)) })).filter(group => group.nodeIds.length);
   validateGraph(next);
   const nodeAssets = node => node.type === 'image' ? [node.data.asset] : node.data.template?.assets || [];
@@ -498,7 +501,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || '';
-  const run = { id: randomUUID(), nodeId, ...inputs, status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
+  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
   graph.runs.push(run);
   try { await persist(); } catch (error) { graph.runs.splice(graph.runs.indexOf(run), 1); throw error; }
   publish('run', publicRun(run), board.id);

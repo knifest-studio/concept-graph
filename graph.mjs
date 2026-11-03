@@ -1,3 +1,7 @@
+import { isAnnotation, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
+import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
+import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
+
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
@@ -33,11 +37,17 @@ export function validateTemplate(value) {
 export function validateGraph(value) {
   if (!value || !Array.isArray(value.nodes) || !Array.isArray(value.edges)) throw new Error('Invalid canvas.');
   if (value.nodes.length > 2000 || value.edges.length > 10000) throw new Error('Canvas is too large.');
-  const ids = new Set();
+  if (value.pages !== undefined) validatePages(value.pages);
+  const ids = new Set(), page = pageResolver(boardPages(value));
   for (const node of value.nodes) {
     if (!node || typeof node.id !== 'string' || node.id.length > 120 || ids.has(node.id)) throw new Error('Invalid or duplicate node.');
     ids.add(node.id);
-    if (!['text', 'image'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)) throw new Error('Invalid node.');
+    if (!['text', 'image', 'drawing', 'sticky', 'stamp'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
+      || !node.data || typeof node.data !== 'object' || Array.isArray(node.data)) throw new Error('Invalid node.');
+    if (node.page !== undefined && !validPageId(node.page)) throw new Error('Invalid node page.');
+    if (node.z !== undefined && !validLayer(node.z)) throw new Error('Invalid node layer.');
+    if (isAnnotation(node)) validateAnnotation(node);
+    if (node.data.author !== undefined) validateAuthor(node.data.author);
     if (node.data?.collapsed !== undefined && typeof node.data.collapsed !== 'boolean') throw new Error('Invalid node collapse state.');
     if (node.data?.createdAt !== undefined && (typeof node.data.createdAt !== 'string' || !Number.isFinite(Date.parse(node.data.createdAt)))) throw new Error('Invalid node creation time.');
     if (node.type === 'text' && (typeof node.data?.text !== 'string' || node.data.text.length > 100000)) throw new Error('Invalid text.');
@@ -49,9 +59,15 @@ export function validateGraph(value) {
     if (node.type === 'image' && node.data.caption !== undefined && (typeof node.data.caption !== 'string' || node.data.caption.length > 120)) throw new Error('Invalid image caption.');
     if (node.type === 'image' && node.data.aspect !== undefined && (!Number.isFinite(node.data.aspect) || node.data.aspect < 0.1 || node.data.aspect > 10)) throw new Error('Invalid image aspect.');
   }
-  const edgeIds = new Set();
+  const edgeIds = new Set(), byId = new Map(value.nodes.map(node => [node.id, node]));
+  for (const node of value.nodes) {
+    const parent = node.type === 'stamp' && node.data.attachedTo !== undefined && byId.get(node.data.attachedTo);
+    if (parent !== false && (!canAttachStamp(parent) || page(parent.page) !== page(node.page))) throw new Error('Invalid stamp attachment target.');
+  }
   for (const edge of value.edges) {
     if (!edge || typeof edge.id !== 'string' || edgeIds.has(edge.id) || !ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target) throw new Error('Invalid connection.');
+    if (isAnnotation(byId.get(edge.source)) || isAnnotation(byId.get(edge.target))) throw new Error('Annotations cannot have connections.');
+    if (page(byId.get(edge.source).page) !== page(byId.get(edge.target).page)) throw new Error('Connections cannot span pages.');
     edgeIds.add(edge.id);
   }
   if (value.groups !== undefined) {
@@ -60,10 +76,12 @@ export function validateGraph(value) {
     for (const group of value.groups) {
       if (!group || typeof group.id !== 'string' || !group.id || group.id.length > 120 || ids.has(group.id) || groupIds.has(group.id)
         || typeof group.name !== 'string' || !group.name.trim() || group.name.length > 80 || typeof group.collapsed !== 'boolean'
+        || (group.color !== undefined && !validColor(group.color))
         || !Array.isArray(group.nodeIds) || !group.nodeIds.length) throw new Error('Invalid group.');
       groupIds.add(group.id);
       for (const id of group.nodeIds) {
         if (!ids.has(id) || members.has(id)) throw new Error('A node can belong to only one group.');
+        if (page(byId.get(id).page) !== page(byId.get(group.nodeIds[0]).page)) throw new Error('Groups cannot span pages.');
         members.add(id);
       }
     }
@@ -86,10 +104,17 @@ export function validateGraph(value) {
 
 export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids = new Map(nodeIds.map(id => [id, crypto.randomUUID()])), edgeIds = new Map(), createdAt = new Date().toISOString() } = {}) {
   const originals = new Map(graph.nodes.map(node => [node.id, node]));
+  if (nodeIds.some(id => !originals.has(id))) throw new Error('Node not found.');
+  // Copies go on top of the board in their original stacking order.
+  const top = topLayer(graph.nodes), rank = layerIndex(nodeIds.map(id => originals.get(id)));
   const nodes = nodeIds.map(id => {
     const node = originals.get(id);
-    if (!node) throw new Error('Node not found.');
-    return { id: ids.get(id), type: node.type, position: { x: node.position.x + offset.x, y: node.position.y + offset.y }, data: { ...structuredClone(node.data), createdAt } };
+    const data = { ...structuredClone(node.data), createdAt };
+    if (node.type === 'stamp' && data.attachedTo !== undefined) {
+      if (ids.has(data.attachedTo)) data.attachedTo = ids.get(data.attachedTo);
+      else delete data.attachedTo;
+    }
+    return { id: ids.get(id), type: node.type, position: { x: node.position.x + offset.x, y: node.position.y + offset.y }, data, ...(node.page === undefined ? {} : { page: node.page }), z: Math.min(maxLayer, top + rank.get(id)) };
   });
   const edges = graph.edges.filter(edge => ids.has(edge.target)).map(edge => {
     if (!edgeIds.has(edge.id)) edgeIds.set(edge.id, crypto.randomUUID());
@@ -98,7 +123,7 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   validateGraph(graph);
   if (nodes.some(node => originals.has(node.id))) throw new Error('Invalid or duplicate node.');
   // A clipboard source is not the destination board; validate copies with their external parents.
-  validateGraph({ nodes: [...graph.nodes.filter(node => !ids.has(node.id)), ...nodes], edges });
+  validateGraph({ pages: graph.pages, nodes: detachMissingStampTargets([...graph.nodes.filter(node => !ids.has(node.id)), ...nodes]), edges });
   return { nodes, edges };
 }
 
@@ -127,24 +152,34 @@ export function collectInputs(graph, nodeId) {
 
 export function imageNode(run, asset, index, dimensions) {
   const aspect = dimensions && dimensions.height / dimensions.width;
+  const author = boardAuthor(run.by);
   return {
     id: crypto.randomUUID(), type: 'image',
     position: { x: run.target.position.x + 390, y: run.target.position.y + index * 340 },
-    data: { asset, label: `Result ${index + 1}`, runId: run.id, createdAt: new Date().toISOString(), ...(aspect >= 0.1 && aspect <= 10 ? { aspect } : {}) },
+    data: { asset, label: `Result ${index + 1}`, runId: run.id, createdAt: new Date().toISOString(), ...(author ? { author } : {}), ...(aspect >= 0.1 && aspect <= 10 ? { aspect } : {}) },
   };
 }
 
 export async function commitGraph(graph, next, persist) {
-  const previous = { nodes: graph.nodes, edges: graph.edges, groups: graph.groups, viewport: graph.viewport, revision: graph.revision };
+  const previous = { nodes: graph.nodes, edges: graph.edges, groups: graph.groups, pages: graph.pages, viewport: graph.viewport, revision: graph.revision };
   const revision = graph.revision + 1;
-  Object.assign(graph, { nodes: next.nodes, edges: next.edges, groups: next.groups, viewport: next.viewport || graph.viewport, revision });
-  try { await persist(); } catch (error) { Object.assign(graph, previous); throw error; }
+  const assign = value => { Object.assign(graph, value); if (graph.pages === undefined) delete graph.pages; };
+  assign({ nodes: next.nodes, edges: next.edges, groups: next.groups, pages: next.pages, viewport: next.viewport || graph.viewport, revision });
+  try { await persist(); } catch (error) { assign(previous); throw error; }
   return revision;
 }
 
+export function reconcileStampGraph(before, next) {
+  const nodes = reconcileStampAttachments(before.nodes, next.nodes), retained = new Set(nodes.map(node => node.id));
+  const removed = new Set(next.nodes.filter(node => !retained.has(node.id)).map(node => node.id));
+  const groups = removed.size && Array.isArray(next.groups) ? next.groups.map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => !removed.has(id)) })).filter(group => group.nodeIds.length) : next.groups;
+  return { ...next, nodes, ...(groups === undefined ? {} : { groups }) };
+}
+
 export function groupRunOutputs(graph, run, newOutputId) {
-  const grouped = new Set((graph.groups || []).flatMap(group => group.nodeIds));
-  const existing = new Set(graph.nodes.filter(node => node.type === 'image').map(node => node.id));
+  const grouped = new Set((graph.groups || []).flatMap(group => group.nodeIds)), page = runOutputPage(graph, run), resolve = pageResolver(boardPages(graph));
+  // A run whose page was deleted continues on the first page; a group never spans both.
+  const existing = new Set(graph.nodes.filter(node => node.type === 'image' && resolve(node.page) === page).map(node => node.id));
   // Once the user removes this group, never recreate it during the same run.
   if (run.autoGroupId) {
     const group = (graph.groups || []).find(item => item.id === run.autoGroupId);
@@ -166,13 +201,19 @@ export function groupRunOutputs(graph, run, newOutputId) {
 }
 
 export const captionHeight = node => node.type === 'image' && !node.data?.collapsed && node.data?.caption?.trim() ? 24 : 0;
-export const nodeSize = node => node.data?.collapsed === true ? { width: 72, height: 72 }
+export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? 80 : 310 * (node.data?.aspect || 1)) };
 
+// Outputs stay on the page frozen when the run was submitted, or the first page if it is gone.
+export const runOutputPage = (graph, run) => resolvePage(boardPages(graph), run.page ?? defaultPageId);
 export function positionRunOutput(node, graph, run) {
-  const nodes = new Map(graph.nodes.map(item => [item.id, item]));
+  const page = runOutputPage(graph, run), scoped = { ...graph, ...pageContent(graph, page) };
+  if (page === defaultPageId) delete node.page; else node.page = page;
+  // Each new result appears above everything already on the board.
+  node.z = nextLayer(graph.nodes);
+  const nodes = new Map(scoped.nodes.map(item => [item.id, item]));
   const previous = run.outputIds.map(id => nodes.get(id)).filter(Boolean);
-  if (!previous.length) return positionFirstOutput(node, graph);
+  if (!previous.length) return positionFirstOutput(node, scoped);
   node.position = { x: previous[0].position.x, y: Math.max(...previous.map(item => item.position.y + nodeSize(item).height)) + 30 + captionHeight(node) };
 }
 

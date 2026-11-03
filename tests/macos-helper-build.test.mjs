@@ -13,7 +13,7 @@ test('helper version hashes sorted bundled contents and includes the package ver
   const temp = await mkdtemp(path.join(tmpdir(), 'concept-graph-helper-version-'));
   try {
     await writeFile(path.join(temp, 'package.json'), JSON.stringify({ version: '0.1.1' }));
-    for (const file of [...helperFiles].reverse()) await writeFile(path.join(temp, file), `source: ${file}`);
+    for (const file of [...helperFiles].reverse()) { await mkdir(path.dirname(path.join(temp, file)), { recursive: true }); await writeFile(path.join(temp, file), `source: ${file}`); }
     const initial = await computeHelperVersion(temp);
     assert.match(initial, /^0\.1\.1-[a-f0-9]{10}$/);
     assert.equal(await computeHelperVersion(temp), initial);

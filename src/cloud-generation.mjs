@@ -1,5 +1,7 @@
 import { collectInputs, imageNode, imageSize, positionRunOutput, groupRunOutputs } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
+import { boardAuthor } from './annotations.mjs';
+import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 const terminal = status => ['completed', 'failed', 'cancelled'].includes(status);
 const timestamp = () => new Date().toISOString();
@@ -15,7 +17,7 @@ async function base64(response) {
 
 export class CloudGeneration {
   constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart }) {
-    Object.assign(this, { doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart });
+    Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart });
     this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map();
   }
   setRun(run) { this.doc.transact(() => this.doc.getMap('runs').set(run.id, run), this.origin); }
@@ -32,7 +34,7 @@ export class CloudGeneration {
     const { prompt, images, target } = collectInputs(graph, nodeId);
     const inputs = await Promise.all(images.map(async asset => ({ asset, data: await base64(await this.request(`/assets/${asset}`)) })));
     if (!this.active || !this.ready()) throw new Error('Board disconnected. Try generating when it is live.');
-    const run = { id: crypto.randomUUID(), nodeId, label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), status: 'queued', by: this.user, startedAt: timestamp() };
+    const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
     this.setRun(run); this.submitting.add(run.id);
     this.onStart?.(run);
@@ -77,10 +79,10 @@ export class CloudGeneration {
         if (terminal(current?.status) || current?.outputIds?.includes(id)) return;
         const before = readCloudGraph(this.doc), graph = structuredClone(before);
         const target = graph.nodes.find(node => node.id === job.nodeId) || { position: { x: 0, y: 0 } };
-        const run = { ...(current || { id: job.id, nodeId: job.nodeId, by: this.user, label: 'Recovered generation' }), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
+        const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || this.user), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
         let node = graph.nodes.find(node => node.id === id);
         if (!node) {
-          node = imageNode({ id: job.id, target }, uploaded.asset, output.index, uploaded.dimensions);
+          node = imageNode({ id: job.id, target, by: run.by }, uploaded.asset, output.index, uploaded.dimensions);
           node.id = id;
           if (output.caption || output.index > 0) node.data.caption = output.caption || `Image ${output.index + 1}`;
           positionRunOutput(node, graph, run);
@@ -91,7 +93,7 @@ export class CloudGeneration {
           const first = graph.nodes.find(node => node.id === run.outputIds[0]);
           if (first && !Object.hasOwn(first.data, 'caption')) first.data.caption = 'Image 1';
         }
-        if (graph.nodes.some(item => item.id === job.nodeId) && !graph.edges.some(edge => edge.id === `${id}-edge`)) graph.edges.push({ id: `${id}-edge`, source: job.nodeId, target: id });
+        if (samePage(graph, graph.nodes.find(item => item.id === job.nodeId), node) && !graph.edges.some(edge => edge.id === `${id}-edge`)) graph.edges.push({ id: `${id}-edge`, source: job.nodeId, target: id });
         const previousGroup = run.autoGroupId;
         groupRunOutputs(graph, run, id);
         if (!previousGroup && run.autoGroupId) {
@@ -105,7 +107,7 @@ export class CloudGeneration {
     if (!this.active || !this.ready()) return false;
     const current = map.get(job.id);
     if (!terminal(current?.status)) {
-      const run = { ...(current || { id: job.id, nodeId: job.nodeId, by: this.user, label: 'Recovered generation' }), createdAt: current?.createdAt || current?.startedAt || job.startedAt, startedAt: job.startedAt || current?.startedAt, status: job.status,
+      const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation' }), by: boardAuthor(current?.by || this.user), createdAt: current?.createdAt || current?.startedAt || job.startedAt, startedAt: job.startedAt || current?.startedAt, status: job.status,
         ...(terminal(job.status) ? { finishedAt: job.finishedAt || timestamp(), count: current?.outputIds?.length || 0 } : {}), ...(job.error ? { error: job.error } : {}) };
       if (JSON.stringify(run) !== JSON.stringify(current)) this.setRun(run);
     }

@@ -2,3 +2,4 @@
 .node-context-menu button{display:flex;align-items:center;justify-content:space-between;gap:24px;width:100%;padding:9px 10px;border-radius:5px;text-align:left;font-size:12px;white-space:nowrap}
 .node-context-menu button:hover,.node-context-menu button:focus-visible{outline:none;background:var(--soft-purple);color:var(--purple)}
 .node-context-menu kbd{font-size:10px;white-space:nowrap}
+.node-context-menu hr{margin:4px 2px;border:0;border-top:1px solid var(--border)}

@@ -263,3 +263,24 @@ test('disconnecting after upload reuses the cached asset on the next poll', asyn
   assert.equal(calls.filter(call => call[0] === 'helper-image').length, 2);
   generation.stop(); doc.destroy();
 });
+
+test('outputs keep the starter identity across collection by a different user, without email fields', async () => {
+  const { doc, generation, state } = setup();
+  const starter = { name: 'Starter', color: '#e63946', email: 'private@example.com' };
+  generation.user = { name: 'Collector', color: '#238636' };
+  doc.getMap('runs').set('run', { id: 'run', nodeId: 'p', status: 'running', startedAt, by: starter });
+  state.jobs = [completed()]; await generation.tick();
+  const graph = readCloudGraph(doc), outputs = graph.nodes.filter(node => node.data.runId === 'run');
+  assert.equal(outputs.length, 2);
+  assert.ok(outputs.every(node => JSON.stringify(node.data.author) === JSON.stringify({ name: 'Starter', color: '#e63946' })));
+  assert.deepEqual(graph.runs[0].by, { name: 'Starter', color: '#e63946' });
+  generation.stop(); doc.destroy();
+});
+
+test('starting with a session user stores only display name and color in the shared run', async () => {
+  const { doc, services } = setup();
+  const generation = new CloudGeneration({ ...services, user: { ...user, email: 'private@example.com' } }); generation.active = true;
+  await generation.start('p');
+  const run = [...doc.getMap('runs').values()][0]; assert.deepEqual(run.by, user); assert.equal(JSON.stringify(run).includes('private@example.com'), false);
+  generation.stop(); await new Promise(resolve => setImmediate(resolve)); doc.destroy();
+});

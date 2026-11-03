@@ -1,4 +1,6 @@
 import { nodeSize, captionHeight } from '../graph.mjs';
+import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
+import { layerIndex } from './layers.mjs';
 
 export const connectionColor = type => type === 'image' ? 'var(--purple)' : 'var(--blue)';
 
@@ -63,6 +65,12 @@ export function mergeAddedGroups(local, remote, base, nodes) {
       const index = result.findIndex(item => item.id === group.id);
       // A local ungroup is intentional; accept only newly arrived members.
       if (index < 0) continue;
+      for (const key of ['name', 'color', 'collapsed']) {
+        if (result[index][key] !== known.get(group.id)[key] || group[key] === known.get(group.id)[key]) continue;
+        const updated = { ...result[index] };
+        if (group[key] === undefined) delete updated[key]; else updated[key] = group[key];
+        result[index] = updated;
+      }
       const previous = new Set(known.get(group.id).nodeIds);
       const added = group.nodeIds.filter(id => !previous.has(id) && ids.has(id) && !occupied.has(id));
       if (added.length) {
@@ -101,7 +109,7 @@ export function edgeDropCreatesPrompt(state, onPane) {
   return onPane && !state.isValid && !state.toNode && state.fromHandle?.type === 'source' && ['text', 'image'].includes(state.fromNode?.type);
 }
 
-export const cleanGroups = groups => groups.map(({ id, name, nodeIds, collapsed }) => ({ id, name, nodeIds, collapsed }));
+export const cleanGroups = groups => groups.map(({ id, name, nodeIds, collapsed, color }) => ({ id, name, nodeIds, collapsed, ...(color === undefined ? {} : { color }) }));
 export function pruneGroups(groups, nodes) {
   const ids = new Set(nodes.map(node => node.id));
   return groups.map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => ids.has(id)) })).filter(group => group.nodeIds.length);
@@ -120,16 +128,17 @@ export function groupBounds(group, nodes) {
 export function canvasView(nodes, edges, groups) {
   const collapsed = new Map();
   for (const group of groups.filter(group => group.collapsed)) for (const id of group.nodeIds) collapsed.set(id, group.id);
-  const types = new Map(nodes.map(node => [node.id, node.type]));
+  for (const node of nodes) if (node.type === 'stamp' && collapsed.has(node.data.attachedTo)) collapsed.set(node.id, collapsed.get(node.data.attachedTo));
+  const types = new Map(nodes.map(node => [node.id, node.type])), layers = layerIndex(nodes);
   const frames = groups.map(group => {
     const bounds = groupBounds(group, nodes);
     const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height;
     return { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
-      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed },
+      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, color: group.color },
       width, height, measured: { width, height }, style: { width, height }, zIndex: 0 };
   });
   return {
-    nodes: [...frames, ...nodes.map(node => ({ ...node, zIndex: 1, hidden: collapsed.has(node.id), selected: collapsed.has(node.id) ? false : node.selected }))],
+    nodes: [...frames, ...nodes.map(node => ({ ...node, zIndex: layers.get(node.id), hidden: collapsed.has(node.id), selected: collapsed.has(node.id) ? false : node.selected }))],
     edges: edges.map(edge => {
       const source = collapsed.get(edge.source) || edge.source, target = collapsed.get(edge.target) || edge.target;
       return { ...edge, source, target, hidden: source === target, style: { stroke: connectionColor(types.get(edge.source)), strokeWidth: 2 } };
@@ -137,14 +146,42 @@ export function canvasView(nodes, edges, groups) {
   };
 }
 
-export function moveGroup(nodes, group, position) {
+export function moveGroup(nodes, group, position, moveStamps = true) {
   const bounds = groupBounds(group, nodes);
   const dx = position.x - bounds.x, dy = position.y - bounds.y;
   const members = new Set(group.nodeIds);
-  return nodes.map(node => members.has(node.id) ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } } : node);
+  const moved = nodes.map(node => members.has(node.id) ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } } : node);
+  return moveStamps ? reconcileStampAttachments(nodes, moved) : moved;
+}
+
+export function stampTargetAt(nodes, point, stampId) {
+  let target, top = -Infinity;
+  const layers = layerIndex(nodes);
+  for (const node of nodes) {
+    if (node.id === stampId || node.hidden || !canAttachStamp(node)) continue;
+    const { width, height } = size(node), zIndex = node.zIndex ?? layers.get(node.id);
+    if (point.x < node.position.x || point.x > node.position.x + width || point.y < node.position.y || point.y > node.position.y + height || zIndex < top) continue;
+    target = node.id; top = zIndex;
+  }
+  return target;
+}
+
+export function attachStampAt(nodes, stampId, point, visibleNodes = nodes) {
+  const target = stampTargetAt(visibleNodes, point, stampId);
+  return nodes.map(node => {
+    if (node.id !== stampId || node.type !== 'stamp') return node;
+    const data = { ...node.data };
+    if (target === undefined) delete data.attachedTo; else data.attachedTo = target;
+    return { ...node, data };
+  });
 }
 
 export function alignNodes(nodes, edges, groups) {
+  if (nodes.some(isAnnotation)) {
+    const movable = nodes.filter(node => !isAnnotation(node)), ids = new Set(movable.map(node => node.id));
+    const aligned = new Map(alignNodes(movable, edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)), pruneGroups(groups, movable)).map(node => [node.id, node]));
+    return reconcileStampAttachments(nodes, nodes.map(node => aligned.get(node.id) || node));
+  }
   if (!nodes.length) return nodes;
   const repaired = new Map();
   for (const group of groups.filter(group => !group.collapsed)) {

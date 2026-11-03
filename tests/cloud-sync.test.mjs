@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
-import { duplicateNodes, templateSnapshot } from '../graph.mjs';
+import { duplicateNodes, templateSnapshot, validateGraph } from '../graph.mjs';
+import { drawingFromStroke } from '../src/annotations.mjs';
 
 const empty = () => ({ nodes: [], edges: [], groups: [], runs: [] });
 const node = id => ({ id, type: 'text', position: { x: 0, y: 0 }, data: { text: 'Before', model: 'default', collapsed: false } });
@@ -104,5 +105,125 @@ test('duplication syncs parent edges, timestamps and template colour in one undo
   assert.ok(readCloudGraph(b).edges.some(edge => edge.source === 'n' && edge.target === copy.id));
   undo.undo(); exchange(a, b); assert.deepEqual(readCloudGraph(a), initial);
   undo.redo(); exchange(a, b); assert.equal(readCloudGraph(b).nodes.length, 3);
+  undo.destroy(); a.destroy(); b.destroy();
+});
+
+test('group fill merges independently, resets on every replica and supports local undo', () => {
+  const { a, b } = pair();
+  let before = readCloudGraph(a), grouped = structuredClone(before);
+  grouped.groups = [{ id: 'g', name: 'Before', collapsed: false, nodeIds: ['n', 'other'] }];
+  applyLocalGraph(a, grouped, before, 'seed'); exchange(a, b);
+  before = readCloudGraph(a);
+  const left = structuredClone(before), right = structuredClone(before), origin = {};
+  const undo = new Y.UndoManager(a.getMap('groups'), { trackedOrigins: new Set([origin]) });
+  left.groups[0].color = '#e9e2ff'; right.groups[0].name = 'Remote name'; right.groups[0].collapsed = true;
+  applyLocalGraph(a, left, before, origin); applyLocalGraph(b, right, before, 'remote'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).groups[0], { ...left.groups[0], name: 'Remote name', collapsed: true });
+  undo.undo(); exchange(a, b);
+  assert.equal(Object.hasOwn(readCloudGraph(a, { groups: left.groups }).groups[0], 'color'), false);
+  assert.equal(readCloudGraph(a).groups[0].name, 'Remote name'); assert.equal(readCloudGraph(a).groups[0].collapsed, true);
+  undo.redo(); exchange(a, b); assert.equal(readCloudGraph(a).groups[0].color, '#e9e2ff');
+  before = readCloudGraph(a); const reset = structuredClone(before); delete reset.groups[0].color;
+  applyLocalGraph(b, reset, before, 'reset'); exchange(a, b); assert.equal(Object.hasOwn(readCloudGraph(a).groups[0], 'color'), false);
+  undo.destroy(); a.destroy(); b.destroy();
+});
+
+test('annotations and author metadata sync, undo, duplicate and reject concurrent annotation edges', () => {
+  const { a, b, before } = pair(), origin = {}, undo = new Y.UndoManager([a.getMap('nodes'), a.getMap('groups')], { trackedOrigins: new Set([origin]) });
+  const graph = structuredClone(before), author = { name: 'Artist', color: '#2563eb' };
+  graph.nodes.push({ id: 'drawing', ...drawingFromStroke([[10, 20], [100, 200]], '#2563eb', 4) },
+    { id: 'sticky', type: 'sticky', position: { x: 10, y: 20 }, data: { text: 'Note', color: '#fff3ad', author } },
+    { id: 'stamp', type: 'stamp', position: { x: 100, y: 200 }, data: { kind: 'like', author } });
+  graph.groups.push({ id: 'g', name: 'Notes', collapsed: false, color: '#dceaff', nodeIds: ['drawing', 'sticky', 'stamp'] });
+  applyLocalGraph(a, graph, before, origin); exchange(a, b); assert.deepEqual(readCloudGraph(b).nodes.find(node => node.id === 'sticky').data.author, author);
+  assert.doesNotThrow(() => validateGraph(readCloudGraph(a)));
+  const reloaded = new Y.Doc(); Y.applyUpdate(reloaded, Y.encodeStateAsUpdate(a)); assert.deepEqual(readCloudGraph(reloaded), readCloudGraph(a)); reloaded.destroy();
+  undo.undo(); exchange(a, b); assert.deepEqual(readCloudGraph(a), before);
+  undo.redo(); exchange(a, b);
+  const base = readCloudGraph(a), edited = structuredClone(base); edited.nodes.find(node => node.id === 'sticky').position.x = 500;
+  const copied = duplicateNodes(base, ['drawing', 'sticky', 'stamp']); edited.nodes.push(...copied.nodes);
+  applyLocalGraph(a, edited, base, origin); exchange(a, b);
+  assert.equal(readCloudGraph(b).nodes.find(node => node.id === 'sticky').position.x, 500);
+  for (const [id, source, target] of [['a', 'drawing', 'n'], ['b', 'n', 'stamp'], ['c', 'sticky', 'stamp']]) a.getMap('edges').set(id, { source, target });
+  exchange(a, b); assert.deepEqual(readCloudGraph(a).edges, before.edges);
+  assert.doesNotThrow(() => validateGraph(readCloudGraph(a)));
+  undo.destroy(); a.destroy(); b.destroy();
+});
+
+function stampPair() {
+  const a = new Y.Doc(), b = new Y.Doc();
+  a.clientID = 400; b.clientID = 200;
+  const graph = { ...empty(), nodes: [
+    { ...node('parent'), position: { x: 100, y: 100 } }, { ...node('other'), position: { x: 800, y: 0 } },
+    { id: 'stamp', type: 'stamp', position: { x: 120, y: 130 }, data: { kind: 'heart', attachedTo: 'parent' } },
+  ], groups: [{ id: 'g', name: 'Stamps', collapsed: false, nodeIds: ['stamp'] }] };
+  applyLocalGraph(a, graph, empty(), 'seed'); Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+  return { a, b, before: readCloudGraph(a) };
+}
+
+test('cloud parent moves and direct stamp moves merge as relative offsets and undo independently', () => {
+  const { a, b, before } = stampPair(), origin = {}, undo = new Y.UndoManager(a.getMap('nodes'), { trackedOrigins: new Set([origin]) });
+  const parentMove = structuredClone(before), stampMove = structuredClone(before);
+  parentMove.nodes.find(node => node.id === 'parent').position = { x: 200, y: 50 };
+  stampMove.nodes.find(node => node.id === 'stamp').position = { x: 130, y: 150 };
+  applyLocalGraph(a, parentMove, before, origin); applyLocalGraph(b, stampMove, before, 'remote'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'stamp').position, { x: 230, y: 100 });
+  assert.deepEqual(a.getMap('nodes').get('stamp').get('stampAttachment'), { nodeId: 'parent', x: 30, y: 50 });
+  undo.undo(); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'stamp').position, { x: 130, y: 150 });
+  undo.redo(); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'stamp').position, { x: 230, y: 100 });
+  assert.doesNotThrow(() => validateGraph(readCloudGraph(a))); undo.destroy(); a.destroy(); b.destroy();
+});
+
+test('cloud reattachment wins independently of the old parent moving and survives persisted Yjs snapshots', () => {
+  const { a, b, before } = stampPair(), parentMove = structuredClone(before), reattached = structuredClone(before);
+  parentMove.nodes.find(node => node.id === 'parent').position.x += 200;
+  const stamp = reattached.nodes.find(node => node.id === 'stamp'); stamp.data.attachedTo = 'other'; stamp.position = { x: 810, y: 20 };
+  applyLocalGraph(a, parentMove, before, 'move'); applyLocalGraph(b, reattached, before, 'reattach'); exchange(a, b);
+  let graph = readCloudGraph(a); assert.equal(graph.nodes.find(node => node.id === 'stamp').data.attachedTo, 'other');
+  assert.deepEqual(graph.nodes.find(node => node.id === 'stamp').position, { x: 810, y: 20 });
+  const moved = structuredClone(graph); moved.nodes.find(node => node.id === 'other').position = { x: 900, y: 200 };
+  applyLocalGraph(a, moved, graph, 'move-new-parent'); exchange(a, b);
+  graph = readCloudGraph(a); assert.deepEqual(graph.nodes.find(node => node.id === 'stamp').position, { x: 910, y: 220 });
+  const reloaded = new Y.Doc(); Y.applyUpdate(reloaded, Y.encodeStateAsUpdate(a)); assert.deepEqual(readCloudGraph(reloaded), graph);
+  assert.doesNotThrow(() => validateGraph(graph)); reloaded.destroy(); a.destroy(); b.destroy();
+});
+
+test('cloud detachment preserves the drop position during a concurrent parent move and after earlier parent moves', () => {
+  const { a, b, before } = stampPair(), parentMove = structuredClone(before), detached = structuredClone(before);
+  parentMove.nodes.find(node => node.id === 'parent').position = { x: 300, y: 50 };
+  const stamp = detached.nodes.find(node => node.id === 'stamp'); delete stamp.data.attachedTo; stamp.position = { x: -200, y: -300 };
+  applyLocalGraph(a, parentMove, before, 'move'); applyLocalGraph(b, detached, before, 'detach'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'stamp').position, stamp.position);
+  const base = readCloudGraph(a), attached = structuredClone(base); attached.nodes.find(node => node.id === 'stamp').data.attachedTo = 'parent';
+  applyLocalGraph(a, attached, base, 'attach'); exchange(a, b);
+  const old = readCloudGraph(a), moved = structuredClone(old); moved.nodes.find(node => node.id === 'parent').position.x += 100;
+  applyLocalGraph(a, moved, old, 'move-again'); exchange(a, b);
+  const last = readCloudGraph(b), drop = structuredClone(last); delete drop.nodes.find(node => node.id === 'stamp').data.attachedTo;
+  const position = drop.nodes.find(node => node.id === 'stamp').position;
+  applyLocalGraph(b, drop, last, 'detach-in-place'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'stamp').position, position);
+  a.destroy(); b.destroy();
+});
+
+test('parent deletion removes known cloud stamps while a concurrent late stamp detaches and remains editable', () => {
+  const { a, b, before } = stampPair(), origin = {}, undo = new Y.UndoManager([a.getMap('nodes'), a.getMap('groups')], { trackedOrigins: new Set([origin]) });
+  const deleted = structuredClone(before), late = structuredClone(before);
+  deleted.nodes = deleted.nodes.filter(node => node.id !== 'parent');
+  late.nodes.push({ id: 'late-stamp', type: 'stamp', position: { x: 159, y: 160 }, data: { kind: 'star', attachedTo: 'parent' } });
+  applyLocalGraph(a, deleted, before, origin); applyLocalGraph(b, late, before, 'late'); exchange(a, b);
+  const detached = readCloudGraph(b), stamp = detached.nodes.find(node => node.id === 'late-stamp');
+  assert.deepEqual(detached.nodes.map(node => node.id), ['late-stamp', 'other']); assert.deepEqual(detached.groups, []);
+  assert.equal(Object.hasOwn(stamp.data, 'attachedTo'), false); assert.deepEqual(stamp.position, { x: 159, y: 160 });
+  assert.doesNotThrow(() => validateGraph(detached));
+  const edited = structuredClone(detached); edited.nodes.find(node => node.id === 'late-stamp').position = { x: 500, y: 600 };
+  applyLocalGraph(b, edited, detached, 'move-detached'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(a).nodes.find(node => node.id === 'late-stamp').position, { x: 500, y: 600 });
+  assert.equal(b.getMap('nodes').get('late-stamp').get('data').has('attachedTo'), false);
+  undo.undo(); exchange(a, b);
+  assert.equal(readCloudGraph(a).nodes.find(node => node.id === 'stamp').data.attachedTo, 'parent');
+  assert.equal(Object.hasOwn(readCloudGraph(a).nodes.find(node => node.id === 'late-stamp').data, 'attachedTo'), false);
+  undo.redo(); exchange(a, b); assert.deepEqual(readCloudGraph(a).nodes.map(node => node.id), ['late-stamp', 'other']);
   undo.destroy(); a.destroy(); b.destroy();
 });

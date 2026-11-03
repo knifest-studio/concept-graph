@@ -80,7 +80,7 @@ test('portable helper includes all local runtime imports and external dependenci
     const source = await readFile(path.join(root, file), 'utf8');
     for (const [, specifier] of source.matchAll(/(?:from\s*|import\s*\()\s*['"]([^'"]+)['"]/g)) {
       if (specifier.startsWith('node:')) continue;
-      if (specifier.startsWith('./')) assert.ok(helperFiles.includes(specifier.slice(2)), `${file} requires ${specifier}`);
+      if (specifier.startsWith('.')) assert.ok(helperFiles.includes(path.posix.join(path.posix.dirname(file), specifier)), `${file} requires ${specifier}`);
       else assert.ok(dependencies.includes(specifier), `${file} requires ${specifier}`);
     }
   }

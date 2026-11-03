@@ -44,6 +44,25 @@ async function pack(files, options = {}) {
   zip.end(); return collect(zip.outputStream);
 }
 
+test('format 4 round trips annotations, group fills and author metadata; older versions cannot silently carry them', async t => {
+  const { source, destination } = await fixture(t), saved = structuredClone(board);
+  saved.graph.groups[0].color = '#e9e2ff';
+  const author = { name: 'Artist', color: '#2563eb' }; saved.graph.nodes[2].data.author = author;
+  const annotations = [
+    { id: 'drawing', type: 'drawing', position: { x: 0, y: 0 }, data: { points: [[4, 4], [40, 30]], color: '#2563eb', width: 4 } },
+    { id: 'sticky', type: 'sticky', position: { x: 50, y: 50 }, z: 3, data: { text: 'A note', color: '#fff3ad', author } },
+    { id: 'stamp', type: 'stamp', position: { x: 100, y: 200 }, z: -2, data: { kind: 'heart', author, attachedTo: 'sticky' } },
+  ];
+  saved.graph.nodes.push(...annotations);
+  const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive), manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 4);
+  const imported = await importBoardArchive(archive, destination);
+  assert.deepEqual(imported.graph.nodes.slice(-3), annotations); assert.deepEqual(imported.graph.nodes[2].data.author, author);
+  assert.deepEqual(imported.graph.groups, saved.graph.groups);
+  manifest.version = 3; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /annotations or author/);
+});
+
 test('portable board round trip retains graph/history/groups and original images without overwriting destination assets', async t => {
   const { directory, source, destination } = await fixture(t), before = structuredClone(board);
   const existing = Buffer.concat([png, Buffer.from('another board owns this filename')]);
@@ -86,7 +105,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 4;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 6;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));

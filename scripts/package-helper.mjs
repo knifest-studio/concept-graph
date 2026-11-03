@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { helperFiles } from './helper-build.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const output = path.resolve(process.argv[2] || path.join(root, 'dist', 'concept-graph-helper.tgz'));
@@ -11,8 +12,7 @@ const packageDir = path.join(temp, 'package');
 try {
   await mkdir(packageDir);
   const source = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  const files = ['helper.mjs', 'helper-auth.mjs', 'server.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'graph.mjs', 'board-archive.mjs', 'LICENSE'];
-  for (const file of files) await cp(path.join(root, file), path.join(packageDir, file));
+  for (const file of helperFiles) { await mkdir(path.dirname(path.join(packageDir, file)), { recursive: true }); await cp(path.join(root, file), path.join(packageDir, file)); }
   await writeFile(path.join(packageDir, 'package.json'), JSON.stringify({
     name: 'concept-graph-local-helper', version: source.version, type: 'module', license: source.license,
     bin: { 'concept-graph-helper': './helper.mjs' }, engines: source.engines,

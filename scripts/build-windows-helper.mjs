@@ -47,7 +47,7 @@ try {
   run('unzip', ['-j', '-q', archive, `${prefix}/node.exe`, `${prefix}/LICENSE`, '-d', extract]);
   await cp(path.join(extract, 'node.exe'), path.join(app, 'runtime/node.exe'));
   await cp(path.join(extract, 'LICENSE'), path.join(app, 'NODE-LICENSE'));
-  for (const file of helperFiles) await cp(path.join(root, file), path.join(app, file));
+  for (const file of helperFiles) { await mkdir(path.dirname(path.join(app, file)), { recursive: true }); await cp(path.join(root, file), path.join(app, file)); }
   for (const dependency of dependencies) await cp(path.join(root, 'node_modules', dependency), path.join(app, 'node_modules', dependency), { recursive: true });
   await writeFile(path.join(app, 'helper-version.json'), JSON.stringify({ version: helperVersion }) + '\n');
   await writeFile(path.join(app, 'helper-site.txt'), windowsHelperConfig(site));

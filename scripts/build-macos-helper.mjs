@@ -55,7 +55,7 @@ try {
     await cp(path.join(work, prefix, 'bin/node'), node);
     await chmod(node, 0o755);
     await cp(path.join(work, prefix, 'LICENSE'), path.join(resources, 'runtime/NODE-LICENSE'));
-    for (const file of helperFiles) await cp(path.join(root, file), path.join(helper, file));
+    for (const file of helperFiles) { await mkdir(path.dirname(path.join(helper, file)), { recursive: true }); await cp(path.join(root, file), path.join(helper, file)); }
     await writeFile(path.join(helper, 'helper-version.json'), JSON.stringify({ version: helperVersion }) + '\n');
     for (const dependency of dependencies) await cp(path.join(root, 'node_modules', dependency), path.join(helper, 'node_modules', dependency), { recursive: true });
     const swiftEnv = { CLANG_MODULE_CACHE_PATH: path.join(temp, 'clang-cache'), SWIFT_MODULECACHE_PATH: path.join(temp, 'swift-cache') };

@@ -1,6 +1,7 @@
 import React, { cloneElement, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { contextMenuShortcut } from './node-context-menu.mjs';
+import { layerShortcut } from './layers.mjs';
 import './node-context-menu.css';
 
 export function NodeContextMenu({ children, id, type, actions }) {
@@ -9,6 +10,8 @@ export function NodeContextMenu({ children, id, type, actions }) {
   const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
   const shortcut = isMac ? '⌘ C' : 'Ctrl+C';
   const idShortcut = isMac ? '⌘ ⇧ C' : 'Ctrl+Shift+C';
+  const step = isMac ? '⌘ ' : 'Ctrl+';
+  const layers = [['front', 'Bring to front', ']'], ['forward', 'Bring forward', `${step}]`], ['backward', 'Send backward', `${step}[`], ['back', 'Send to back', '[']];
 
   useLayoutEffect(() => {
     if (!position || !menu.current) return;
@@ -45,6 +48,8 @@ export function NodeContextMenu({ children, id, type, actions }) {
       choose(shortcutAction === 'image' ? actions.copyImage : actions.copyNodeId);
       return;
     }
+    const layer = type !== 'group' && layerShortcut(event);
+    if (layer) { event.preventDefault(); event.stopPropagation(); choose(nodeId => actions.arrange(layer, nodeId)); return; }
     if (['Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); choose(actions.removeNode); return; }
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setPosition(null); return; }
     if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
@@ -59,9 +64,11 @@ export function NodeContextMenu({ children, id, type, actions }) {
   };
   return <>
     {cloneElement(children, { onContextMenu: open })}
-    {position && createPortal(<div ref={menu} className="node-context-menu" role="menu" aria-label={`${type === 'group' ? 'Group' : type === 'image' ? 'Image' : 'Prompt'} options`} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
+    {position && createPortal(<div ref={menu} className="node-context-menu" role="menu" aria-label={`${type === 'text' ? 'Prompt' : type} options`} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>Copy image</span><kbd>{shortcut}</kbd></button>}
       {type === 'text' && <button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>Save as custom node</button>}
+      {type === 'group' && <button type="button" role="menuitem" onClick={() => choose(actions.renameGroup)}>Rename</button>}
+      {type !== 'group' && <>{layers.map(([action, label, key]) => <button type="button" role="menuitem" key={action} onClick={() => choose(nodeId => actions.arrange(action, nodeId))}><span>{label}</span><kbd>{key}</kbd></button>)}<hr role="separator"/></>}
       <button type="button" role="menuitem" onClick={() => choose(actions.removeNode)}>{type === 'group' ? 'Delete group; keep nodes' : 'Delete node'}</button>
       <button type="button" role="menuitem" onClick={() => choose(actions.copyNodeId)}><span>Copy {type === 'group' ? 'group' : 'node'} ID</span><kbd>{idShortcut}</kbd></button>
     </div>, document.body)}
