@@ -485,7 +485,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     // Image nodes grow as their pictures load, so refit briefly unless the viewer has moved the canvas.
     [400, 1000, 2000, 3500].forEach(ms => setTimeout(() => { if (!viewerMoved.current && activePageRef.current === page) fit(); }, ms));
   }, [loaded, scoped.nodes.length, nodesInitialized, flow, activePage]);
-  const readiness = generationReadiness({ required: helperNeeded, paired: cloud ? cloudSession.paired : !!helperSession?.paired, online: !helperOffline, status });
+  const teammateCodex = cloud && cloudSession.codex?.outgoing?.granted && cloudSession.codex.outgoing.available ? cloudSession.codex.outgoing : null;
+  const readiness = generationReadiness({ required: helperNeeded, paired: cloud ? cloudSession.paired : !!helperSession?.paired, online: !helperOffline, status, teammate: teammateCodex });
+  const ownReady = (readiness.own || readiness).key === 'ready';
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
   const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] });
   const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false);
@@ -511,6 +513,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   useEffect(() => { if (cloudSession) { setStatus(cloudSession.helperStatus); if (cloudSession.paired) setHelperOffline(false); } }, [cloudSession?.paired, cloudSession?.helperStatus]);
   useEffect(() => { if (helperSession?.status) { setStatus(helperSession.status); setHelperOffline(false); helperSession.reconnect?.(); } }, [helperSession?.status]);
   useEffect(() => { if (cloudSession?.error) notify(cloudSession.error); }, [cloudSession?.error, notify]);
+  // Teammates on this board see whether this person's Codex can take their generations.
+  useEffect(() => { cloudSession?.shareCodex?.(ownReady); }, [ownReady]);
+  useEffect(() => {
+    if (!cloudSession) return;
+    cloudSession.notify = notify;
+    return () => { cloudSession.notify = null; };
+  }, [notify]);
   useEffect(() => { if (cloudSession) cloudSession.selection([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).map(group => group.id)]); }, [nodes, groups, activePage]);
   useEffect(() => { cloudSession?.page?.(activePage); }, [activePage]);
   const putNodes = value => { nodeRef.current = typeof value === 'function' ? value(nodeRef.current) : value; setNodes(nodeRef.current); };
@@ -1334,7 +1343,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try {
       await saveNow();
       if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); notify('Prompt changed — review and click Generate'); return; }
-      if (cloudSession) { await cloudSession.jobs.start(nodeId); return; }
+      if (cloudSession) { await cloudSession.jobs.start(nodeId, readinessRef.current.delegate); return; }
       const options = jsonOptions('POST', { nodeId, revision: base.current.revision });
       if (editorId.current) options.headers['X-Concept-Graph-UI-Session'] = editorId.current;
       const result = await api(boardPath + '/runs', options);
@@ -1352,7 +1361,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     finally { generationStarting.current = false; setStarting(null); }
   };
   runAction.current = run;
-  const cancel = async runId => { pendingIntent.current = null; try { if (cloudSession) { if (!cloudSession.paired) return cloudSession.openPair(() => cancel(runId)); await cloudSession.jobs.cancel(runId); } else await api(`${boardPath}/runs/${runId}/cancel`, { method: 'POST' }); } catch (error) { notify(error.message); } };
+  const cancel = async runId => { pendingIntent.current = null; try { if (cloudSession) { if (!cloudSession.paired && !cloudSession.jobs.delegated(runId)) return cloudSession.openPair(() => cancel(runId)); await cloudSession.jobs.cancel(runId); } else await api(`${boardPath}/runs/${runId}/cancel`, { method: 'POST' }); } catch (error) { notify(error.message); } };
   const connect = connection => {
     if (mcpLocked.current) return;
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === connection.source)?.type)) return;
@@ -1469,7 +1478,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const openHelper = () => cloudSession ? cloudSession.openPair() : helperSession?.openPair();
   const openHelperDownloads = () => cloudSession ? cloudSession.openPair(null, true) : helperSession?.openPair(true);
   const fixReadiness = () => {
-    const key = readinessRef.current.key;
+    const key = (readinessRef.current.own || readinessRef.current).key;
     if (key === 'helper') openHelper();
     else if (key === 'install') setInstallCodex(true);
     else if (key === 'signin') startLogin();
@@ -1671,7 +1680,7 @@ function HelperConnection({ effects, readiness, status, paired, onSetup, onDownl
       <p>Codex: {status.codexMissing ? 'not installed' : !status.connected ? 'not ready' : status.signedIn ? 'signed in' : 'sign-in needed'}</p>
       <p>Helper version: <span className="helper-version">{status.helperVersion || (status.helperVersion === null ? 'source' : 'unknown')}</span></p>
       {outdated && <p className="helper-update-note">A newer helper is available. Download it, quit the old helper, then open the new one and paste its new code.</p>}
-      {readiness.key !== 'ready' && <button type="button" disabled={loginBusy} onClick={() => { close(); onFix(); }}>{readiness.action}</button>}
+      {(readiness.own || readiness).key !== 'ready' && <button type="button" disabled={loginBusy} onClick={() => { close(); onFix(); }}>{(readiness.own || readiness).action}</button>}
       {download ? <a href={download.url} download={download.file} onClick={close}>Download helper</a> : <button type="button" onClick={() => { close(); onDownloads(); }}>Download helper</button>}
       {cloud && (manifestError || (manifest && detection?.packageId && !download)) && <p>Download unavailable. Check other versions or try again later.</p>}
       <button type="button" onClick={() => { close(); onDownloads(); }}>Other versions</button>
@@ -1680,7 +1689,7 @@ function HelperConnection({ effects, readiness, status, paired, onSetup, onDownl
   </div>;
 }
 
-function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = false, showAllBuilds = false }) {
+function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = false, showAllBuilds = false, teammates = null }) {
   const { detection, manifest, manifestError } = useHelperDownloads(cloudMode);
   const [selected, setSelected] = useState(''), [showBuilds, setShowBuilds] = useState(showAllBuilds);
   const [downloading, setDownloading] = useState(''), [downloadError, setDownloadError] = useState(''), [downloaded, setDownloaded] = useState(false);
@@ -1729,6 +1738,7 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
       </aside>
       <section className="helper-panel" aria-labelledby="helper-title">
         <header className="helper-panel-head"><span className="helper-kicker">GET STARTED</span><h2 id="helper-title">Connect your helper</h2><p>Three quick steps and you’re ready to create.</p></header>
+        {teammates}
         {!officialSite && <p className="helper-error" role="alert">Open this app at its official site address to connect your local helper.</p>}
         <form onSubmit={event => { event.preventDefault(); connect(code); }}>
           <div className="helper-step">

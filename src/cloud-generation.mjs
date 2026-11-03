@@ -2,6 +2,7 @@ import { collectInputs, generationSettings, imageNode, imageSize, positionRunOut
 import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
+import { delegateAction } from './codex-sharing.mjs';
 
 const terminal = status => ['completed', 'failed', 'cancelled'].includes(status);
 const timestamp = () => new Date().toISOString();
@@ -19,26 +20,41 @@ async function base64(response) {
 }
 
 export class CloudGeneration {
-  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart }) {
-    Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart });
-    this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map();
+  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart, sharing }) {
+    Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart, sharing });
+    this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map(); this.cancelling = new Set();
   }
   setRun(run) { this.doc.transact(() => this.doc.getMap('runs').set(run.id, run), this.origin); }
+  // Only an active run changes, so a cancellation or failure written by someone else is never undone.
+  settle(id, fields) {
+    const run = this.doc.getMap('runs').get(id);
+    if (run && !terminal(run.status)) this.setRun({ ...run, finishedAt: timestamp(), ...fields });
+  }
+  delegated(id) { return !!this.doc.getMap('runs').get(id)?.delegate; }
+  async inputs(images) { return Promise.all(images.map(async asset => ({ asset, data: await base64(await this.request(`/assets/${asset}`)) }))); }
   startPolling() {
     this.active = true;
     this.tick();
     this.timer = setInterval(() => this.tick(), 1500);
   }
   stop() { this.active = false; clearInterval(this.timer); }
-  async start(nodeId) {
+  // With an owner, the run is queued for that teammate's helper; their client submits it and places the images.
+  async start(nodeId, owner) {
     if (!this.ready()) throw new Error('Wait for a live board connection before generating.');
     const graph = readCloudGraph(this.doc);
     if (graph.runs.some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { prompt, images, target } = collectInputs(graph, nodeId);
-    const inputs = await Promise.all(images.map(async asset => ({ asset, data: await base64(await this.request(`/assets/${asset}`)) })));
-    if (!this.active || !this.ready()) throw new Error('Board disconnected. Try generating when it is live.');
     const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}), ...generationSettings, status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
+    if (owner !== undefined) {
+      if (this.sharing?.using()?.to !== owner) throw new Error('Your teammate’s Codex is no longer available. Ask for access again.');
+      this.setRun({ ...run, delegate: { owner, requester: this.doc.clientID } });
+      this.onStart?.(run);
+      return;
+    }
+    const inputs = await this.inputs(images);
+    if (!this.active || !this.ready()) throw new Error('Board disconnected. Try generating when it is live.');
+    run.startedAt = run.createdAt = timestamp();
     this.setRun(run); this.submitting.add(run.id);
     this.onStart?.(run);
     try {
@@ -56,6 +72,11 @@ export class CloudGeneration {
   async cancel(id) {
     const run = this.doc.getMap('runs').get(id);
     if (!run || run.by?.name !== this.user.name || terminal(run.status)) return;
+    // The board is the only channel to a teammate's helper; their client stops the job when it sees this.
+    if (run.delegate) {
+      if (!this.ready()) throw new Error('Wait for a live board connection before cancelling.');
+      return this.settle(id, { status: 'cancelled', count: run.outputIds?.length || 0 });
+    }
     await this.helperApi(`/api/cloud-jobs/${id}/cancel`, { method: 'POST' });
     if (this.active) await this.tick();
   }
@@ -133,13 +154,66 @@ export class CloudGeneration {
       for (const job of jobs.filter(job => job.boardId === this.boardId)) {
         if (!this.active || !this.ready()) break;
         if (this.submitting.has(job.id)) continue;
+        const run = this.doc.getMap('runs').get(job.id);
+        if (run?.delegate && terminal(run.status) && !terminal(job.status)) {
+          if (!this.cancelling.has(job.id)) { await this.helperApi(`/api/cloud-jobs/${job.id}/cancel`, { method: 'POST' }); this.cancelling.add(job.id); }
+          continue;
+        }
         if (!await this.complete(job)) continue;
         if (terminal(job.status) && this.active && this.ready()) {
           await this.helperApi(`/api/cloud-jobs/${job.id}`, { method: 'DELETE' });
+          this.cancelling.delete(job.id);
           for (const key of this.uploaded.keys()) if (key.startsWith(`${job.id}:`)) this.uploaded.delete(key);
         }
       }
+      if (this.active && this.ready()) this.serve(jobs.filter(job => job.boardId === this.boardId));
     } catch (error) { if (this.active) this.onError(error.message || 'Local helper unavailable. Collection will retry.', error); }
     finally { this.polling = false; }
+  }
+  writer(id) { return this.doc.getMap('runs')._map?.get(id)?.id?.client; }
+  waiting() { return [...this.doc.getMap('runs').values()].filter(run => run.delegate && run.status === 'queued' && !run.delegate.started); }
+  // Owner side: submit teammates' queued runs to this helper, a few at a time, while the grant holds.
+  serve(jobs) {
+    if (!this.sharing) return;
+    const map = this.doc.getMap('runs'), states = this.sharing.states(), serving = this.sharing.local().codex === true;
+    const running = new Set([...jobs.filter(job => !terminal(job.status)).map(job => job.id), ...this.submitting].filter(id => map.get(id)?.delegate));
+    let active = running.size;
+    for (const run of this.waiting().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+      if (delegateAction(run, { me: this.doc.clientID, states, gone: id => this.sharing.gone(id), active, serving, writer: this.writer(run.id) }) !== 'serve') continue;
+      active++;
+      this.submitDelegated(run).catch(error => this.onError(error.message || 'Could not start a teammate’s generation.', error));
+    }
+  }
+  async submitDelegated(run) {
+    // Claim the run first so a reconnecting requester or a second tick never submits it twice.
+    this.submitting.add(run.id);
+    this.setRun({ ...run, delegate: { ...run.delegate, started: true } });
+    try {
+      let body;
+      try {
+        // Inputs are read now, from the board as it is when this helper takes the run.
+        const { prompt, images, target } = collectInputs(readCloudGraph(this.doc), run.nodeId);
+        body = { jobId: run.id, boardId: this.boardId, nodeId: run.nodeId, prompt, labelOutputs: target.data.labelOutputs, images: await this.inputs(images) };
+      } catch (error) { if (this.ready()) this.settle(run.id, { status: 'failed', error: error.message || 'Could not prepare this generation.' }); return; }
+      if (terminal(this.doc.getMap('runs').get(run.id)?.status)) return;
+      if (!this.active || !this.ready()) { this.settle(run.id, { status: 'failed', error: 'The Codex owner disconnected before this generation started. Run the prompt again.' }); return; }
+      try { await this.helperApi('/api/cloud-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+      catch (error) {
+        if (this.active && error.status) this.settle(run.id, { status: 'failed', error: error.message });
+        else this.uncertain.add(run.id);
+        throw error;
+      }
+    } finally { this.submitting.delete(run.id); }
+    this.tick();
+  }
+  // Every client settles teammate-Codex runs that can no longer start, so they never block their prompt.
+  maintain() {
+    if (!this.sharing || !this.ready()) return;
+    const states = this.sharing.states();
+    for (const run of this.waiting()) {
+      const action = delegateAction(run, { me: this.doc.clientID, states, gone: id => this.sharing.gone(id), writer: this.writer(run.id) });
+      if (action === 'revoked') this.settle(run.id, { status: 'failed', error: 'Access to the teammate’s Codex ended before this generation started. Ask for access and run the prompt again.' });
+      if (action === 'orphaned') this.settle(run.id, { status: 'failed', error: 'The teammate whose Codex was chosen left the board before this generation started. Run the prompt again.' });
+    }
   }
 }

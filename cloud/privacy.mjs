@@ -23,6 +23,7 @@ export const privacyHtml = `<!doctype html>
     <p>Board content and uploaded or generated images are stored on Cloudflare. Boards also store display names and avatar colors for generation authors, sticky notes, and stamps; these board identities do not include email addresses. All signed-in users currently have access to all shared boards, images, and templates.</p>
     <h2>Image generation</h2>
     <p>Image generation runs on your own computer through the local helper, using your own Codex/ChatGPT account. Prompts and reference images are sent to OpenAI under your account.</p>
+    <p>A teammate without Codex can ask to use yours on a board. If you allow it, their prompts and reference images for those generations are sent to OpenAI through your helper and under your account until you revoke access or leave the board; the images are credited to them. If someone allows you to use theirs, your prompts and reference images are sent under their account. Access requests and grants are shared only through live board presence and are not saved.</p>
     <h2>How data is used</h2>
     <p>We do not display ads or sell your data. We do not share your data beyond the services and shared workspace described above.</p>
     <h2>Request deletion</h2>

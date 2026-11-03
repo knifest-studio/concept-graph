@@ -31,7 +31,14 @@ export function checklistSteps(state, helperNeeded, ready) {
   return ['helper', 'prompt', 'generate', 'variation'].filter(step => step !== 'helper' || (helperNeeded && !ready)).map(id => ({ id, done: state.done[id] }));
 }
 
-export function generationReadiness({ required, paired, online = true, status }) {
+// A granted teammate's Codex stands in only while this person's own Codex is not ready; `own` keeps what to fix.
+export function generationReadiness({ teammate, ...options }) {
+  const own = ownReadiness(options);
+  if (own.key === 'ready' || !teammate) return own;
+  return { key: 'ready', label: `Using ${teammate.user.name}’s Codex`, delegate: teammate.to, own };
+}
+
+function ownReadiness({ required, paired, online = true, status }) {
   if (!required) return { key: 'ready', label: 'Ready to generate' };
   if (!paired || !online) return { key: 'helper', label: 'Helper not connected · Connect', action: 'Connect helper to generate' };
   if (status.codexMissing && status.codexInstall?.supported) return { key: 'install', label: 'Codex not installed · Install', action: 'Install Codex' };

@@ -4,6 +4,8 @@ import * as Y from 'yjs';
 import YProvider from 'y-partyserver/provider';
 import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
 import { CloudGeneration } from './cloud-generation.mjs';
+import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
+import { CodexRequests, CodexShareMenu, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
@@ -99,12 +101,16 @@ function Cursors({ peers }) {
   </div>)}</ViewportPortal>;
 }
 
-function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helperStatus, openPair, unpair, onBack, onLogout, services, Editor, ...editorProps }) {
+const emptySharing = { ready: false, teammates: [], outgoing: null, incoming: [], shared: [] };
+
+function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helperStatus, openPair, unpair, pairDialog, finishPair, onBack, onLogout, services, Editor, ...editorProps }) {
   const user = boardAuthor(account) || { name: 'Teammate' };
-  const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState('');
+  const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
+  const latest = useRef({}); latest.current = { pairing, finishPair };
   useEffect(() => {
     const doc = new Y.Doc(), origin = {};
     const provider = new YProvider(location.host, boardId, doc, { party: 'board-room', disableBc: true, protocol: location.protocol === 'https:' ? 'wss' : 'ws' });
+    const sharing = new CodexSharing(provider.awareness);
     const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages')], { trackedOrigins: new Set([origin]) });
     const next = {
       doc, provider, undo, origin, user, paired, openPair, unpair,
@@ -119,7 +125,29 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
         return () => doc.off('afterTransaction', listener);
       },
     };
-    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(message); if (failure?.status === 403) unpair(); } });
+    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(message); if (failure?.status === 403) unpair(); } });
+    // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
+    next.sharing = sharing;
+    next.shareCodex = ready => sharing.setReady(ready);
+    let sharingBusy = false;
+    const share = () => {
+      // Presence and run writes made here call back synchronously; the outer pass sees their result.
+      if (next.closed || sharingBusy) return;
+      sharingBusy = true;
+      try {
+        sharing.live(provider.synced && provider.wsconnected);
+        for (const event of sharing.maintain()) {
+          next.notify?.(sharingMessage(event));
+          if (event.type === 'granted' && latest.current.pairing) latest.current.finishPair();
+        }
+        next.jobs.maintain();
+        const view = sharing.view([...doc.getMap('runs').values()]);
+        setSharingView(current => JSON.stringify(current) === JSON.stringify(view) ? current : view);
+      } finally { sharingBusy = false; }
+    };
+    next.share = share;
+    const shareTimer = setInterval(share, 2000), runsChanged = () => share();
+    doc.getMap('runs').observe(runsChanged);
     let lastPointer = 0, lastSelection = '';
     next.pointer = position => {
       if (document.hidden) position = null;
@@ -134,18 +162,26 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     // The room forgets presence when it hibernates, so greet each newcomer with our state again.
     const greet = ({ added }) => { const local = provider.awareness.getLocalState(); if (local && added.some(id => id !== doc.clientID)) provider.awareness.setLocalState({ ...local }); };
     const presence = () => setPeers([...provider.awareness.getStates()].filter(([id, state]) => id !== doc.clientID && state.user).map(([id, state]) => ({ id, ...state })));
-    const status = ({ status }) => { if (status !== 'connected') next.feedbackLive = false; setConnection(status === 'connected' ? (provider.synced ? 'live' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'); };
-    const sync = synced => { next.feedbackLive = synced; if (synced) { next.loaded = true; setConnection('live'); } };
+    const status = ({ status }) => { if (status !== 'connected') next.feedbackLive = false; setConnection(status === 'connected' ? (provider.synced ? 'live' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'); share(); };
+    const sync = synced => { next.feedbackLive = synced; if (synced) { next.loaded = true; setConnection('live'); } share(); };
     const hidden = () => { if (document.hidden) next.pointer(null); };
+    // Background tabs throttle the awareness renewal timer until peers time us out (and end Codex grants);
+    // incoming messages are not throttled, so renew from them while hidden.
+    let renewed = Date.now();
+    const keepAlive = (changes, origin) => {
+      if (origin === 'local') { renewed = Date.now(); return; }
+      const local = provider.awareness.getLocalState();
+      if (document.hidden && local && Date.now() - renewed > 10000) provider.awareness.setLocalState({ ...local });
+    };
     provider.awareness.setLocalState({ user, cursor: null });
-    provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.on('status', status); provider.on('sync', sync);
+    provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.awareness.on('change', share); provider.awareness.on('update', keepAlive); provider.on('status', status); provider.on('sync', sync);
     document.addEventListener('visibilitychange', hidden);
     setSession(next);
     return () => {
       next.flush?.(); next.closed = true;
-      next.jobs.stop(); provider.awareness.setLocalState(null);
+      next.jobs.stop(); clearInterval(shareTimer); doc.getMap('runs').unobserve(runsChanged); sharing.destroy(); provider.awareness.setLocalState(null);
       document.removeEventListener('visibilitychange', hidden);
-      provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.off('status', status); provider.off('sync', sync);
+      provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', share); provider.awareness.off('update', keepAlive); provider.off('status', status); provider.off('sync', sync);
       undo.destroy(); provider.destroy(); doc.destroy();
     };
   }, [boardId, user.name, user.color]);
@@ -155,13 +191,22 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     return () => session.jobs.stop();
   }, [session, paired]);
   if (!session) return <div className="startup">Connecting to board…</div>;
-  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error });
+  const sharingActions = {
+    onRequest: owner => { session.sharing.request(owner); session.share(); }, onWithdraw: () => { session.sharing.withdraw(); session.share(); },
+    onAllow: id => { session.sharing.allow(id); session.share(); }, onDecline: id => { session.sharing.decline(id); session.share(); },
+  };
+  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView });
   session.cursors = visible => <Cursors peers={peers.filter(visible)}/>;
   session.toolbar = <>
     <div className="cloud-presence" aria-label="People on this board">{[{ id: 'me', user }, ...peers].map(peer => <span key={peer.id} className="cloud-person" title={peer.user.name} style={{ '--person-color': peer.user.color }}>{peer.user.name}</span>)}</div>
+    <CodexShareMenu view={sharingView} {...sharingActions}/>
     <button className="cloud-nav" onClick={() => session.leave?.(onBack)}>Boards</button><button className="cloud-nav" onClick={() => session.leave?.(onLogout)}>Sign out</button>
   </>;
-  return <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>;
+  return <>
+    <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>
+    <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>
+    {pairDialog(!sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
+  </>;
 }
 
 export default function CloudWorkspace({ Editor, HelperSetup, services }) {
@@ -196,6 +241,9 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   }, [paired]);
   const openPair = (callback, downloads = false) => { pendingRun.current = callback || null; setShowAllBuilds(downloads); setPairing(true); };
   const cancelPair = () => { setPairing(false); pendingRun.current = null; setPairCancel(value => value + 1); };
+  // A teammate's Codex was granted instead: close setup but keep the pending generation, which then starts.
+  const finishPair = () => { setPairing(false); pendingRun.current = null; };
+  const pairDialog = teammates => pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label="Pair local helper" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') cancelPair(); }}><button className="cloud-pair-close" autoFocus onClick={cancelPair}>Back to board</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair} teammates={teammates}/></div>;
   const unpair = (rejected = true) => {
     services.unpair(); setHelperCode(''); setPaired(false); setHelperStatus({});
     if (!rejected) { pendingRun.current = null; setPairCancel(value => value + 1); }
@@ -222,9 +270,9 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
       <button className="primary-button" disabled={busy || !name.trim() || !email.trim()}>{busy ? 'Signing in…' : 'Sign in locally'}</button>
     </form>}</section></main>;
   return <>
-    {boardId ? <CloudBoard key={boardId} boardId={boardId} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} onBack={() => setBoardId(null)} onLogout={signOut} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={setBoardId} theme={theme} toggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} waitForPreferences={async () => {}}/> :
+    {boardId ? <CloudBoard key={boardId} boardId={boardId} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => setBoardId(null)} onLogout={signOut} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={setBoardId} theme={theme} toggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} waitForPreferences={async () => {}}/> :
       <BoardsHome user={user} boards={boards} setBoards={setBoards} services={services} onOpen={setBoardId} onLogout={signOut} theme={theme} toggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} error={error}/>}
-    {pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label="Pair local helper" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') cancelPair(); }}><button className="cloud-pair-close" autoFocus onClick={cancelPair}>Back to board</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair}/></div>}
+    {!boardId && pairDialog()}
     {error && boardId && <div className="toast" role="alert">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
   </>;
 }
