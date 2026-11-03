@@ -1727,53 +1727,61 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
     : detection.platform === 'linux' ? 'Linux detected · no build available yet'
     : detection.platform === 'mobile' ? 'Open this page on your computer to get started'
     : detection.packageId ? 'Detected for this device' : 'Choose a build for your computer';
+  const openHint = cloudMode ? selectedBuild?.family === 'macos' ? <>Open the downloaded file, drag <strong>Concept Graph Helper</strong> to Applications, then open it.</>
+    : selectedBuild?.family === 'windows' ? <>Run the installer. If Windows warns you, choose <strong>More info → Run anyway</strong>.</>
+    : <>Choose your computer’s version, then open the downloaded helper.</>
+    : manifest?.[selected]?.kind === 'app' ? <>Unzip it and open <strong>Concept Graph Helper.app</strong>.</>
+    : <>Unzip it and run <strong>{selectedBuild?.family === 'windows' ? 'Start Concept Graph.cmd' : 'Start Concept Graph.command'}</strong>.</>;
+  const codeInput = useRef(null), connectRef = useRef(connect);
+  connectRef.current = connect;
+  const pasted = value => { const text = value.trim(); setCode(text); if (/^[\da-f]{64}$/i.test(text) && officialSite) connectRef.current(text); };
+  // A pasted pairing code connects at once, wherever the user pastes it on this screen.
+  useEffect(() => {
+    const paste = event => { if (event.target.closest?.('input,textarea')) return; const text = event.clipboardData?.getData('text') || ''; if (!text.trim()) return; event.preventDefault(); pasted(text); codeInput.current?.focus(); };
+    window.addEventListener('paste', paste);
+    return () => window.removeEventListener('paste', paste);
+  }, []);
   return <main className="helper-startup">
-    <div className="helper-layout">
-      <aside className="helper-intro">
-        <div className="helper-brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>
-        <span className="helper-intro-kicker">A LITTLE SETUP, A LOT OF ROOM TO CREATE</span>
-        <h1>Your ideas.<br/><em>{cloudMode ? 'Your team.' : 'Your computer.'}</em></h1>
-        <p>{cloudMode ? 'Boards and images are shared with your team on Cloudflare. Image generation runs through Codex on your computer.' : 'Bring your Codex workflow to a visual canvas. The helper connects the two while keeping your boards and images on your computer.'}</p>
-        <div className="helper-privacy"><span className="helper-privacy-icon"><Icon name="check" size={16}/></span><span>{cloudMode ? 'Generation runs locally · boards live in the cloud' : <>Runs locally <i/> No Node.js installation</>}</span></div>
-      </aside>
-      <section className="helper-panel" aria-labelledby="helper-title">
-        <header className="helper-panel-head"><span className="helper-kicker">GET STARTED</span><h2 id="helper-title">Connect your helper</h2><p>Three quick steps and you’re ready to create.</p></header>
-        {teammates}
-        {!officialSite && <p className="helper-error" role="alert">Open this app at its official site address to connect your local helper.</p>}
-        <form onSubmit={event => { event.preventDefault(); connect(code); }}>
-          <div className="helper-step">
-            <div className="helper-step-marker">1</div>
-            <div className="helper-step-content">
-              <h3>Download the helper</h3><p>Choose the version for this computer.</p>
-              <div className="helper-device-status"><span className="helper-status-dot"/>{platformMessage}</div>
-              {selectedBuild && <div className="helper-selected">
-                <div className="helper-selected-info"><span className="helper-device-icon"><Icon name="download" size={19}/></span><span><strong>{selectedBuild.label}</strong><small>{selectedBuild.detail}{isRecommended ? ' · recommended' : ''}</small></span></div>
-                <div className="helper-selected-action">{cloudMode ? directDownload && officialSite ? <a className="helper-primary" href={directDownload.url} download={directDownload.file}><Icon name="download" size={16}/> Download</a> : <button className="helper-primary" type="button" disabled><Icon name="download" size={16}/> Download</button> : <button className="helper-primary" type="button" disabled={!!downloading || !officialSite} onClick={() => downloadHelper(selectedBuild.id)}><Icon name="download" size={16}/> Download</button>}<span>{sizeLabel(selectedBuild)}</span></div>
-              </div>}
-              {selectedBuild && <button type="button" className="helper-change" aria-expanded={showBuilds} onClick={() => setShowBuilds(value => !value)}>{showBuilds ? 'Hide other versions' : 'Choose another version'} <span aria-hidden="true">{showBuilds ? '−' : '+'}</span></button>}
-              {(!selectedBuild || showBuilds) && <div className="helper-build-list" aria-label="Available helper versions">
-                {orderedBuilds.map(build => <button key={build.id} type="button" className={`helper-build-option ${selected === build.id ? 'selected' : ''}`} onClick={() => { setSelected(build.id); setShowBuilds(false); setDownloaded(false); setDownloadError(''); }}><span><strong>{build.label}</strong><small>{build.detail}</small></span><span className="helper-build-size">{sizeLabel(build)}</span></button>)}
-              </div>}
-              {detection?.platform === 'macos' && !detection.packageId && (!selectedBuild || showBuilds) && <p className="helper-space-note">Not sure which Mac you have? Open Apple menu → About This Mac and look for Chip or Processor.</p>}
-              {selectedBuild && selectedBuild.id !== 'macos-arm64' && <p className="helper-space-note">This build is a preview and has not yet been tested on its platform.</p>}
-              {manifest && <p className="helper-space-note">Size excludes your boards and images.</p>}
-              {manifestError && <p className="helper-space-note">Download sizes are unavailable. Refresh to try again.</p>}
-              {downloading && <p className="helper-download-status" role="status">{downloading}</p>}
-              {downloaded && <p className="helper-download-status" role="status">Download started. Check your Downloads folder.</p>}
-              {downloadError && <p className="helper-error" role="alert">{downloadError}</p>}
+    <section className="helper-panel" aria-labelledby="helper-title">
+      <header className="helper-panel-head"><div className="helper-brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><h2 id="helper-title">Connect Codex to generate images</h2><p>{cloudMode ? 'Images are generated by Codex on your computer. A small helper app links it to this board.' : 'A small helper app links this canvas to Codex on your computer.'}</p></header>
+      {teammates}
+      {!officialSite && <p className="helper-error" role="alert">Open this app at its official site address to connect your local helper.</p>}
+      <form onSubmit={event => { event.preventDefault(); connect(code); }}>
+        <div className="helper-step">
+          <div className="helper-step-marker">1</div>
+          <div className="helper-step-content">
+            <h3>Download and open the helper</h3>
+            {(!detection || !detection.packageId) && <div className="helper-device-status"><span className="helper-status-dot"/>{platformMessage}</div>}
+            {selectedBuild && <div className="helper-selected">
+              <div className="helper-selected-info"><span className="helper-device-icon"><Icon name="download" size={17}/></span><span><strong>{selectedBuild.label}</strong><small>{sizeLabel(selectedBuild)}{isRecommended ? ' · recommended' : ''}</small></span></div>
+              {cloudMode ? directDownload && officialSite ? <a className="helper-primary" href={directDownload.url} download={directDownload.file}><Icon name="download" size={16}/> Download</a> : <button className="helper-primary" type="button" disabled><Icon name="download" size={16}/> Download</button> : <button className="helper-primary" type="button" disabled={!!downloading || !officialSite} onClick={() => downloadHelper(selectedBuild.id)}><Icon name="download" size={16}/> Download</button>}
+            </div>}
+            {(!selectedBuild || showBuilds) && <div className="helper-build-list" aria-label="Available helper versions">
+              {orderedBuilds.map(build => <button key={build.id} type="button" className={`helper-build-option ${selected === build.id ? 'selected' : ''}`} onClick={() => { setSelected(build.id); setShowBuilds(false); setDownloaded(false); setDownloadError(''); }}><span><strong>{build.label}</strong><small>{build.detail}</small></span><span className="helper-build-size">{sizeLabel(build)}</span></button>)}
+            </div>}
+            <p className="helper-open-hint">{openHint} Already installed? Just open it.{selectedBuild && <> <button type="button" className="helper-change" aria-expanded={showBuilds} onClick={() => setShowBuilds(value => !value)}>{showBuilds ? 'Hide other versions' : 'Other versions'}</button></>}</p>
+            {detection?.platform === 'macos' && !detection.packageId && (!selectedBuild || showBuilds) && <p className="helper-space-note">Not sure which Mac you have? Apple menu → About This Mac → Chip.</p>}
+            {selectedBuild && selectedBuild.id !== 'macos-arm64' && <p className="helper-space-note">This build is a preview and has not yet been tested on its platform.</p>}
+            {cloudMode && manifestError && <p className="helper-space-note">Start the helper for this site with <code>CONCEPT_GRAPH_SITE={location.origin} npm run helper</code> from the project folder.</p>}
+            {downloading && <p className="helper-download-status" role="status">{downloading}</p>}
+            {downloaded && <p className="helper-download-status" role="status">Download started. Check your Downloads folder.</p>}
+            {downloadError && <p className="helper-error" role="alert">{downloadError}</p>}
+          </div>
+        </div>
+        <div className="helper-step helper-step-last">
+          <div className="helper-step-marker">2</div>
+          <div className="helper-step-content">
+            <h3>Paste the code from the helper window</h3>
+            <div className="helper-code-box">
+              <label className="helper-input-label" htmlFor="helper-code">The helper shows a pairing code. Copy it and paste it here.</label>
+              <div className="helper-connect"><input ref={codeInput} id="helper-code" type="password" autoComplete="off" spellCheck="false" value={code} onChange={event => setCode(event.target.value)} onPaste={event => { const text = event.clipboardData.getData('text'); if (text.trim()) { event.preventDefault(); pasted(text); } }} placeholder="Paste pairing code" required/><button className="helper-primary" type="submit" disabled={connecting || !code.trim() || !officialSite}>{connecting ? 'Connecting…' : 'Connect'} <Icon name="arrow" size={15}/></button></div>
+              {error && <p className="helper-error" role="alert">{error}</p>}
             </div>
+            <p className="helper-step-note">If your browser asks about local network access, allow it. Next you’ll be guided to install Codex if needed and sign in with ChatGPT.</p>
           </div>
-          <div className="helper-step">
-            <div className="helper-step-marker">2</div>
-            <div className="helper-step-content"><h3>Open the helper</h3>{cloudMode && manifestError && <p className="helper-step-note">Start the helper for this site with <code>CONCEPT_GRAPH_SITE={location.origin} npm run helper</code> from the project folder, then paste its pairing code below.</p>}<p>{cloudMode ? selectedBuild?.family === 'macos' ? <>Open the downloaded disk image, drag <strong>Concept Graph Helper</strong> to Applications, then open it; it shows the pairing code. Keep its window open.</> : selectedBuild?.family === 'windows' ? <>Run the installer. If Windows shows “Windows protected your PC”, choose <strong>More info → Run anyway</strong>. The helper opens and shows the pairing code. Next time, start <strong>Concept Graph Helper</strong> from the Start menu. Keep its window open.</> : <>Choose your computer’s version above, then open the downloaded helper.</> : manifest?.[selected]?.kind === 'app' ? <>Unzip the file and open <strong>Concept Graph Helper.app</strong>. It shows your pairing code. Keep its window open.</> : <>Unzip the file and open the <strong>Concept-Graph-Helper</strong> folder. Run <strong>{selectedBuild?.family === 'windows' ? 'Start Concept Graph.cmd' : 'Start Concept Graph.command'}</strong>{!selectedBuild && <> on Mac, or <strong>Start Concept Graph.cmd</strong> on Windows</>}. Keep its window open.</>}</p><p className="helper-step-note">After pairing, the site offers to install Codex if needed, then asks you to sign in with ChatGPT. Your operating system may warn about an unidentified developer.</p></div>
-          </div>
-          <div className="helper-step helper-step-last">
-            <div className="helper-step-marker">3</div>
-            <div className="helper-step-content"><h3>Connect to your canvas</h3><p>Copy the pairing code from the helper window.</p><label className="helper-input-label" htmlFor="helper-code">Pairing code</label><div className="helper-connect"><input id="helper-code" type="password" autoComplete="off" spellCheck="false" value={code} onChange={event => setCode(event.target.value)} placeholder="Paste pairing code" required/><button className="helper-primary" type="submit" disabled={connecting || !code.trim() || !officialSite}>{connecting ? 'Connecting…' : 'Connect'} <Icon name="arrow" size={15}/></button></div>{error && <p className="helper-error" role="alert">{error}</p>}<p className="helper-step-note">{cloudMode ? 'If prompted, allow access to your local network. Only generation needs a helper.' : 'If prompted, allow access to your local network. Existing boards can be moved using Export and Import.'}</p></div>
-          </div>
-        </form>
-      </section>
-    </div>
+        </div>
+      </form>
+    </section>
   </main>;
 }
 

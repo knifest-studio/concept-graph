@@ -11,7 +11,7 @@ export function TeammateCodex({ view, onRequest, onWithdraw }) {
       <p>{!outgoing.granted ? <>Waiting for <b>{outgoing.user.name}</b> to allow access…</> : outgoing.available ? <>You generate with <b>{outgoing.user.name}</b>’s Codex. Images are credited to you.</> : <><b>{outgoing.user.name}</b>’s Codex is not ready right now. Your access stays until they revoke it or leave.</>}</p>
       <button type="button" className="codex-link" onClick={onWithdraw}>{outgoing.granted ? 'Stop using their Codex' : 'Cancel request'}</button>
     </> : teammates.length ? <>
-      <p>Ask someone on this board to let you generate with their Codex. Access lasts until they revoke it or leave the board.</p>
+      <p>Ask someone on this board to share theirs. You keep access until they revoke it or leave.</p>
       <ul>{teammates.map(peer => <li key={peer.id}><Person user={peer.user}/><button type="button" className="codex-link" onClick={() => onRequest(peer.id)}>Ask to use</button></li>)}</ul>
     </> : <p>Nobody on this board has Codex connected right now.</p>}
   </section>;
