@@ -176,6 +176,18 @@ export function attachStampAt(nodes, stampId, point, visibleNodes = nodes) {
   });
 }
 
+// Aligns only the chosen nodes (annotations stay put) and keeps their top-left corner where it was.
+export function alignSelection(nodes, edges, groups, ids) {
+  const chosen = nodes.filter(node => ids.has(node.id) && !isAnnotation(node));
+  if (chosen.length < 2) return nodes;
+  const set = new Set(chosen.map(node => node.id));
+  const aligned = alignNodes(chosen, edges.filter(edge => set.has(edge.source) && set.has(edge.target)), pruneGroups(groups, chosen));
+  const corner = list => ({ x: Math.min(...list.map(node => node.position.x)), y: Math.min(...list.map(node => node.position.y - captionHeight(node))) });
+  const before = corner(chosen), after = corner(aligned), dx = before.x - after.x, dy = before.y - after.y;
+  const moved = new Map(aligned.map(node => [node.id, { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } }]));
+  return reconcileStampAttachments(nodes, nodes.map(node => moved.get(node.id) || node));
+}
+
 export function alignNodes(nodes, edges, groups) {
   if (nodes.some(isAnnotation)) {
     const movable = nodes.filter(node => !isAnnotation(node)), ids = new Set(movable.map(node => node.id));

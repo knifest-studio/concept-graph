@@ -283,3 +283,17 @@ test('a prompt made only from a moved reference follows it instead of pulling it
   assert.ok(center('reference') >= low - 1 && center('reference') <= high + 1);
   assertSeparated(result); assert.deepEqual(alignNodes(result, edges, []), result);
 });
+
+test('auto-align moves only the selection and keeps its top-left corner', async () => {
+  const { alignSelection } = await import('../src/canvas.mjs');
+  const text = (id, x, y) => ({ id, type: 'text', position: { x, y }, data: { text: id } });
+  const nodes = [text('a', 500, 300), text('b', 100, 900), text('c', -50, -50), { id: 'd', type: 'drawing', position: { x: 520, y: 320 }, data: { points: [[0, 0], [10, 10]], color: '#25243d', width: 4 } }];
+  const edges = [{ id: 'e', source: 'a', target: 'b' }];
+  const result = alignSelection(nodes, edges, [], new Set(['a', 'b', 'd']));
+  const byId = new Map(result.map(node => [node.id, node]));
+  assert.deepEqual(byId.get('c').position, { x: -50, y: -50 });
+  assert.deepEqual(byId.get('d').position, { x: 520, y: 320 });
+  assert.equal(Math.min(byId.get('a').position.x, byId.get('b').position.x), 100);
+  assert.ok(byId.get('b').position.x > byId.get('a').position.x);
+  assert.equal(alignSelection(nodes, edges, [], new Set(['a', 'd'])), nodes);
+});

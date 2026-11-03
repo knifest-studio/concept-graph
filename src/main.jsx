@@ -8,7 +8,7 @@ import { runTiming } from '../timing.mjs';
 import { templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, moveGroup, alignNodes, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, moveGroup, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
@@ -53,6 +53,8 @@ async function request(url, options = {}) {
 const id = () => crypto.randomUUID();
 const busy = run => ['running', 'queued'].includes(run?.status);
 const generateShortcut = () => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘ Enter' : 'Ctrl+Enter';
+// Only an explicit selection is aligned, so drawings and stamps around other nodes never shift by accident.
+const alignIds = scoped => new Set([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).flatMap(group => group.nodeIds)]);
 const finishBoardEdit = () => { const element = document.activeElement; if (element?.matches('.sticky-node textarea,.group-name-input')) flushSync(() => element.blur()); };
 
 function Icon({ name, size = 18 }) {
@@ -475,6 +477,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const flow = useReactFlow();
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
   const scoped = pageContent({ nodes, edges, groups }, activePage, pages);
+  const alignable = alignIds(scoped), canAlign = scoped.nodes.filter(node => alignable.has(node.id) && !isAnnotation(node)).length >= 2;
   useEffect(() => {
     if (!loaded || openingViewDone.current) return;
     if (!scoped.nodes.length) { openingViewDone.current = true; return; }
@@ -1153,9 +1156,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const ungroup = groupId => { checkpoint(); putGroups(current => current.filter(group => group.id !== groupId)); markDirty(); };
   const autoAlign = () => {
-    const scoped = pageGraph(), aligned = new Map(alignNodes(scoped.nodes, scoped.edges, scoped.groups).map(node => [node.id, node]));
+    const scoped = pageGraph(), ids = alignIds(scoped), next = alignSelection(scoped.nodes, scoped.edges, scoped.groups, ids);
+    if (next === scoped.nodes) return;
+    const aligned = new Map(next.map(node => [node.id, node]));
     checkpoint(); putNodes(current => current.map(node => aligned.get(node.id) || node)); markDirty();
-    requestAnimationFrame(() => flow.fitView({ duration: 300, padding: .18, maxZoom: 1 }));
+    requestAnimationFrame(() => flow.fitView({ nodes: [...ids].map(id => ({ id })), duration: 300, padding: .18, maxZoom: 1 }));
   };
   const addPage = () => {
     if (mcpLocked.current || !loaded || switchingRef.current) return null;
@@ -1536,7 +1541,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       </ReactFlow>
       {loaded && !scoped.nodes.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">ONE IDEA. MANY DIRECTIONS.</span><h2>What are you imagining?</h2><p>Describe an image, then click Generate.</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> Add text prompt</button></div>}
       <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} ready={readiness.key === 'ready'} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>
-      <div className="canvas-bottom"><div className="canvas-controls"><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp}/><i/><button data-tooltip="Undo · ⌘ Z" aria-label="Undo" onClick={() => undo()}><Icon name="undo" size={17}/></button><button data-tooltip="Redo · ⌘ Shift Z" aria-label="Redo" onClick={() => undo(true)}><Icon name="redo" size={17}/></button><i/><button data-tooltip="Zoom out" aria-label="Zoom out" onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={16}/></button><button data-tooltip={fitNodes.length ? "Fit selected nodes in view" : "Fit all nodes in view"} aria-label="Fit canvas" onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={16}/></button><button data-tooltip="Zoom in" aria-label="Zoom in" onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={16}/></button><i/><button data-tooltip="Align left to right · center parents" aria-label="Auto-align all nodes" disabled={!scoped.nodes.length} onClick={autoAlign}><Icon name="align" size={18}/></button><button data-tooltip={canGroup ? "Group selected nodes" : "Select 2+ ungrouped nodes"} aria-label="Group selected nodes" disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={18}/></button>{selectedCount > 0 && <><i/><button data-tooltip="Delete selected" aria-label="Delete selected" onClick={removeSelected}><Icon name="trash" size={16}/></button></>}</div><span className="canvas-stats">{scoped.nodes.length} nodes <i/> {scoped.edges.length} connections</span></div>
+      <div className="canvas-bottom"><div className="canvas-controls"><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp}/><i/><button data-tooltip="Undo · ⌘ Z" aria-label="Undo" onClick={() => undo()}><Icon name="undo" size={17}/></button><button data-tooltip="Redo · ⌘ Shift Z" aria-label="Redo" onClick={() => undo(true)}><Icon name="redo" size={17}/></button><i/><button data-tooltip="Zoom out" aria-label="Zoom out" onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={16}/></button><button data-tooltip={fitNodes.length ? "Fit selected nodes in view" : "Fit all nodes in view"} aria-label="Fit canvas" onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={16}/></button><button data-tooltip="Zoom in" aria-label="Zoom in" onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={16}/></button><i/><button data-tooltip={canAlign ? "Align selected nodes left to right" : "Select nodes to align them"} aria-label="Auto-align selected nodes" disabled={!canAlign} onClick={autoAlign}><Icon name="align" size={18}/></button><button data-tooltip={canGroup ? "Group selected nodes" : "Select 2+ ungrouped nodes"} aria-label="Group selected nodes" disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={18}/></button>{selectedCount > 0 && <><i/><button data-tooltip="Delete selected" aria-label="Delete selected" onClick={removeSelected}><Icon name="trash" size={16}/></button></>}</div><span className="canvas-stats">{scoped.nodes.length} nodes <i/> {scoped.edges.length} connections</span></div>
     </main><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addImages([...event.target.files]); event.target.value = ''; }}/>
     {!cloud && <input ref={boardFileInput} type="file" accept=".conceptgraph,.zip" aria-label="Board archive file" hidden onChange={event => { const file = event.target.files[0]; event.target.value = ''; importBoard(file); }}/>}
     {boardForm && <div className="board-modal" role="dialog" aria-modal="true" aria-label={boardForm === 'create' ? 'Create board' : 'Rename board'}><form onSubmit={submitBoard}><h2>{boardForm === 'create' ? 'New board' : 'Rename board'}</h2><label htmlFor="board-name">Board name</label><input id="board-name" aria-label="Board name" autoFocus maxLength={80} value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="A new direction" disabled={switching}/><div><button data-tooltip="Cancel" type="button" onClick={() => setBoardForm(null)} disabled={switching}>Cancel</button><button className="primary-button" data-tooltip={boardForm === 'create' ? 'Create board' : 'Save board name'} type="submit" disabled={switching || !nameDraft.trim()}>{boardForm === 'create' ? 'Create board' : 'Save name'}</button></div></form></div>}
