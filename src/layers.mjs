@@ -24,6 +24,17 @@ export function layerOrder(nodes) {
 }
 
 export const layerIndex = nodes => new Map(layerOrder(nodes).map((node, index) => [node.id, index + 1]));
+
+// True when only fields that never change identity, type or stacking differ (positions, text, selection, size…).
+export function sameShape(before, after) {
+  if (before === after) return true;
+  if (!before || before.length !== after.length) return false;
+  for (let index = 0; index < after.length; index++) {
+    const a = before[index], b = after[index];
+    if (a !== b && (a.id !== b.id || a.type !== b.type || a.z !== b.z || a.data?.attachedTo !== b.data?.attachedTo)) return false;
+  }
+  return true;
+}
 export const topLayer = nodes => nodes.reduce((top, node) => node.type === 'group' ? top : Math.max(top, layer(node)), 0);
 export const nextLayer = nodes => Math.min(maxLayer, topLayer(nodes) + 1);
 

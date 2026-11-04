@@ -2,7 +2,7 @@ import { routePartykitRequest } from 'partyserver';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
 import { assetPattern, imageFormat, imageTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
-import { validateTemplate } from '../graph.mjs';
+import { imageSize, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
 
 export { BoardRoom } from './board-room.mjs';
@@ -115,6 +115,31 @@ async function route(request, env) {
     const asset = `${crypto.randomUUID()}.${format}`;
     await env.FILES.put(`assets/${asset}`, bytes, { httpMetadata: { contentType: imageTypes[format] } });
     return json({ asset });
+  }
+  // Shared previews: the first viewer of an image stores a small copy, so others never download the original just to see the canvas.
+  const thumbMatch = path.match(/^\/assets\/([\da-f-]{36}\.(?:png|jpg|gif|webp))\/thumb$/);
+  if (thumbMatch) {
+    const key = `thumbs/${thumbMatch[1]}`;
+    if (method === 'PUT') {
+      const bytes = await readBody(request, 512 * 1024);
+      let format;
+      try { format = imageFormat(bytes); }
+      catch (cause) { return error(cause.message, 400); }
+      const size = imageSize(bytes);
+      if (!['webp', 'jpg'].includes(format) || !size || Math.max(size.width, size.height) > 1024) return error('Thumbnails must be WebP or JPEG, at most 1024 px.', 400);
+      if (!await env.FILES.head(`assets/${thumbMatch[1]}`)) return error('Asset not found.', 404);
+      // The first stored preview wins and is cached as immutable.
+      if (await env.FILES.head(key)) return json({ ok: true });
+      await env.FILES.put(key, bytes, { httpMetadata: { contentType: imageTypes[format] } });
+      return json({ ok: true }, 201);
+    }
+    if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
+    const object = await env.FILES.get(key);
+    // "Not made yet" is the normal first answer, so it is not reported as a failed request.
+    if (!object) return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+    const headers = { 'Content-Type': object.httpMetadata?.contentType || 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'ETag': object.httpEtag, 'X-Content-Type-Options': 'nosniff' };
+    if (request.headers.get('If-None-Match')?.split(',').some(tag => ['*', object.httpEtag, `W/${object.httpEtag}`].includes(tag.trim()))) return new Response(null, { status: 304, headers });
+    return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }
   if (path.startsWith('/assets/')) {
     const asset = path.slice('/assets/'.length);

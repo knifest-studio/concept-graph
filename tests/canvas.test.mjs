@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasView, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
+import { canvasView, createViewCache, visibleTitles, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
 
 test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
   const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
@@ -296,4 +296,78 @@ test('auto-align moves only the selection and keeps its top-left corner', async 
   assert.equal(Math.min(byId.get('a').position.x, byId.get('b').position.x), 100);
   assert.ok(byId.get('b').position.x > byId.get('a').position.x);
   assert.equal(alignSelection(nodes, edges, [], new Set(['a', 'd'])), nodes);
+});
+
+test('canvas view keeps unchanged objects and lists, so React Flow re-adopts only what changed', () => {
+  const nodes = [text('a', 0, 0), image('b', 400, 0), text('c', 800, 0)], edges = [edge('a', 'b'), edge('b', 'c')];
+  const groups = [{ id: 'g', name: 'G', nodeIds: ['a', 'b'], collapsed: false }], cache = createViewCache();
+  const first = canvasView(nodes, edges, groups, cache);
+  const again = canvasView([...nodes], [...edges], [...groups], cache);
+  assert.equal(again.nodes, first.nodes);
+  assert.equal(again.edges, first.edges);
+  const moved = nodes.map(node => node.id === 'c' ? { ...node, position: { x: 900, y: 0 } } : node);
+  const next = canvasView(moved, edges, groups, cache);
+  assert.notEqual(next.nodes, first.nodes);
+  assert.deepEqual(next.nodes.map((node, index) => node === first.nodes[index]), [true, true, true, false]);
+  assert.equal(next.edges, first.edges);
+  // Moving a member changes only its own card and its frame.
+  const inside = canvasView(moved.map(node => node.id === 'a' ? { ...node, position: { x: -50, y: 0 } } : node), edges, groups, cache);
+  assert.deepEqual(inside.nodes.map((node, index) => node === next.nodes[index]), [false, false, true, true]);
+  // Connections of one kind share a single style object, across views and editors.
+  const other = canvasView(moved, [edge('c', 'b'), edge('a', 'c')], [], createViewCache()).edges;
+  assert.equal(other[0].style, other[1].style);
+  assert.equal(other[0].style, next.edges[0].style);
+  assert.equal(canvasView(moved, edges, groups, createViewCache()).edges[1].style, next.edges[1].style);
+  assert.equal(next.edges[1].style.stroke, 'var(--purple)');
+});
+
+test('unmeasured cards get estimated sizes and handles; measured ones keep their size, also after undo drops it', () => {
+  const prompt = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'x'.repeat(100) } };
+  const upload = { id: 'u', type: 'image', position: { x: 400, y: 0 }, data: { asset: 'a.png' } };
+  const output = { id: 'o', type: 'image', position: { x: 800, y: 0 }, data: { asset: 'b.png', runId: 'r', aspect: .5 } };
+  const note = { id: 's', type: 'sticky', position: { x: 0, y: 400 }, data: { text: '', color: '#fff3ad' } };
+  const cache = createViewCache(), view = canvasView([prompt, upload, output, note], [], [], cache), byId = new Map(view.nodes.map(node => [node.id, node]));
+  assert.deepEqual(byId.get('p').measured, { width: 310, height: 124 });
+  assert.deepEqual(byId.get('p').handles.map(({ type, position, x, y }) => [type, position, x, y]), [['target', 'left', -9, 57], ['source', 'right', 309, 57]]);
+  assert.deepEqual(byId.get('u').handles.map(handle => handle.type), ['source']);
+  assert.deepEqual(byId.get('o').measured, { width: 310, height: 155 });
+  assert.deepEqual(byId.get('o').handles.map(handle => handle.type), ['target', 'source']);
+  assert.deepEqual(byId.get('s').handles, []);
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 80 });
+  assert.deepEqual(nodeHandles({ type: 'text', data: { template: { name: 'T' } } }, { width: 310, height: 100 }).map(handle => handle.x), [-8, 308]);
+  // Once measured, a node keeps that size even when undo hands back a copy without it.
+  const measured = { ...prompt, measured: { width: 310, height: 210 } };
+  assert.deepEqual(canvasView([measured], [], [], cache).nodes[0].measured, measured.measured);
+  const restored = canvasView([{ ...prompt, data: { text: 'old' } }], [], [], cache).nodes[0];
+  assert.deepEqual(restored.measured, { width: 310, height: 210 });
+  assert.equal(restored.handles[0].y, 100);
+});
+
+test('group bounds by id map match the scan over all nodes', () => {
+  const nodes = [text('a', 90, 50), image('b', 480, 60), text('c', 300, 10)], group = { id: 'g', name: 'G', nodeIds: ['b', 'a', 'missing'], collapsed: false };
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  assert.deepEqual(groupBounds(group, nodes, byId), groupBounds(group, nodes));
+  assert.deepEqual(groupBounds(group, nodes), { x: 66, y: 2, width: 748, height: 702 });
+  const frame = canvasView(nodes, [], [{ ...group, collapsed: true }]).nodes[0];
+  assert.deepEqual(frame.handles.map(({ type, x, y }) => [type, x, y]), [['target', -10, 31], ['source', 240, 31]]);
+  assert.deepEqual(canvasView(nodes, [], [group]).nodes[0].handles, []);
+});
+
+test('a folded card is 72px square whatever it last measured, and unfolding uses its last unfolded size', () => {
+  const card = { id: 'c', type: 'text', position: { x: 0, y: 0 }, data: { text: 'hi' }, measured: { width: 310, height: 190 } }, cache = createViewCache();
+  canvasView([card], [], [], cache);
+  const shut = canvasView([{ ...card, data: { ...card.data, collapsed: true } }], [], [], cache).nodes[0];
+  assert.deepEqual(shut.measured, { width: 72, height: 72 });
+  assert.deepEqual(shut.handles.map(({ x, y }) => [x, y]), [[-9, 31], [71, 31]]);
+  const { measured, ...unmeasured } = card;
+  assert.deepEqual(canvasView([unmeasured], [], [], cache).nodes[0].measured, measured);
+});
+
+test('zoomed-out group titles never overlap: the selected and larger groups keep theirs', () => {
+  const frame = (id, x, y, width, height, selected = false, name = 'Group name') => ({ id, position: { x, y }, width, height, selected, data: { name } });
+  const frames = [frame('small', 0, 0, 300, 300), frame('big', 100, 0, 2000, 900), frame('far', 0, 5000, 300, 300), frame('picked', 50, 10, 200, 200, true)];
+  assert.deepEqual([...visibleTitles(frames, .05)].sort(), ['far', 'picked']);
+  // Close enough, every title fits.
+  const apart = [frame('a', 0, 0, 1000, 600), frame('b', 1400, 0, 1000, 600), frame('c', 0, 1000, 1000, 600)];
+  assert.deepEqual([...visibleTitles(apart, .3)].sort(), ['a', 'b', 'c']);
 });

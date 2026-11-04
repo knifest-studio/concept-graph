@@ -49,6 +49,8 @@ export function detachMissingStampTargets(nodes) {
 
 // A stamp already moved in the same edit must not receive its parent's delta twice.
 export function reconcileStampAttachments(before = [], nodes = []) {
+  // Boards without attached stamps, the usual case, need no lookups.
+  if (!nodes.some(node => node.type === 'stamp' && node.data.attachedTo !== undefined)) return nodes;
   const previous = new Map(before.map(node => [node.id, node])), current = new Map(nodes.map(node => [node.id, node]));
   return nodes.flatMap(node => {
     if (node.type !== 'stamp' || node.data.attachedTo === undefined) return [node];

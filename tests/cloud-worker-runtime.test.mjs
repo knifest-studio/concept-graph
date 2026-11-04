@@ -440,6 +440,27 @@ runtimeTest('asset upload uses magic bytes, authenticated download, private cach
   assert.equal((await request('/assets/invalid.svg', { cookie })).status, 404);
 });
 
+runtimeTest('image previews are stored once per asset, validated, and served like assets', async t => {
+  const { request, env, files } = setup(t), cookie = `cg_session=${await signSession({ name: 'Artist', email: 'artist@example.com' }, env.SESSION_SECRET)}`;
+  const { asset } = await (await request('/api/assets', { method: 'POST', cookie, bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) })).json();
+  // A minimal JPEG header: SOF0 with 200 × 100.
+  const jpeg = size => new Uint8Array([255, 216, 255, 192, 0, 17, 8, size >> 8, size & 255, 0, 200, 3, 1, 34, 0, 2, 17, 1, 3, 17, 1, 255, 217]);
+  assert.equal((await request(`/assets/${asset}/thumb`, { cookie })).status, 204);
+  assert.equal((await request(`/assets/${asset}/thumb`, { method: 'PUT', bytes: jpeg(100) })).status, 401);
+  assert.equal((await request(`/assets/${asset}/thumb`, { method: 'PUT', cookie, bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) })).status, 400);
+  assert.equal((await request(`/assets/${asset}/thumb`, { method: 'PUT', cookie, bytes: jpeg(2000) })).status, 400);
+  assert.equal((await request('/assets/00000000-0000-0000-0000-000000000000.png/thumb', { method: 'PUT', cookie, bytes: jpeg(100) })).status, 404);
+  assert.equal((await request(`/assets/${asset}/thumb`, { method: 'PUT', cookie, bytes: jpeg(100) })).status, 201);
+  assert.equal((await request(`/assets/${asset}/thumb`, { method: 'PUT', cookie, bytes: jpeg(120) })).status, 200);
+  assert.deepEqual(files.get(`thumbs/${asset}`).body, jpeg(100));
+  const preview = await request(`/assets/${asset}/thumb`, { cookie });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('Content-Type'), 'image/jpeg');
+  assert.equal(preview.headers.get('Cache-Control'), 'private, max-age=31536000, immutable');
+  assert.equal((await request(`/assets/${asset}/thumb`, { cookie, headers: { 'If-None-Match': '"test-etag"' } })).status, 304);
+  assert.equal((await request(`/assets/${asset}/thumb`)).status, 401);
+});
+
 runtimeTest('helper manifest is public, streamed from R2 and never cached or served by static assets', async t => {
   const { request, env, files } = setup(t);
   for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'SESSION_SECRET', 'DB', 'ASSETS']) delete env[key];

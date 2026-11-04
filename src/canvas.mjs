@@ -1,6 +1,6 @@
 import { nodeSize, captionHeight } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
-import { layerIndex } from './layers.mjs';
+import { layerIndex, sameShape } from './layers.mjs';
 
 export const connectionColor = type => type === 'image' ? 'var(--purple)' : 'var(--blue)';
 
@@ -116,34 +116,110 @@ export function pruneGroups(groups, nodes) {
 }
 
 const size = nodeSize;
-export function groupBounds(group, nodes) {
-  const members = nodes.filter(node => group.nodeIds.includes(node.id));
-  const x = Math.min(...members.map(node => node.position.x)) - 24;
-  const y = Math.min(...members.map(node => node.position.y - captionHeight(node))) - 48;
-  return { x, y, width: Math.max(...members.map(node => node.position.x + size(node).width)) - x + 24,
-    height: Math.max(...members.map(node => node.position.y + size(node).height)) - y + 24 };
+// `byId` (id → node) makes this proportional to the group instead of the board.
+export function groupBounds(group, nodes, byId, measure = size) {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const add = node => {
+    const { width, height } = measure(node);
+    left = Math.min(left, node.position.x); top = Math.min(top, node.position.y - captionHeight(node));
+    right = Math.max(right, node.position.x + width); bottom = Math.max(bottom, node.position.y + height);
+  };
+  if (byId) { for (const id of group.nodeIds) { const node = byId.get(id); if (node) add(node); } }
+  else { const ids = new Set(group.nodeIds); for (const node of nodes) if (ids.has(node.id)) add(node); }
+  const x = left - 24, y = top - 48;
+  return { x, y, width: right - x + 24, height: bottom - y + 24 };
 }
 
+// An unmeasured prompt grows with its text (13px type, 22px lines, ~44 characters per line in a 310px card).
+export function estimatedSize(node) {
+  if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
+  const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
+  return { width: 310, height: Math.round(58 + 22.1 * Math.min(lines, 400)) };
+}
+
+// React Flow draws a connection only between handles it knows. These match the CSS: 10px dots centred on the card's
+// left and right borders (1px, 2px on custom nodes), so connections to nodes that were never rendered still draw.
+export function nodeHandles(node, { width, height }) {
+  if (isAnnotation(node)) return [];
+  const border = node.type === 'text' && node.data?.template ? 2 : 1, y = height / 2 - 5, handles = [];
+  if (node.type === 'text' || node.data?.runId) handles.push({ id: null, type: 'target', position: 'left', x: border - 10, y, width: 10, height: 10 });
+  handles.push({ id: null, type: 'source', position: 'right', x: width - border, y, width: 10, height: 10 });
+  return handles;
+}
+// Frames are not positioned, so their handles sit on the node box itself.
+const frameHandles = Object.freeze([{ id: null, type: 'target', position: 'left', x: -10, y: 31, width: 10, height: 10 }, { id: null, type: 'source', position: 'right', x: 240, y: 31, width: 10, height: 10 }]);
+const edgeStyles = { text: Object.freeze({ stroke: connectionColor('text'), strokeWidth: 2 }), image: Object.freeze({ stroke: connectionColor('image'), strokeWidth: 2 }) };
+
+// Per-editor memory for canvasView: unchanged inputs give back the same objects (and arrays), so React Flow skips them.
+export const createViewCache = () => ({ nodes: new WeakMap(), frames: new WeakMap(), edges: new WeakMap(), sizes: new Map(), layers: null, view: null });
+const folded = Object.freeze({ width: 72, height: 72 });
+const sameItems = (a, b) => a?.length === b.length && a.every((item, index) => item === b[index]);
+
 // Groups are display containers; original node IDs and generation edges stay intact.
-export function canvasView(nodes, edges, groups) {
+export function canvasView(nodes, edges, groups, cache = createViewCache()) {
   const collapsed = new Map();
-  for (const group of groups.filter(group => group.collapsed)) for (const id of group.nodeIds) collapsed.set(id, group.id);
-  for (const node of nodes) if (node.type === 'stamp' && collapsed.has(node.data.attachedTo)) collapsed.set(node.id, collapsed.get(node.data.attachedTo));
-  const types = new Map(nodes.map(node => [node.id, node.type])), layers = layerIndex(nodes);
-  const frames = groups.map(group => {
-    const bounds = groupBounds(group, nodes);
-    const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height;
-    return { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
-      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, color: group.color },
-      width, height, measured: { width, height }, style: { width, height }, zIndex: 0 };
+  for (const group of groups) if (group.collapsed) for (const id of group.nodeIds) collapsed.set(id, group.id);
+  if (collapsed.size) for (const node of nodes) if (node.type === 'stamp' && collapsed.has(node.data.attachedTo)) collapsed.set(node.id, collapsed.get(node.data.attachedTo));
+  if (!cache.layers || !sameShape(cache.layers.nodes, nodes)) cache.layers = { nodes, index: layerIndex(nodes) };
+  else cache.layers.nodes = nodes;
+  const layers = cache.layers.index, byId = new Map();
+  // A card keeps its last measured size when undo, a reload or a remote edit hands back an unmeasured copy; React Flow
+  // re-measures it on screen. Folded cards are always 72px square.
+  const known = node => node.data?.collapsed === true ? folded : node.measured || cache.sizes.get(node.id);
+  const viewNodes = nodes.map(node => {
+    byId.set(node.id, node);
+    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node);
+    if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size) return saved.view;
+    if (node.measured && node.data?.collapsed !== true) cache.sizes.set(node.id, node.measured);
+    const view = { ...node, zIndex, hidden, selected: hidden ? false : node.selected };
+    if (!hidden) {
+      const measured = size || estimatedSize(node);
+      Object.assign(view, { measured, handles: nodeHandles(node, measured) });
+    }
+    cache.nodes.set(node, { zIndex, hidden, size, view });
+    return view;
   });
-  return {
-    nodes: [...frames, ...nodes.map(node => ({ ...node, zIndex: layers.get(node.id), hidden: collapsed.has(node.id), selected: collapsed.has(node.id) ? false : node.selected }))],
-    edges: edges.map(edge => {
-      const source = collapsed.get(edge.source) || edge.source, target = collapsed.get(edge.target) || edge.target;
-      return { ...edge, source, target, hidden: source === target, style: { stroke: connectionColor(types.get(edge.source)), strokeWidth: 2 } };
-    }),
-  };
+  const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node);
+  const frames = groups.map(group => {
+    const bounds = groupBounds(group, nodes, byId, shown);
+    const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height, saved = cache.frames.get(group);
+    if (saved && saved.x === bounds.x && saved.y === bounds.y && saved.width === width && saved.height === height) return saved.view;
+    const view = { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
+      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, color: group.color },
+      // Below the connections' layer (0): an opaque group colour must never hide the links between its members.
+      width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? frameHandles : [] };
+    cache.frames.set(group, { x: bounds.x, y: bounds.y, width, height, view });
+    return view;
+  });
+  const viewEdges = edges.map(edge => {
+    const source = collapsed.get(edge.source) || edge.source, target = collapsed.get(edge.target) || edge.target;
+    const kind = byId.get(edge.source)?.type === 'image' ? 'image' : 'text', saved = cache.edges.get(edge);
+    if (saved && saved.source === source && saved.target === target && saved.kind === kind) return saved.view;
+    const view = { ...edge, source, target, hidden: source === target, style: edgeStyles[kind] };
+    cache.edges.set(edge, { source, target, kind, view });
+    return view;
+  });
+  const all = [...frames, ...viewNodes], last = cache.view;
+  cache.view = { nodes: last && sameItems(last.nodes, all) ? last.nodes : all, edges: last && sameItems(last.edges, viewEdges) ? last.edges : viewEdges };
+  return cache.view;
+}
+
+// Far out, titles of small neighbouring groups would pile up. Like labels on a map, the selected and larger groups keep
+// theirs and a title that would overlap one already placed waits until the board is closer. Sizes are screen pixels and
+// follow the CSS for .group-title.
+export function visibleTitles(frames, zoom) {
+  const size = Math.min(Math.max(16, 24 * zoom), 20), height = Math.ceil(size * 1.3), cell = 160, grid = new Map(), shown = new Set();
+  const order = [...frames].sort((a, b) => b.selected - a.selected || b.width * b.height - a.width * a.height || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const frame of order) {
+    const width = Math.min(Math.max(frame.width * zoom, 360), String(frame.data.name).length * size * .62 + 12);
+    const left = frame.position.x * zoom, bottom = frame.position.y * zoom - 6, box = { left, right: left + width, top: bottom - height, bottom };
+    const cells = [];
+    for (let x = Math.floor(box.left / cell); x <= Math.floor(box.right / cell); x++) for (let y = Math.floor(box.top / cell); y <= Math.floor(box.bottom / cell); y++) cells.push(`${x}:${y}`);
+    if (cells.some(key => grid.get(key)?.some(other => other.left < box.right && box.left < other.right && other.top < box.bottom && box.top < other.bottom))) continue;
+    cells.forEach(key => grid.set(key, [...(grid.get(key) || []), box]));
+    shown.add(frame.id);
+  }
+  return shown;
 }
 
 export function moveGroup(nodes, group, position, moveStamps = true) {

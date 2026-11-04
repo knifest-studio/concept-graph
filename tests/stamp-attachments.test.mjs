@@ -15,10 +15,13 @@ const graph = () => ({ revision: 1, nodes: [text('parent'), text('other', 800, 0
 const moved = (nodes, ids, dx, dy) => nodes.map(node => ids.includes(node.id) ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } } : node);
 
 test('new sticky mounts its focused editor while existing and remote stickies remain in display mode', async () => {
-  const result = await build({ entryPoints: [new URL('../src/BoardAnnotations.jsx', import.meta.url).pathname], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['react', 'react-dom', '@xyflow/react'], loader: { '.css': 'empty' }, logLevel: 'silent' });
+  // Focus reaches the sticky through the canvas store, as in the editor.
+  const contents = "export * from './BoardAnnotations.jsx'; export { CanvasContext } from './canvas-context.jsx'; export { createCanvasStore } from './canvas-store.mjs';";
+  const result = await build({ stdin: { contents, resolveDir: new URL('../src/', import.meta.url).pathname, loader: 'jsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', external: ['react', 'react-dom', '@xyflow/react'], loader: { '.css': 'empty' }, logLevel: 'silent' });
   const module = { exports: {} }, require = createRequire(import.meta.url);
   new Function('require', 'module', 'exports', result.outputFiles[0].text)(require, module, module.exports);
-  const render = actions => renderToStaticMarkup(React.createElement(module.exports.StickyNode, { id: 'sticky', selected: true, data: { text: '', color: '#fff3ad' }, actions }));
+  const { CanvasContext, StickyNode, createCanvasStore } = module.exports;
+  const render = state => renderToStaticMarkup(React.createElement(CanvasContext.Provider, { value: { store: createCanvasStore(state) } }, React.createElement(StickyNode, { id: 'sticky', selected: true, data: { text: '', color: '#fff3ad' }, actions: {} })));
   const initial = render({ focusId: 'sticky', focusControl: 'sticky' });
   assert.match(initial, /<textarea[^>]*autofocus=""/); assert.match(initial, /aria-label="Sticky text"/);
   assert.doesNotMatch(render({ focusId: null, focusControl: 'sticky' }), /<textarea/);

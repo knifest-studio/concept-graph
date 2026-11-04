@@ -168,3 +168,17 @@ button,a,.image-collapse,.image-caption-add,.image-prompt-from,.image-expand,.im
 }
 
 .codex-install-progress progress{display:block;width:100%;height:8px;margin:0 0 22px;accent-color:var(--purple)}.codex-install-card .codex-install-error{color:var(--error);overflow-wrap:anywhere}
+/* Zoomed-out cards (LightNode): the full cards' geometry without shadows, hover effects or controls. */
+.react-flow__node .lod-node{box-shadow:none}
+.lod-handle{position:absolute;top:50%;z-index:4;width:10px;height:10px;border:2px solid var(--bg);border-radius:50%;background:var(--blue);pointer-events:none}
+.lod-handle.target{left:-5px;transform:translate(-50%,-50%)}
+.lod-handle.source{right:-5px;transform:translate(50%,-50%)}
+.image-node .lod-handle,.collapsed-node-image-card .lod-handle{background:var(--purple)}
+.custom-node .lod-handle{background:var(--template-color)}
+.group-frame .lod-handle{background:var(--muted)}
+.text-node.lod-node{display:flex;flex-direction:column}
+.text-node.lod-node>header{flex-shrink:0}
+.lod-text{flex:1 1 auto;min-height:0;overflow:hidden;padding:4px 16px 17px;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;overflow-wrap:break-word}
+.lod-text.empty{color:var(--muted);opacity:.7}
+.lod-caption{overflow:hidden;line-height:20px}
+.image-placeholder{display:block;border-radius:9px;background:color-mix(in srgb,var(--purple) 9%,var(--card))}

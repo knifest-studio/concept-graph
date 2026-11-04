@@ -34,7 +34,8 @@ test('a stamp below its parent renders directly above it, and rendering and plac
   assert.deepEqual(ids(nodes), ['cover', 'note', 'stamp', 'top', 'apart']);
   const view = canvasView(nodes, [], [{ id: 'g', name: 'G', collapsed: false, nodeIds: ['cover', 'top'] }]);
   const z = new Map(view.nodes.map(node => [node.id, node.zIndex]));
-  assert.equal(z.get('g'), 0);
+  // Frames sit under the connections (zIndex 0), which sit under every node.
+  assert.equal(z.get('g'), -1);
   assert.deepEqual(['cover', 'note', 'stamp', 'top', 'apart'].map(id => z.get(id)), [1, 2, 3, 4, 5]);
   // A free stamp is not lifted.
   assert.deepEqual(ids([stamp('free', 1), sticky('note', 2)]), ['free', 'note']);

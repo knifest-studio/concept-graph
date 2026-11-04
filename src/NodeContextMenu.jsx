@@ -4,14 +4,16 @@ import { contextMenuShortcut } from './node-context-menu.mjs';
 import { layerShortcut } from './layers.mjs';
 import './node-context-menu.css';
 
+// Every card renders one of these menus, so the platform labels are worked out once.
+const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+const shortcut = isMac ? '⌘ C' : 'Ctrl+C';
+const idShortcut = isMac ? '⌘ ⇧ C' : 'Ctrl+Shift+C';
+const step = isMac ? '⌘ ' : 'Ctrl+';
+const layers = [['front', 'Bring to front', ']'], ['forward', 'Bring forward', `${step}]`], ['backward', 'Send backward', `${step}[`], ['back', 'Send to back', '[']];
+
 export function NodeContextMenu({ children, id, type, actions }) {
   const [position, setPosition] = useState(null);
   const menu = useRef(null);
-  const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
-  const shortcut = isMac ? '⌘ C' : 'Ctrl+C';
-  const idShortcut = isMac ? '⌘ ⇧ C' : 'Ctrl+Shift+C';
-  const step = isMac ? '⌘ ' : 'Ctrl+';
-  const layers = [['front', 'Bring to front', ']'], ['forward', 'Bring forward', `${step}]`], ['backward', 'Send backward', `${step}[`], ['back', 'Send to back', '[']];
 
   useLayoutEffect(() => {
     if (!position || !menu.current) return;

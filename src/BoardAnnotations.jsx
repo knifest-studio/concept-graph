@@ -2,6 +2,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, use
 import { createPortal } from 'react-dom';
 import { ViewportPortal } from '@xyflow/react';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
+import { useCanvasValue } from './canvas-context.jsx';
 import './annotations.css';
 import { annotationSize, authorInitials, boardAuthor, contrastColor, penPalette, penWidths, stamps, stickyPalette, strokePath } from './annotations.mjs';
 
@@ -34,9 +35,12 @@ export function DrawingNode({ id, data, actions }) {
 }
 
 export function StickyNode({ id, data, selected, actions }) {
-  const autoEdit = actions.focusId === id && actions.focusControl === 'sticky';
+  const autoEdit = useCanvasValue(state => state.focusId === id && state.focusControl === 'sticky');
   const [editing, setEditing] = useState(autoEdit), [draft, setDraft] = useState(data.text);
-  const editor = useRef(null), cancelled = useRef(false);
+  const editor = useRef(null), cancelled = useRef(false), unsaved = useRef(null);
+  unsaved.current = editing && !cancelled.current && draft !== data.text ? draft : null;
+  // Panning a sticky out of view unmounts it; its draft is saved like a blur would.
+  useEffect(() => () => { if (unsaved.current !== null) actions.editAnnotation(id, { text: unsaved.current }); }, []);
   useLayoutEffect(() => { if (!editing) setDraft(data.text); }, [data.text, editing]);
   useLayoutEffect(() => { if (autoEdit) { cancelled.current = false; setEditing(true); } }, [autoEdit]);
   useLayoutEffect(() => {
@@ -62,6 +66,14 @@ export function StickyNode({ id, data, selected, actions }) {
 
 export function StampNode({ id, data, actions }) {
   return <NodeContextMenu id={id} type="stamp" actions={actions}><div className="stamp-node" aria-label={`${data.kind} stamp`}><span aria-hidden="true">{stamps[data.kind]}</span>{data.author && <AuthorBadge author={data.author} compact/>}</div></NodeContextMenu>;
+}
+
+// Zoomed-out annotations: same size and colour, without tools, author badges or menus.
+export function LightAnnotation({ id, type, data }) {
+  if (type === 'drawing') { const size = annotationSize({ type, data }); return <div className="drawing-node" style={size}><svg width={size.width} height={size.height} aria-label="Drawing"><path d={strokePath(data.points)} fill="none" stroke={data.color} strokeWidth={data.width} strokeLinecap="round" strokeLinejoin="round"/></svg></div>; }
+  if (type === 'stamp') return <div className="stamp-node lod-node" aria-label={`${data.kind} stamp`}><span aria-hidden="true">{stamps[data.kind]}</span></div>;
+  const text = String(data.text || '');
+  return <article data-feel-node={id} className="sticky-node lod-node" style={{ background: data.color, color: contrastColor(data.color) }}><div className="sticky-text">{text.length > 600 ? `${text.slice(0, 600)}…` : text}</div></article>;
 }
 
 const toolNames = { select: ['Select', 'V'], pen: ['Pen', 'P'], sticky: ['Sticky', 'S'], stamp: ['Stamp', 'E'] };

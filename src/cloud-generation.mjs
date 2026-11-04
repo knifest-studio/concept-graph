@@ -1,5 +1,5 @@
 import { collectInputs, generationSettings, imageNode, imageSize, positionRunOutput, groupRunOutputs } from '../graph.mjs';
-import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
+import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 import { delegateAction } from './codex-sharing.mjs';
@@ -20,8 +20,10 @@ async function base64(response) {
 }
 
 export class CloudGeneration {
-  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart, sharing }) {
+  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, read }) {
     Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart, sharing });
+    // The editor's incremental reader when there is one; it returns shared objects, which this class never mutates.
+    this.read = read || (() => (this.reader ||= new CloudGraphReader(doc)).read());
     this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map(); this.cancelling = new Set();
   }
   setRun(run) { this.doc.transact(() => this.doc.getMap('runs').set(run.id, run), this.origin); }
@@ -41,7 +43,7 @@ export class CloudGeneration {
   // With an owner, the run is queued for that teammate's helper; their client submits it and places the images.
   async start(nodeId, owner) {
     if (!this.ready()) throw new Error('Wait for a live board connection before generating.');
-    const graph = readCloudGraph(this.doc);
+    const graph = this.read();
     if (graph.runs.some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { prompt, images, target } = collectInputs(graph, nodeId);
     const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}), ...generationSettings, status: 'queued', by: this.user, startedAt: timestamp() };
@@ -101,7 +103,8 @@ export class CloudGeneration {
       this.doc.transact(() => {
         const current = map.get(job.id);
         if (terminal(current?.status) || current?.outputIds?.includes(id)) return;
-        const before = readCloudGraph(this.doc), graph = structuredClone(before);
+        // Copies only what this step changes; untouched nodes stay shared, so the diff skips them.
+        const before = this.read(), graph = { ...before, nodes: [...before.nodes], edges: [...before.edges], groups: before.groups.map(group => ({ ...group, nodeIds: [...group.nodeIds] })), runs: [...before.runs] };
         const target = graph.nodes.find(node => node.id === job.nodeId) || { position: { x: 0, y: 0 } };
         const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || this.user), ...jobSettings(job), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
         let node = graph.nodes.find(node => node.id === id);
@@ -114,8 +117,8 @@ export class CloudGeneration {
         }
         run.outputIds.push(id); run.count = run.outputIds.length;
         if (run.outputIds.length === 2) {
-          const first = graph.nodes.find(node => node.id === run.outputIds[0]);
-          if (first && !Object.hasOwn(first.data, 'caption')) first.data.caption = 'Image 1';
+          const index = graph.nodes.findIndex(node => node.id === run.outputIds[0]), first = graph.nodes[index];
+          if (first && !Object.hasOwn(first.data, 'caption')) graph.nodes[index] = { ...first, data: { ...first.data, caption: 'Image 1' } };
         }
         if (samePage(graph, graph.nodes.find(item => item.id === job.nodeId), node) && !graph.edges.some(edge => edge.id === `${id}-edge`)) graph.edges.push({ id: `${id}-edge`, source: job.nodeId, target: id });
         const previousGroup = run.autoGroupId;
@@ -192,7 +195,7 @@ export class CloudGeneration {
       let body;
       try {
         // Inputs are read now, from the board as it is when this helper takes the run.
-        const { prompt, images, target } = collectInputs(readCloudGraph(this.doc), run.nodeId);
+        const { prompt, images, target } = collectInputs(this.read(), run.nodeId);
         body = { jobId: run.id, boardId: this.boardId, nodeId: run.nodeId, prompt, labelOutputs: target.data.labelOutputs, images: await this.inputs(images) };
       } catch (error) { if (this.ready()) this.settle(run.id, { status: 'failed', error: error.message || 'Could not prepare this generation.' }); return; }
       if (terminal(this.doc.getMap('runs').get(run.id)?.status)) return;

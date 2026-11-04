@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CanvasThumbnailCache, createCanvasThumbnail } from '../src/canvas-thumbnails.mjs';
+import { CanvasThumbnailCache, createCanvasThumbnail, thumbnailWidth, thumbnailWidths } from '../src/canvas-thumbnails.mjs';
 
 test('thumbnail preserves aspect ratio and alpha-capable format and closes its decoded bitmap', async () => {
   let closed = false, drawn, outputType, decodeOptions;
@@ -103,4 +103,73 @@ test('unmounted queued images do not start decoding', async () => {
   assert.deepEqual(await skipped.ready, { src: 'b' });
   assert.deepEqual(started, ['a']);
   first.release();
+});
+
+test('sizes are cached apart, shown synchronously once made, and a small one is drawn from a cached large one', async () => {
+  const calls = [];
+  const cache = new CanvasThumbnailCache({ revoke: () => {}, create: async (source, options) => { calls.push([source, options]); return { src: `blob:${options.maximumWidth}`, aspectRatio: '3 / 2', generated: true }; } });
+  assert.equal(cache.shown('a'), undefined);
+  const large = cache.acquire('a', thumbnailWidths.large);
+  await large.ready;
+  assert.equal(cache.peek('a', thumbnailWidths.large).src, 'blob:1024');
+  // Until the small size exists the large one stands in, so switching sizes never blanks a card.
+  assert.equal(cache.shown('a', thumbnailWidths.small).src, 'blob:1024');
+  const small = cache.acquire('a', thumbnailWidths.small);
+  await small.ready;
+  assert.deepEqual(calls, [['a', { maximumWidth: 1024 }], ['a', { maximumWidth: 256, from: 'blob:1024' }]]);
+  assert.equal(cache.shown('a', thumbnailWidths.small).src, 'blob:256');
+  assert.equal(cache.aspect('a'), '3 / 2');
+  assert.equal(thumbnailWidth(true), 256); assert.equal(thumbnailWidth(false), 1024);
+});
+
+test('each size keeps its own limit and held thumbnails are never evicted', async () => {
+  const revoked = [];
+  const cache = new CanvasThumbnailCache({ maxEntries: { [thumbnailWidths.small]: 1, [thumbnailWidths.large]: 1 }, revoke: src => revoked.push(src), create: async (source, { maximumWidth }) => ({ src: `blob:${maximumWidth}:${source}`, generated: true }) });
+  for (const source of ['a', 'b']) { const handle = cache.acquire(source, thumbnailWidths.small); await handle.ready; handle.release(); }
+  assert.deepEqual(revoked, ['blob:256:a']);
+  const large = cache.acquire('b'); await large.ready; large.release();
+  assert.deepEqual(revoked, ['blob:256:a']);
+  const release = cache.hold('b');
+  const other = cache.acquire('c', thumbnailWidths.small); await other.ready; other.release();
+  // `b` is held (as a card would while showing it), so the newer `c` goes instead.
+  assert.deepEqual(revoked, ['blob:256:a', 'blob:256:c']);
+  release();
+  assert.equal(cache.peek('b', thumbnailWidths.small).src, 'blob:256:b');
+  assert.equal(cache.peek('b').src, 'blob:1024:b');
+});
+
+test('a small thumbnail reads from the given source and keeps GIFs untouched', async () => {
+  let fetched;
+  const result = await createCanvasThumbnail('/assets/a.png', {
+    from: 'blob:large', maximumWidth: 256,
+    fetchImage: async url => { fetched = url; return { ok: true, blob: async () => ({ type: 'image/webp' }) }; },
+    decode: async () => ({ width: 1024, height: 512, close() {} }),
+    document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toBlob: done => done({}) }) }, makeURL: () => 'blob:small',
+  });
+  assert.equal(fetched, 'blob:large');
+  assert.deepEqual(result, { src: 'blob:small', aspectRatio: '1024 / 512', generated: true });
+  assert.deepEqual(await createCanvasThumbnail('/assets/a.gif', { from: 'blob:large', maximumWidth: 256 }), { src: '/assets/a.gif' });
+});
+
+test('cloud previews: a stored small thumbnail is used without the original, and a missing one is made and stored', async () => {
+  const requests = [], bitmap = { width: 256, height: 384, close() {} };
+  const canvas = { getContext: () => ({ drawImage() {} }), toBlob: done => done({ type: 'image/webp' }) };
+  const stored = await createCanvasThumbnail('/assets/00000000-0000-0000-0000-000000000001.png', {
+    shared: true, maximumWidth: 256, makeURL: () => 'blob:preview', document: { createElement: () => canvas }, decode: async () => bitmap,
+    fetchImage: async (url, init) => { requests.push([url, init?.method || 'GET']); return { ok: true, status: 200, blob: async () => ({ type: 'image/webp' }) }; },
+  });
+  assert.deepEqual(stored, { src: 'blob:preview', aspectRatio: '256 / 384', generated: true });
+  assert.deepEqual(requests, [['/assets/00000000-0000-0000-0000-000000000001.png/thumb', 'GET']]);
+  requests.length = 0;
+  const made = await createCanvasThumbnail('/assets/00000000-0000-0000-0000-000000000001.png', {
+    shared: true, maximumWidth: 256, makeURL: () => 'blob:made', document: { createElement: () => canvas }, decode: async () => ({ width: 1024, height: 1536, close() {} }),
+    fetchImage: async (url, init) => { requests.push([url, init?.method || 'GET']); return url.endsWith('/thumb') && !init ? { ok: true, status: 204 } : { ok: true, status: 200, blob: async () => ({ type: 'image/png' }) }; },
+  });
+  assert.equal(made.src, 'blob:made');
+  assert.deepEqual(requests, [['/assets/00000000-0000-0000-0000-000000000001.png/thumb', 'GET'], ['/assets/00000000-0000-0000-0000-000000000001.png', 'GET'], ['/assets/00000000-0000-0000-0000-000000000001.png/thumb', 'PUT']]);
+  // Large thumbnails and local boards never touch the shared previews.
+  requests.length = 0;
+  await createCanvasThumbnail('/assets/00000000-0000-0000-0000-000000000001.png', { shared: true, makeURL: () => 'blob:large', document: { createElement: () => canvas }, decode: async () => ({ width: 2048, height: 2048, close() {} }),
+    fetchImage: async (url, init) => { requests.push([url, init?.method || 'GET']); return { ok: true, blob: async () => ({ type: 'image/png' }) }; } });
+  assert.deepEqual(requests, [['/assets/00000000-0000-0000-0000-000000000001.png', 'GET']]);
 });

@@ -1,13 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ReactFlowProvider, ViewportPortal } from '@xyflow/react';
 import * as Y from 'yjs';
 import YProvider from 'y-partyserver/provider';
-import { applyLocalGraph, readCloudGraph } from './cloud-sync.mjs';
+import * as encoding from 'lib0/encoding';
+import { encodeAwarenessUpdate } from 'y-protocols/awareness';
+import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
 import { CodexRequests, CodexShareMenu, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
 import { cloudFeedback } from './feedback.mjs';
+import { sharedPreviews } from './canvas-thumbnails.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
 import { coverHue, relativeTime } from './cloud-boards.mjs';
 import { fireFeel, mountFeelOverlay, presets } from './feel.mjs';
@@ -15,12 +18,14 @@ import { soundPreferenceKey, readSoundPreference, unlockSounds, playSound } from
 import './cloud.css';
 
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+sharedPreviews.enabled = true;
 
 function BoardCover({ board }) {
   const [failed, setFailed] = useState([]);
   const covers = (board.covers || []).slice(0, 4).filter(asset => !failed.includes(asset));
+  // Covers use the stored small preview when there is one, and fall back to the original once.
   return <div className={`cloud-board-cover covers-${covers.length}`} style={{ '--cover-hue': coverHue(board.id) }} aria-hidden="true">
-    {covers.length ? covers.map(asset => <img key={asset} src={`/assets/${encodeURIComponent(asset)}`} alt="" loading="lazy" decoding="async" onError={() => setFailed(current => [...current, asset])}/>) : <span>{Array.from(board.name.trim())[0]?.toLocaleUpperCase() || 'C'}</span>}
+    {covers.length ? covers.map(asset => <img key={asset} src={`/assets/${encodeURIComponent(asset)}${failed.includes(`${asset}/thumb`) ? '' : '/thumb'}`} alt="" loading="lazy" decoding="async" onError={() => setFailed(current => [...current, current.includes(`${asset}/thumb`) ? asset : `${asset}/thumb`])}/>) : <span>{Array.from(board.name.trim())[0]?.toLocaleUpperCase() || 'C'}</span>}
   </div>;
 }
 
@@ -95,7 +100,14 @@ function BoardsHome({ user, boards, setBoards, services, onOpen, onLogout, theme
   </div>;
 }
 
-function Cursors({ peers }) {
+// Cursors move many times a second; only this layer re-renders for them, never the board.
+function store(value) {
+  const listeners = new Set();
+  return { get: () => value, set: next => { value = next; listeners.forEach(listener => listener()); }, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
+}
+
+function Cursors({ cursors, visible }) {
+  const peers = useSyncExternalStore(cursors.subscribe, cursors.get).filter(visible);
   return <ViewportPortal>{peers.filter(peer => Number.isFinite(peer.cursor?.x) && Number.isFinite(peer.cursor?.y)).map(peer => <div className="cloud-cursor" key={peer.id} style={{ transform: `translate(${peer.cursor.x}px, ${peer.cursor.y}px)`, color: peer.user.color }}>
     <svg width="18" height="23" viewBox="0 0 18 23" fill="currentColor" aria-hidden="true"><path d="M1 1 16 13l-7 1-3 7Z" stroke="white" strokeWidth="1.5"/></svg><span style={{ background: peer.user.color }}>{peer.user.name}</span>
   </div>)}</ViewportPortal>;
@@ -110,22 +122,42 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
   useEffect(() => {
     const doc = new Y.Doc(), origin = {};
     const provider = new YProvider(location.host, boardId, doc, { party: 'board-room', disableBc: true, protocol: location.protocol === 'https:' ? 'wss' : 'ws' });
+    // y-partyserver's provider sends every presence change it hears, anyone's, back to the room, so ten people multiply
+    // cursor traffic about tenfold. The room relays each update itself: send only this client's own state, renewals included.
+    provider.awareness.off('change', provider._awarenessUpdateHandler);
+    const sendPresence = () => {
+      const socket = provider.ws;
+      if (!provider.wsconnected || socket?.readyState !== socket?.OPEN) return;
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 1);
+      encoding.writeVarUint8Array(encoder, encodeAwarenessUpdate(provider.awareness, [doc.clientID]));
+      socket.send(encoding.toUint8Array(encoder));
+    };
+    const ownPresence = ({ added, updated, removed }, origin) => { if (origin === 'local' && [...added, ...updated, ...removed].includes(doc.clientID)) sendPresence(); };
+    provider.awareness.on('update', ownPresence);
     const sharing = new CodexSharing(provider.awareness);
     const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages')], { trackedOrigins: new Set([origin]) });
+    const reader = new CloudGraphReader(doc), cursors = store([]);
     const next = {
-      doc, provider, undo, origin, user, paired, openPair, unpair,
-      read: local => readCloudGraph(doc, local),
-      apply: (graph, before) => applyLocalGraph(doc, graph, before, origin),
+      doc, provider, undo, origin, user, paired, openPair, unpair, cursorStore: cursors,
+      read: local => reader.read(local),
+      apply: (graph, before) => applyLocalGraph(doc, graph, before, origin, reader.stampIds()),
       subscribe: callback => {
+        // Remote changes reach the editor once per frame, however many transactions arrive (ten people dragging send dozens a second).
+        let frame = 0, timer = 0, pending = null;
+        const flush = () => { cancelAnimationFrame(frame); clearTimeout(timer); frame = timer = 0; const feedback = pending; pending = null; if (feedback && !next.closed) callback(feedback); };
         const listener = transaction => {
           if (!transaction.changed.size || transaction.origin === origin) return;
-          callback(cloudFeedback(transaction, provider, doc.clientID, next.feedbackLive));
+          const feedback = cloudFeedback(transaction, provider, doc.clientID, next.feedbackLive), samePeer = pending?.peer && feedback.peer && pending.peer.name === feedback.peer.name && pending.peer.color === feedback.peer.color;
+          pending = pending ? { live: feedback.live, peer: samePeer ? feedback.peer : null } : feedback;
+          // Hidden tabs pause animation frames; the timer still delivers changes there, about once a second.
+          if (!frame) { frame = requestAnimationFrame(flush); timer = setTimeout(flush, 250); }
         };
         doc.on('afterTransaction', listener);
-        return () => doc.off('afterTransaction', listener);
+        return () => { doc.off('afterTransaction', listener); cancelAnimationFrame(frame); clearTimeout(timer); };
       },
     };
-    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(message); if (failure?.status === 403) unpair(); } });
+    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(message); if (failure?.status === 403) unpair(); } });
     // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
     next.sharing = sharing;
     next.shareCodex = ready => sharing.setReady(ready);
@@ -146,7 +178,10 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
       } finally { sharingBusy = false; }
     };
     next.share = share;
-    const shareTimer = setInterval(share, 2000), runsChanged = () => share();
+    // Cursor moves and run updates arrive many times a second; teammate access is re-checked a few times a second at most.
+    let shareSoon = 0;
+    const shareLater = () => { if (!shareSoon) shareSoon = setTimeout(() => { shareSoon = 0; share(); }, 200); };
+    const shareTimer = setInterval(share, 2000), runsChanged = shareLater;
     doc.getMap('runs').observe(runsChanged);
     let lastPointer = 0, lastSelection = '';
     next.pointer = position => {
@@ -161,7 +196,13 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     };
     // The room forgets presence when it hibernates, so greet each newcomer with our state again.
     const greet = ({ added }) => { const local = provider.awareness.getLocalState(); if (local && added.some(id => id !== doc.clientID)) provider.awareness.setLocalState({ ...local }); };
-    const presence = () => setPeers([...provider.awareness.getStates()].filter(([id, state]) => id !== doc.clientID && state.user).map(([id, state]) => ({ id, ...state })));
+    const presence = () => {
+      const states = [...provider.awareness.getStates()].filter(([id, state]) => id !== doc.clientID && state.user);
+      cursors.set(states.map(([id, state]) => ({ id, user: state.user, page: state.page, cursor: state.cursor })));
+      // The board re-renders only when someone joins, leaves, renames or changes page, not when a cursor moves.
+      const roster = states.map(([id, state]) => ({ id, user: state.user, page: state.page }));
+      setPeers(current => JSON.stringify(current) === JSON.stringify(roster) ? current : roster);
+    };
     const status = ({ status }) => { if (status !== 'connected') next.feedbackLive = false; setConnection(status === 'connected' ? (provider.synced ? 'live' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'); share(); };
     const sync = synced => { next.feedbackLive = synced; if (synced) { next.loaded = true; setConnection('live'); } share(); };
     const hidden = () => { if (document.hidden) next.pointer(null); };
@@ -174,14 +215,14 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
       if (document.hidden && local && Date.now() - renewed > 10000) provider.awareness.setLocalState({ ...local });
     };
     provider.awareness.setLocalState({ user, cursor: null });
-    provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.awareness.on('change', share); provider.awareness.on('update', keepAlive); provider.on('status', status); provider.on('sync', sync);
+    provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.awareness.on('change', shareLater); provider.awareness.on('update', keepAlive); provider.on('status', status); provider.on('sync', sync);
     document.addEventListener('visibilitychange', hidden);
     setSession(next);
     return () => {
       next.flush?.(); next.closed = true;
-      next.jobs.stop(); clearInterval(shareTimer); doc.getMap('runs').unobserve(runsChanged); sharing.destroy(); provider.awareness.setLocalState(null);
+      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null);
       document.removeEventListener('visibilitychange', hidden);
-      provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', share); provider.awareness.off('update', keepAlive); provider.off('status', status); provider.off('sync', sync);
+      provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
       undo.destroy(); provider.destroy(); doc.destroy();
     };
   }, [boardId, user.name, user.color]);
@@ -196,7 +237,7 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     onAllow: id => { session.sharing.allow(id); session.share(); }, onDecline: id => { session.sharing.decline(id); session.share(); },
   };
   Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView });
-  session.cursors = visible => <Cursors peers={peers.filter(visible)}/>;
+  session.cursors = visible => <Cursors cursors={session.cursorStore} visible={visible}/>;
   session.toolbar = <>
     <div className="cloud-presence" aria-label="People on this board">{[{ id: 'me', user }, ...peers].map(peer => <span key={peer.id} className="cloud-person" title={peer.user.name} style={{ '--person-color': peer.user.color }}>{peer.user.name}</span>)}</div>
     <CodexShareMenu view={sharingView} {...sharingActions}/>

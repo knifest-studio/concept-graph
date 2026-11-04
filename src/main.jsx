@@ -1,20 +1,20 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, Position, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useUpdateNodeInternals, useNodesInitialized } from '@xyflow/react';
+import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, Position, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './style.css';
-import { runTiming } from '../timing.mjs';
-import { templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
+import { formatDuration, runElapsed } from '../timing.mjs';
+import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, moveGroup, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, createViewCache, visibleTitles, moveGroup, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
-import { AnnotationTools, AuthorBadge, ColorPicker, DrawingNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
-import { boardAuthor, drawingFromStroke, groupPalette, imageAuthor, isAnnotation, penPalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
+import { AnnotationTools, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
+import { boardAuthor, drawingFromStroke, groupPalette, isAnnotation, penPalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -27,10 +27,11 @@ import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx'
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
 import { BoardPages } from './BoardPages.jsx';
 import { arrangeLayers, layerShortcut, nextLayer, stackOnTop } from './layers.mjs';
-import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
-import { gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, directInputCounts, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
+import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
+import { gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
+import { CanvasContext, useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
+import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual } from './canvas-store.mjs';
 
-const Actions = createContext(null);
 const cloud = import.meta.env.VITE_CONCEPT_GRAPH_CLOUD === '1';
 const hosted = !cloud && import.meta.env.VITE_CONCEPT_GRAPH_HOSTED === '1';
 const CloudWorkspace = cloud ? React.lazy(() => import('./CloudWorkspace.jsx')) : null;
@@ -51,6 +52,10 @@ async function request(url, options = {}) {
   return fetch(localHelper ? helperOrigin + url : url, { ...init, headers, ...(localHelper ? { targetAddressSpace: 'loopback', credentials: 'omit', cache: 'no-store' } : {}) });
 }
 const id = () => crypto.randomUUID();
+// Clearing a selection copies only what was selected, so unchanged cards keep their identity and do not re-render.
+const deselected = item => item.selected ? { ...item, selected: false } : item;
+// A card that folds or unfolds changes size; its old measurement would misplace its connections until React Flow re-measures.
+const refolded = (node, collapsed) => { const { measured, ...rest } = node; return { ...rest, data: { ...node.data, collapsed } }; };
 const busy = run => ['running', 'queued'].includes(run?.status);
 const generateShortcut = () => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘ Enter' : 'Ctrl+Enter';
 // Only an explicit selection is aligned, so drawings and stamps around other nodes never shift by accident.
@@ -80,27 +85,35 @@ function Icon({ name, size = 18 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.plus}</svg>;
 }
 
+const noInputs = { images: 0, text: 0 };
+const failedRun = run => ['error', 'failed'].includes(run?.status);
+// What a prompt shows about its latest run; `now` counts only while that run is active, so idle cards ignore the timer.
+const runView = (state, id) => {
+  const run = state.latestRun.get(id), active = busy(run);
+  return { runId: run?.id, status: run?.status, error: run?.error, active, starting: state.starting === id, byName: run?.by?.name, timer: active ? formatDuration(runElapsed(run, state.now)) : '' };
+};
+
 function TextNode(props) {
-  const actions = useContext(Actions);
-  const run = [...actions.runs].reverse().find(run => run.nodeId === props.id);
-  return <NodeFeedback id={props.id} effects={actions.effects} working={busy(run) || actions.starting === props.id}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
+  return useDetail(props.id) === 'full' ? <FullTextNode {...props}/> : <LightNode {...props}/>;
+}
+
+function FullTextNode(props) {
+  const working = useCanvasValue(state => busy(state.latestRun.get(props.id)) || state.starting === props.id);
+  return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
 }
 
 function ExpandedTextNode({ id, data, selected }) {
-  const actions = useContext(Actions);
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, updateNodeInternals]);
-  const run = [...actions.runs].reverse().find(r => r.nodeId === id);
-  const pending = busy(run) || actions.starting === id;
-  const canCancel = !cloud || actions.starting === id || run?.by?.name === actions.user?.name;
-  const timing = runTiming(actions.starting === id && !busy(run) ? null : run, actions.runs, actions.now);
+  const canvas = useCanvas();
+  const view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, inputs: inputLabel(state.inputs.get(id) || noInputs), readiness: state.readinessKey, readinessAction: state.readinessAction,
+    focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates }), shallowEqual);
+  const pending = view.active || view.starting;
+  const canCancel = !cloud || view.starting || view.byName === view.userName;
   const [draft, setDraft] = useState(data.text);
   const canRun = !!draft.trim() || !!data.template?.instructions?.trim();
   const editor = useRef(null), generateButton = useRef(null), edited = useRef(false);
-  const changeText = value => { setDraft(value); if (!edited.current) { actions.checkpoint(); edited.current = true; } actions.editText(id, value); };
-  const dictation = usePromptDictation(editor, draft, changeText, actions.dictationLanguage, actions.effects);
-  const inputText = inputLabel(actions.inputs.get(id) || { images: 0, text: 0 });
-  const blocked = actions.readiness.key !== 'ready';
+  const changeText = value => { setDraft(value); if (!edited.current) { canvas.checkpoint(); edited.current = true; } canvas.editText(id, value); };
+  const dictation = usePromptDictation(editor, draft, changeText, canvas.dictationLanguage, canvas);
+  const blocked = view.readiness !== 'ready';
   // React Flow propagates node data through its store after the input event.
   // Keep the controlled input synchronous so React never restores an old value/caret.
   useLayoutEffect(() => {
@@ -112,44 +125,44 @@ function ExpandedTextNode({ id, data, selected }) {
     input.style.height = `${input.scrollHeight}px`;
   }, [draft]);
   useEffect(() => {
-    if (actions.focusId === id) {
-      // Wait until the release event finishes focusing the source node.
-      const timer = setTimeout(() => {
-        (actions.focusControl === 'generate' && canRun ? generateButton.current || editor.current : editor.current)?.focus({ preventScroll: true });
-        actions.clearFocus();
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [actions.focusId, actions.focusControl, id]);
-  return <NodeContextMenu id={id} type="text" actions={actions}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}`} style={data.template ? { '--template-color': templateColor(data.template) } : undefined}>
+    if (!view.focus) return;
+    // Wait until the release event finishes focusing the source node.
+    const timer = setTimeout(() => {
+      (view.focus === 'generate' && canRun ? generateButton.current || editor.current : editor.current)?.focus({ preventScroll: true });
+      canvas.clearFocus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [view.focus, id]);
+  return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}`} style={data.template ? { '--template-color': templateColor(data.template) } : undefined}>
     <Handle type="target" position={Position.Left} aria-label="Connect input to prompt"/>
-    <header className="node-drag"><NodeTemplatePicker id={id} template={data.template} templates={actions.templates} switchTemplate={actions.switchTemplate} viewTemplate={actions.viewTemplate}/><button className="text-node-collapse nodrag" type="button" aria-label="Collapse text node" data-tooltip="Collapse node" onClick={() => actions.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{actions.starting === id && !busy(run) ? 'Starting…' : canCancel ? `Generating… ${timing.label}` : `Generating… (${run?.by?.name})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${actions.highlight === `${id}:generate` ? 'onboarding-highlight' : ''}`} type="button" aria-label={blocked ? 'Connect and generate' : 'Generate image'} onClick={event => actions.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? 'Write a prompt first' : `${blocked ? 'Connect and generate' : 'Generate image'} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{blocked ? 'Connect and generate' : 'Generate'}</span></button></div>{pending && canCancel && busy(run) && <button className="run-cancel" type="button" disabled={actions.starting === id} onClick={() => actions.cancel(run.id)}>Cancel</button>}</div></header>
+    <header className="node-drag"><NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate}/><button className="text-node-collapse nodrag" type="button" aria-label="Collapse text node" data-tooltip="Collapse node" onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? 'Starting…' : canCancel ? `Generating… ${view.timer}` : `Generating… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}`} type="button" aria-label={blocked ? 'Connect and generate' : 'Generate image'} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? 'Write a prompt first' : `${blocked ? 'Connect and generate' : 'Generate image'} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{blocked ? 'Connect and generate' : 'Generate'}</span></button></div>{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>Cancel</button>}</div></header>
     <div className="prompt-editor">
-      <textarea ref={editor} className="nodrag" rows={1} aria-label="Image prompt" value={draft} placeholder="Describe the image you want, then click Generate" onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) actions.run(id); } }}/>
+      <textarea ref={editor} className="nodrag" rows={1} aria-label="Image prompt" value={draft} placeholder="Describe the image you want, then click Generate" onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
       {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? 'Stop dictation' : 'Dictate prompt'} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? 'Finishing dictation…' : 'Stop dictation · Esc' : 'Dictate (speech is recognised by your browser’s service)'} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
       {dictation.active && <button type="button" className="dictation-lang nodrag" aria-label={`Dictation language ${dictation.language || '…'}, click to switch`} data-tooltip="Switch language · UK / EN / RU" disabled={!dictation.language || dictation.stopping} onPointerDown={event => event.preventDefault()} onClick={dictation.switchLanguage}>{dictation.language || '…'}</button>}
       {dictation.interim && <div className="dictation-interim" role="status">{dictation.interim}</div>}
       {dictation.active && <span className="sr-only" role="status">{dictation.stopping ? 'Finishing dictation' : dictation.listening ? `Recording ${dictation.language}` : 'Starting dictation'}</span>}
     </div>
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
-    {inputText && <div className="node-inputs">Inputs: {inputText}</div>}
-    {selected && blocked && !pending && <div className="node-readiness nodrag"><span>{actions.readiness.key === 'helper' ? 'Helper not connected.' : actions.readiness.key === 'install' ? 'Codex is not installed.' : actions.readiness.key === 'signin' ? 'Sign-in needed.' : 'Codex is not ready.'}</span><button type="button" onClick={actions.fixReadiness}>{actions.readiness.action}</button></div>}
-    {['error', 'failed'].includes(run?.status) && <div className="node-error nodrag">{run.error}{!cloud && <button type="button" className="run-details-link" onClick={() => actions.openRunDetails(run.id)}>View run details</button>}</div>}
+    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}
+    {selected && blocked && !pending && <div className="node-readiness nodrag"><span>{view.readiness === 'helper' ? 'Helper not connected.' : view.readiness === 'install' ? 'Codex is not installed.' : view.readiness === 'signin' ? 'Sign-in needed.' : 'Codex is not ready.'}</span><button type="button" onClick={canvas.fixReadiness}>{view.readinessAction}</button></div>}
+    {failedRun(view) && <div className="node-error nodrag">{view.error}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>View run details</button>}</div>}
     <Handle type="source" position={Position.Right} aria-label="Connect prompt to another node"/>
   </article></NodeContextMenu>;
 }
 
 function ImageNode(props) {
-  const actions = useContext(Actions);
-  const author = cloud && imageAuthor(props.data, actions.runs);
+  return useDetail(props.id) === 'full' ? <FullImageNode {...props}/> : <LightNode {...props}/>;
+}
+
+function FullImageNode(props) {
+  const author = useCanvasValue(state => cloud ? runAuthor(props.data, state.runById) : undefined, shallowEqual);
   // The author sits under the card and appears only on hover or selection, so it never covers the image.
-  return <NodeFeedback id={props.id} effects={actions.effects}>{props.data.collapsed ? <CollapsedNode {...props} kind="image"/> : <ExpandedImageNode {...props}/>}{author && <span className={`image-author${props.data.collapsed ? ' collapsed' : ''}`}><AuthorBadge author={author}/></span>}</NodeFeedback>;
+  return <NodeFeedback id={props.id}>{props.data.collapsed ? <CollapsedNode {...props} kind="image"/> : <ExpandedImageNode {...props}/>}{author && <span className={`image-author${props.data.collapsed ? ' collapsed' : ''}`}><AuthorBadge author={author}/></span>}</NodeFeedback>;
 }
 
 function ExpandedImageNode({ id, data }) {
-  const actions = useContext(Actions);
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, updateNodeInternals]);
+  const canvas = useCanvas();
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
   const [captionFocused, setCaptionFocused] = useState(false), [caption, setCaption] = useState(data.caption || '');
   const captionInput = useRef(null), captionBeforeEdit = useRef(), captionCheckpoint = useRef(null), captionEdited = useRef(false);
@@ -164,84 +177,132 @@ function ExpandedImageNode({ id, data }) {
   const zoom = useImageButtonZoom(hovered || focused);
   const image = useCanvasImage(assetUrl(data.asset));
   const imageElement = useRef(null);
-  useOutputReady(imageElement, image.src, id, actions.effects);
+  // The 44px button keeps its screen size, but never grows past a third of the image when zoomed out. It shows only on
+  // hover or focus, so other cards skip the layout read.
+  const expandScale = hovered || focused ? Math.min(1 / zoom, Math.min(310, imageElement.current?.offsetHeight || 310) / 3 / 44) : 1;
+  useOutputReady(imageElement, image.src, id);
   const variationButton = useRef(null);
+  const view = useCanvasValue(state => ({ variation: state.focusId === id && state.focusControl === 'variation', highlight: state.highlight === `${id}:variation` }), shallowEqual);
   useEffect(() => {
-    if (actions.focusId !== id || actions.focusControl !== 'variation') return;
-    const timer = setTimeout(() => { variationButton.current?.focus({ preventScroll: true }); actions.clearFocus(); }, 0);
+    if (!view.variation) return;
+    const timer = setTimeout(() => { variationButton.current?.focus({ preventScroll: true }); canvas.clearFocus(); }, 0);
     return () => clearTimeout(timer);
-  }, [actions.focusId, actions.focusControl, id]);
-  return <NodeContextMenu id={id} type="image" actions={actions}><div className="image-node-wrapper">
-    {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label="Image caption" title="Edit image caption" maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = actions.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); actions.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(actions.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => actions.view(id)}>
+  }, [view.variation, id]);
+  const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
+  return <NodeContextMenu id={id} type="image" actions={canvas}><div className="image-node-wrapper">
+    {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label="Image caption" title="Edit image caption" maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
-    <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio: image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined) }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || 'Concept image'} draggable="false"/>
+    {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || 'Concept image'} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
     <div className="image-shade"/>
-    <button className="image-collapse nodrag" type="button" aria-label="Collapse image node" data-tooltip="Collapse node" onClick={event => { event.stopPropagation(); actions.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
+    <button className="image-collapse nodrag" type="button" aria-label="Collapse image node" data-tooltip="Collapse node" onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
     {!data.caption?.trim() && !captionFocused && <button className="image-caption-add nodrag" type="button" aria-label="Add image caption" data-tooltip="Add image caption" onClick={event => { event.stopPropagation(); setCaptionFocused(true); }} onDoubleClick={event => event.stopPropagation()}><Icon name="tag" size={15}/></button>}
-    <button className="image-expand nodrag" style={{ '--inverse-zoom': 1 / zoom }} data-tooltip="View fullscreen" aria-label="Open image fullscreen" onClick={() => actions.view(id)}><Icon name="expand" size={24}/></button>
-    <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${actions.highlight === `${id}:variation` ? 'onboarding-highlight' : ''}`} data-tooltip="New prompt that uses this image as a reference" onClick={event => { event.stopPropagation(); actions.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>+ Prompt from this</button>
+    <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip="View fullscreen" aria-label="Open image fullscreen" onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
+    <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip="New prompt that uses this image as a reference" onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>+ Prompt from this</button>
     <Handle type="source" position={Position.Right} aria-label="Connect image as reference"/>
   </article></div></NodeContextMenu>;
 }
 
-function useOutputReady(ref, source, id, effects) {
+function useOutputReady(ref, source, id) {
+  const canvas = useCanvas(), waiting = useCanvasValue(state => state.pending.has(id));
   useEffect(() => {
     const image = ref.current;
-    if (!image || !effects.pending.has(id)) return;
+    if (!image || !waiting) return;
     let active = true;
     const ready = async () => {
       try { if (image.decode) await image.decode(); } catch {}
-      if (active && image.naturalWidth > 0) effects.outputReady(id);
+      if (active && image.naturalWidth > 0) canvas.outputReady(id);
     };
     if (image.complete) ready();
-    const failed = () => effects.outputFailed(id);
+    const failed = () => canvas.outputFailed(id);
     image.addEventListener('load', ready); image.addEventListener('error', failed);
     return () => { active = false; image.removeEventListener('load', ready); image.removeEventListener('error', failed); };
-  }, [source, id, effects.pending.has(id)]);
+  }, [source, id, waiting]);
 }
 
 function CollapsedImage({ asset, id }) {
-  const effects = useContext(Actions).effects, ref = useRef(null);
-  const image = useCanvasImage(assetUrl(asset));
-  useOutputReady(ref, image.src, id, effects);
-  return <img ref={ref} className="collapsed-node-image" src={image.src} alt="" draggable="false"/>;
+  const ref = useRef(null), image = useCanvasImage(assetUrl(asset), { small: true });
+  useOutputReady(ref, image.src, id);
+  return image.src ? <img ref={ref} className="collapsed-node-image" src={image.src} alt="" draggable="false"/> : <span className="collapsed-node-image image-placeholder"/>;
 }
 
 function CollapsedNode({ id, data, kind }) {
-  const actions = useContext(Actions);
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, updateNodeInternals]);
-  const isImage = kind === 'image';
-  const run = !isImage ? [...actions.runs].reverse().find(run => run.nodeId === id) : null;
-  return <NodeContextMenu id={id} type={kind} actions={actions}>
+  const canvas = useCanvas(), isImage = kind === 'image';
+  const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
+  return <NodeContextMenu id={id} type={kind} actions={canvas}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
       {(!isImage || data.runId) && <Handle type="target" position={Position.Left} isConnectable={!isImage} aria-label={isImage ? 'Image input' : 'Connect input to prompt'}/>}
       {isImage ? <CollapsedImage asset={data.asset} id={id}/> : <Icon name="text" size={26}/>}
       {busy(run) && <span className="collapsed-run-dot" aria-label="Generating" title="Generating…"/>}
       {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={run.error} title={run.error}/>}
-      <button className="collapsed-node-expand nodrag" type="button" aria-label={`Expand ${isImage ? 'image' : 'text'} node`} data-tooltip="Expand node" onClick={() => actions.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>
-      {isImage && <button className="collapsed-prompt-from nodrag" type="button" aria-label="+ Prompt from this" data-tooltip="New prompt that uses this image as a reference" onClick={() => actions.promptFrom(id)}><Icon name="plus" size={15}/></button>}
+      <button className="collapsed-node-expand nodrag" type="button" aria-label={`Expand ${isImage ? 'image' : 'text'} node`} data-tooltip="Expand node" onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>
+      {isImage && <button className="collapsed-prompt-from nodrag" type="button" aria-label="+ Prompt from this" data-tooltip="New prompt that uses this image as a reference" onClick={() => canvas.promptFrom(id)}><Icon name="plus" size={15}/></button>}
       <Handle type="source" position={Position.Right} aria-label={isImage ? 'Connect image as reference' : 'Connect prompt to another node'}/>
     </article>
   </NodeContextMenu>;
 }
 
-function GroupNode({ id, data }) {
-  const actions = useContext(Actions);
-  const editing = actions.renamingGroup === id;
+// Zoomed-out cards keep their size, colour and connection points but drop controls, menus, badges and effects.
+// A prompt takes the height React Flow knows (measured, or estimated if never drawn), so crossing the zoom threshold moves nothing.
+function LightNode({ id, type, data, height }) {
+  const isImage = type === 'image';
+  const view = useCanvasValue(state => {
+    const run = !isImage && state.latestRun.get(id);
+    return { working: busy(run) || state.starting === id, error: failedRun(run) ? run.error || 'Generation failed' : '', inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), create: state.detail !== 'tiny' || !state.crowded };
+  }, shallowEqual);
+  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || '');
+  if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
+    {(!isImage || data.runId) && <i className="lod-handle target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
+    {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<i className="lod-handle source"/>
+  </article>;
+  // Captions are left out zoomed out: at this size they would only be specks of text over the board.
+  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <i className="lod-handle target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><i className="lod-handle source"/></article></div>;
+  return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}`} style={{ ...template, height }}>
+    <i className="lod-handle target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text.length > 600 ? `${text.slice(0, 600)}…` : text || 'Describe the image you want, then click Generate'}</div>
+    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}{view.error && <div className="node-error">{view.error}</div>}<i className="lod-handle source"/>
+  </article>;
+}
+
+function LightImage({ id, asset, aspect, create, collapsed = false }) {
+  const ref = useRef(null), image = useCanvasImage(assetUrl(asset), { small: true, create });
+  useOutputReady(ref, image.src, id);
+  const className = collapsed ? 'collapsed-node-image' : 'image-content', aspectRatio = collapsed ? undefined : image.aspectRatio || (aspect ? `1 / ${aspect}` : undefined);
+  return image.src ? <img ref={ref} className={className} src={image.src} style={aspectRatio ? { aspectRatio } : undefined} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt="" draggable="false"/>
+    : <span className={`${className} image-placeholder`} style={collapsed ? undefined : { aspectRatio: aspectRatio || '1' }}/>;
+}
+
+function GroupNode(props) {
+  return useDetail(props.id) === 'full' ? <FullGroupNode {...props}/> : <LightGroupNode {...props}/>;
+}
+
+function FullGroupNode({ id, data }) {
+  const canvas = useCanvas(), editing = useCanvasValue(state => state.renamingGroup === id);
   const [name, setName] = useState(data.name), cancelled = useRef(false), input = useRef(null);
   useLayoutEffect(() => { if (editing) { cancelled.current = false; setName(data.name); input.current?.focus({ preventScroll: true }); input.current?.select(); } }, [editing]);
-  const save = () => { if (!cancelled.current && name.trim()) actions.editGroup(id, { name: name.trim() }); actions.renameGroup(null); };
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, data.collapsed, updateNodeInternals]);
-  return <NodeContextMenu id={id} type="group" actions={actions}><article data-feel-node={id} className={`group-frame ${data.collapsed ? 'collapsed' : ''} ${data.color ? 'colored' : ''}`} style={data.color ? { background: data.color, '--group-ink': contrastColor(data.color) } : undefined}>
-    <header><button className={`group-toggle nodrag ${data.collapsed ? '' : 'expanded'}`} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${data.name}`} data-tooltip={data.collapsed ? 'Expand group' : 'Collapse group'} onClick={() => actions.toggleGroup(id)}><Icon name="chevron" size={16}/></button>{editing ? <input ref={input} className="group-name-input nodrag" aria-label="Group name" maxLength={80} value={name} onChange={event => setName(event.target.value)} onBlur={save} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { cancelled.current = true; actions.renameGroup(null); } }}/> : <strong className="nodrag" tabIndex={0} role="button" title="Double-click to rename group" onDoubleClick={() => actions.renameGroup(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); actions.renameGroup(id); } }}>{data.name}</strong>}<span>{data.count} nodes</span><ColorPicker color={data.color} colors={groupPalette} label="Group background color" allowDefault custom onChange={color => actions.editGroup(id, { color })}/><button className="icon-button nodrag" aria-label={`Ungroup ${data.name}`} data-tooltip="Ungroup; keep nodes" onClick={() => actions.ungroup(id)}><Icon name="ungroup" size={16}/></button></header>
+  const save = () => { if (!cancelled.current && name.trim()) canvas.editGroup(id, { name: name.trim() }); canvas.renameGroup(null); };
+  return <NodeContextMenu id={id} type="group" actions={canvas}><article data-feel-node={id} className={`group-frame ${data.collapsed ? 'collapsed' : ''} ${data.color ? 'colored' : ''}`} style={data.color ? { background: data.color, '--group-ink': contrastColor(data.color) } : undefined}>
+    <header><button className={`group-toggle nodrag ${data.collapsed ? '' : 'expanded'}`} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${data.name}`} data-tooltip={data.collapsed ? 'Expand group' : 'Collapse group'} onClick={() => canvas.toggleGroup(id)}><Icon name="chevron" size={16}/></button><div className="group-label">{editing ? <input ref={input} className="group-name-input nodrag" aria-label="Group name" maxLength={80} value={name} onChange={event => setName(event.target.value)} onBlur={save} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { cancelled.current = true; canvas.renameGroup(null); } }}/> : <strong tabIndex={0} role="button" title="Double-click to rename group" onDoubleClick={() => canvas.renameGroup(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameGroup(id); } }}>{data.name}</strong>}</div><span>{data.count} nodes</span><ColorPicker color={data.color} colors={groupPalette} label="Group background color" allowDefault custom onChange={color => canvas.editGroup(id, { color })}/><button className="icon-button nodrag" aria-label={`Ungroup ${data.name}`} data-tooltip="Ungroup; keep nodes" onClick={() => canvas.ungroup(id)}><Icon name="ungroup" size={16}/></button></header>
     {data.collapsed && <><Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} isConnectable={false}/></>}
   </article></NodeContextMenu>;
 }
+
+function LightGroupNode({ id, data }) {
+  return <article data-feel-node={id} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''} ${data.color ? 'colored' : ''}`} style={data.color ? { background: data.color, '--group-ink': contrastColor(data.color) } : undefined}>
+    <header/>{data.collapsed && <><i className="lod-handle target"/><i className="lod-handle source"/></>}
+  </article>;
+}
+
+// Zoomed out, group titles are drawn above every card and connection at a readable size, so each group is still named
+// from afar. A group being renamed keeps its own editable title.
+function GroupTitles({ frames }) {
+  const { detail, renaming } = useCanvasValue(state => ({ detail: state.detail, renaming: state.renamingGroup }), shallowEqual);
+  const zoom = useStore(state => detail === 'full' ? 1 : state.transform[2]), shown = useMemo(() => detail === 'full' ? null : visibleTitles(frames, zoom), [frames, zoom, detail]);
+  if (detail === 'full') return null;
+  return <ViewportPortal>{frames.map(frame => frame.id === renaming || !shown.has(frame.id) ? null : <div key={frame.id} className={`group-title${frame.selected ? ' selected' : ''}`} style={{ transform: `translate(${frame.position.x}px, ${frame.position.y}px)`, '--frame-width': `${frame.width}px` }} aria-hidden="true"><span>{frame.data.name}</span></div>)}</ViewportPortal>;
+}
+
 function AnnotationNode(props) {
-  const actions = useContext(Actions), Component = { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode }[props.type];
-  return <Component {...props} actions={actions}/>;
+  const canvas = useCanvas(), Component = useDetail(props.id) === 'full' ? { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode }[props.type] : LightAnnotation;
+  return <Component {...props} actions={canvas}/>;
 }
 const nodeTypes = { text: TextNode, image: ImageNode, group: GroupNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode };
 function FeedbackEdge(props) {
@@ -249,6 +310,12 @@ function FeedbackEdge(props) {
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
 }
 const edgeTypes = { feedback: FeedbackEdge };
+// Constant props: React Flow copies changed props into its store, and every copy re-runs every card's and edge's selector.
+const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], proOptions = { hideAttribution: true };
+// One generation in the History tab. Memoized: a board can hold thousands, and only active runs need the 1 s timer.
+const HistoryItem = React.memo(function HistoryItem({ run, now, page, canCancel, canvas }) {
+  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip="Show this generation" onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : run.status}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.outputIds.length} image{run.outputIds.length === 1 ? '' : 's'}{page && ` · ${page}`}</small></button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip="Cancel generation" onClick={() => canvas.cancel(run.id)}>Cancel run</button>}{run.error && <p>{run.error}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>Run details</button>}</div>;
+});
 const cleanNodes = nodes => nodes.map(({ id, type, position, data, page, z }) => ({ id, type, position, data, ...(page === undefined ? {} : { page }), ...(z === undefined ? {} : { z }) }));
 const cleanEdges = edges => edges.map(({ id, source, target }) => ({ id, source, target }));
 const historySignature = (nodes, edges, groups, pages) => JSON.stringify({ nodes: cleanNodes(nodes), edges: cleanEdges(edges), groups: cleanGroups(groups), pages });
@@ -476,14 +543,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   modalOpen.current = !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   const flow = useReactFlow();
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
-  const scoped = pageContent({ nodes, edges, groups }, activePage, pages);
-  const alignable = alignIds(scoped), canAlign = scoped.nodes.filter(node => alignable.has(node.id) && !isAnnotation(node)).length >= 2;
+  const scoped = useMemo(() => pageContent({ nodes, edges, groups }, activePage, pages), [nodes, edges, groups, activePage, pages]);
+  // Board-sized derivations are memoized, so the 1 s generation timer and other small updates do no per-node work.
+  const canAlign = useMemo(() => { const alignable = alignIds(scoped); return scoped.nodes.filter(node => alignable.has(node.id) && !isAnnotation(node)).length >= 2; }, [scoped]);
+  // Fitting may zoom out past the 0.15 gesture limit only on pages small enough to draw every card at once.
+  const fitFloor = () => pageGraph().nodes.length > 1500 ? .15 : .01;
   useEffect(() => {
     if (!loaded || openingViewDone.current) return;
     if (!scoped.nodes.length) { openingViewDone.current = true; return; }
     if (!nodesInitialized || !flow.viewportInitialized) return;
     openingViewDone.current = true;
-    const page = activePageRef.current, fit = () => flow.fitView({ padding: .18, minZoom: .01, maxZoom: 1 });
+    const page = activePageRef.current, fit = () => flow.fitView({ padding: .18, minZoom: fitFloor(), maxZoom: 1 });
     fit();
     // Image nodes grow as their pictures load, so refit briefly unless the viewer has moved the canvas.
     [400, 1000, 2000, 3500].forEach(ms => setTimeout(() => { if (!viewerMoved.current && activePageRef.current === page) fit(); }, ms));
@@ -492,8 +562,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const readiness = generationReadiness({ required: helperNeeded, paired: cloud ? cloudSession.paired : !!helperSession?.paired, online: !helperOffline, status, teammate: teammateCodex });
   const ownReady = (readiness.own || readiness).key === 'ready';
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
-  const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] });
-  const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false);
+  const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] }), nodeCommit = useRef(null);
+  const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false), cloudRuns = useRef({ source: null, shown: new WeakMap() });
   const dirty = useRef(false), version = useRef(0), saving = useRef(null), saveTimer = useRef(null), viewport = useRef({ x: 0, y: 0, zoom: 1 });
   const history = useRef([]), future = useRef([]), lastHistory = useRef('');
   const remoteGroups = useRef({ version: 0, added: new Map() });
@@ -502,7 +572,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const saveFn = useRef(null);
   const notify = useCallback(message => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
   const refreshTemplates = useCallback(async () => {
-    try { const result = await api('/api/templates'); setTemplates(result.templates); setTemplatesError(''); }
+    // An unchanged library keeps its identity, so the 10 s team refresh does not re-render every prompt.
+    try { const result = await api('/api/templates'); setTemplates(current => JSON.stringify(current) === JSON.stringify(result.templates) ? current : result.templates); setTemplatesError(''); }
     catch { setTemplatesError('Custom nodes unavailable.'); }
   }, []);
   useEffect(() => {
@@ -525,7 +596,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   }, [notify]);
   useEffect(() => { if (cloudSession) cloudSession.selection([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).map(group => group.id)]); }, [nodes, groups, activePage]);
   useEffect(() => { cloudSession?.page?.(activePage); }, [activePage]);
-  const putNodes = value => { nodeRef.current = typeof value === 'function' ? value(nodeRef.current) : value; setNodes(nodeRef.current); };
+  const putNodes = value => { nodeRef.current = typeof value === 'function' ? value(nodeRef.current) : value; clearTimeout(nodeCommit.current); nodeCommit.current = null; setNodes(nodeRef.current); };
+  // Typing updates the board (saves, sync, generation) at once but the editor's React state at most every 200ms,
+  // so a keystroke re-renders only its own card. The commit renders synchronously, so no keystroke can land between.
+  const putNodesSoon = update => {
+    nodeRef.current = update(nodeRef.current);
+    nodeCommit.current ||= setTimeout(() => { nodeCommit.current = null; if (alive.current) flushSync(() => setNodes(nodeRef.current)); }, 200);
+  };
   const putEdges = value => { edgeRef.current = typeof value === 'function' ? value(edgeRef.current) : value; setEdges(edgeRef.current); };
   const putGroups = value => { groupRef.current = typeof value === 'function' ? value(groupRef.current) : value; setGroups(groupRef.current); };
   const putPages = value => { pagesRef.current = typeof value === 'function' ? value(pagesRef.current) : value; setPages(pagesRef.current); };
@@ -564,8 +641,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (showPage(nodePage(node, pagesRef.current), false)) preserveSelection = false;
     const expand = node.data.collapsed || groupRef.current.some(group => group.collapsed && group.nodeIds.includes(nodeId));
     if (expand && !preserveSelection) checkpoint();
-    putNodes(current => current.map(node => ({ ...node, selected: node.id === nodeId || (preserveSelection && node.selected), data: node.id === nodeId && node.data.collapsed ? { ...node.data, collapsed: false } : node.data })));
-    putGroups(current => current.map(group => ({ ...group, selected: false, collapsed: group.nodeIds.includes(nodeId) ? false : group.collapsed })));
+    putNodes(current => current.map(node => {
+      const selected = node.id === nodeId || (preserveSelection && !!node.selected), opened = node.id === nodeId && node.data.collapsed;
+      return opened ? { ...refolded(node, false), selected } : !!node.selected === selected ? node : { ...node, selected };
+    }));
+    putGroups(current => current.map(group => group.selected || (group.collapsed && group.nodeIds.includes(nodeId)) ? { ...group, selected: false, collapsed: group.nodeIds.includes(nodeId) ? false : group.collapsed } : group));
     if (expand) markDirty();
     setFocusControl(control); setFocusId(nodeId);
     clearTimeout(highlightTimer.current); setHighlight(control === 'text' ? null : `${nodeId}:${control}`);
@@ -589,7 +669,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     alive.current = true;
     const cancelIntent = () => { pendingIntent.current = null; };
     window.addEventListener('pagehide', cancelIntent);
-    return () => { alive.current = false; cancelIntent(); clearTimeout(highlightTimer.current); window.removeEventListener('pagehide', cancelIntent); };
+    return () => { alive.current = false; cancelIntent(); clearTimeout(highlightTimer.current); clearTimeout(nodeCommit.current); window.removeEventListener('pagehide', cancelIntent); };
   }, []);
   useEffect(() => {
     if (!helperNeeded || (!cloudSession?.paired && !helperSession?.paired)) return;
@@ -626,8 +706,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (!feedbackSeeded.current || feedback) effects.observeGraph(graph, feedback || {});
       feedbackSeeded.current = true;
       cloudBase.current = graph; dirty.current = false;
-      putPages(boardPages(graph)); putNodes(graph.nodes); putEdges(graph.edges); putGroups(graph.groups);
-      setRuns(graph.runs.map(run => ({ ...run, createdAt: run.createdAt || run.startedAt, outputIds: run.outputIds || [] })));
+      // Lists the reader returned unchanged are the editor's own arrays; skipping them avoids a board-wide re-render.
+      const pages = boardPages(graph);
+      if (JSON.stringify(pages) !== JSON.stringify(pagesRef.current)) putPages(pages);
+      if (graph.nodes !== nodeRef.current) putNodes(graph.nodes);
+      if (graph.edges !== edgeRef.current) putEdges(graph.edges);
+      if (graph.groups !== groupRef.current) putGroups(graph.groups);
+      if (graph.runs !== cloudRuns.current.source) {
+        const known = cloudRuns.current.shown;
+        cloudRuns.current.source = graph.runs;
+        setRuns(graph.runs.map(run => { if (!known.has(run)) known.set(run, { ...run, createdAt: run.createdAt || run.startedAt, outputIds: run.outputIds || [] }); return known.get(run); }));
+      }
     } finally { applyingCloud.current = false; }
   };
   const markDirty = (drag = false) => {
@@ -952,7 +1041,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     checkpoint();
     const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || freeSpot(pageGraph(), flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 })), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}) } });
     effects.createNodes([node.id]);
-    putNodes(current => [...current.map(n => ({ ...n, selected: false })), { ...node, selected: true }]); markDirty();
+    putNodes(current => [...current.map(deselected), { ...node, selected: true }]); markDirty();
     focusNode(node.id); guide.report({ type: 'prompt' });
     return node;
   };
@@ -1015,9 +1104,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     copied = { ...copied, nodes: stackOnTop(nodeRef.current, copied.nodes).map(placeOnPage) };
     checkpoint();
     effects.createNodes(copied.nodes.map(node => node.id)); effects.createEdges(copied.edges.map(edge => edge.id), copied.edges.map(edge => edge.target));
-    putNodes(current => [...current.map(node => ({ ...node, selected: false })), ...copied.nodes]);
-    putEdges(current => [...current.map(edge => ({ ...edge, selected: false })), ...copied.edges]);
-    putGroups(current => current.map(group => ({ ...group, selected: false })));
+    putNodes(current => [...current.map(deselected), ...copied.nodes]);
+    putEdges(current => [...current.map(deselected), ...copied.edges]);
+    putGroups(current => current.map(deselected));
     markDirty();
     const prompt = copied.nodes.find(node => node.type === 'text');
     if (prompt) { focusNode(prompt.id, 'text', true); guide.report({ type: 'prompt' }); }
@@ -1061,8 +1150,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     checkpoint();
     const usedNames = new Set(groupRef.current.map(group => group.name));
     let number = 1; while (usedNames.has(`Group ${number}`)) number++;
-    putGroups(current => [...current.map(group => ({ ...group, selected: false })), { id: id(), name: `Group ${number}`, nodeIds: members.map(node => node.id), collapsed: false, selected: true }]);
-    putNodes(current => current.map(node => ({ ...node, selected: false }))); markDirty();
+    putGroups(current => [...current.map(deselected), { id: id(), name: `Group ${number}`, nodeIds: members.map(node => node.id), collapsed: false, selected: true }]);
+    putNodes(current => current.map(deselected)); markDirty();
   };
   const editGroup = (groupId, patch) => {
     if (mcpLocked.current) return;
@@ -1084,12 +1173,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const addAnnotation = value => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
-    if (nodeRef.current.length >= 2000) { notify('Canvas is too large.'); return; }
+    if (nodeRef.current.length >= maxNodes) { notify('Canvas is too large.'); return; }
     const author = value.type !== 'drawing' && boardAuthor(cloudSession?.user);
     const node = placeOnPage({ ...value, id: id(), z: nextLayer(nodeRef.current), selected: true, data: { ...value.data, createdAt: new Date().toISOString(), ...(author ? { author } : {}) } });
     checkpoint();
-    putNodes(current => [...current.map(node => ({ ...node, selected: false })), node]);
-    putGroups(current => current.map(group => ({ ...group, selected: false }))); markDirty();
+    putNodes(current => [...current.map(deselected), node]);
+    putGroups(current => current.map(deselected)); markDirty();
     if (node.type === 'sticky') { setFocusControl('sticky'); setFocusId(node.id); }
   };
   // Menu actions on an unselected node arrange only that node, like Figma's right-click selection.
@@ -1145,7 +1234,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const toggleNodeCollapsed = nodeId => {
     if (mcpLocked.current || !nodeRef.current.some(node => node.id === nodeId)) return;
     checkpoint();
-    putNodes(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, collapsed: !node.data.collapsed } } : node));
+    putNodes(current => current.map(node => node.id === nodeId ? refolded(node, !node.data.collapsed) : node));
     markDirty();
   };
   const toggleGroup = groupId => {
@@ -1205,7 +1294,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const switched = showPage(page ? nodePage(page, pagesRef.current) : resolvePage(pagesRef.current, run.page), false);
     afterPageShown(switched, () => {
       const targets = generationFocusNodes(run, flow.getNodes(), groupRef.current);
-      if (targets.length) flow.fitView({ nodes: targets, duration: 350, padding: .25, minZoom: .01, maxZoom: 1 });
+      if (targets.length) flow.fitView({ nodes: targets, duration: 350, padding: .25, minZoom: fitFloor(), maxZoom: 1 });
     });
   };
   const nodesChanged = changes => {
@@ -1502,42 +1591,93 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       else { notify('Generate an image first, then choose + Prompt from this.'); gettingStartedStep('generate'); }
     }
   };
-  const view = canvasView(scoped.nodes, scoped.edges, scoped.groups);
-  view.edges = view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge);
-  const fitNodes = view.nodes.filter(node => node.selected && !node.hidden);
-  const viewNode = nodes.find(node => node.id === viewId);
+  const viewCache = useRef(null); viewCache.current ||= createViewCache();
+  const view = useMemo(() => canvasView(scoped.nodes, scoped.edges, scoped.groups, viewCache.current), [scoped]);
+  const frames = useMemo(() => view.nodes.filter(node => node.type === 'group'), [view.nodes]);
+  // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
+  const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
+  const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
+  const viewNode = viewId ? nodes.find(node => node.id === viewId) : undefined;
   const viewRun = runs.find(run => run.id === viewNode?.data.runId);
   const viewInputs = viewRun?.snapshot?.filter(node => node.id !== viewRun.nodeId) || [];
   const viewInfo = viewNode && imageInfo(viewNode, runs, viewSize?.asset === viewNode.data.asset ? viewSize : undefined);
-  const selectedNodes = scoped.nodes.filter(n => n.selected), selectedCount = selectedNodes.length + scoped.groups.filter(group => group.selected).length;
-  const canGroup = selectedNodes.length >= 2 && !groups.some(group => group.selected || group.nodeIds.some(id => selectedNodes.some(node => node.id === id)));
-  const inputs = useMemo(() => directInputCounts({ nodes, edges }), [nodes, edges]);
-  const actions = { renamingGroup, renameGroup: setRenamingGroup, editGroup, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), dictationLanguage, effects, user: cloudSession?.user, inputs, readiness, fixReadiness, promptFrom, highlight, focusControl, runs, edges, now, starting, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, templates, saveTemplateFromNode, switchTemplate, focusId, clearFocus: () => setFocusId(null), toggleNodeCollapsed, toggleGroup, ungroup, editText: (nodeId, text) => { if (mcpLocked.current) return; putNodes(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); }, editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodes(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); }, run, cancel, view: setViewId, viewTemplate: setTemplateDetails };
+  const { selectedCount, canGroup } = useMemo(() => {
+    const selectedNodes = scoped.nodes.filter(n => n.selected), ids = new Set(selectedNodes.map(node => node.id));
+    return { selectedCount: selectedNodes.length + scoped.groups.filter(group => group.selected).length, canGroup: selectedNodes.length >= 2 && !groups.some(group => group.selected || group.nodeIds.some(id => ids.has(id))) };
+  }, [scoped, groups]);
+  const inputMemo = useRef(null);
+  const inputs = useMemo(() => inputMemo.current = inputCounts(nodes, edges, inputMemo.current), [nodes, edges]);
+  const lookups = useMemo(() => runLookups(runs), [runs]);
+  const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
+  const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
+  const edgesChanged = changes => { if (mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (changes.some(c => c.type !== 'select')) markDirty(); };
+  const connectStart = (_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === params.nodeId)?.type || 'text'); };
+  const nodeDragStart = (event, node) => { if (mcpLocked.current) return; effects.dragStart(event, node); moving.current = true; checkpoint(); };
+  const nodeDrag = (event, node) => { if (!mcpLocked.current) effects.dragMove(event, node); };
+  const moveStart = event => {
+    moving.current = true;
+    if (event) viewerMoved.current = true;
+    // A canvas gesture keeps ownership when the pointer crosses an editor.
+    if (document.activeElement?.matches('.text-node textarea')) document.activeElement.blur();
+  };
+  const moveEnd = (_, next) => {
+    moving.current = false; if (mcpLocked.current) return;
+    if (openingViewDone.current) { pagePreference.current.viewports[activePageRef.current] = next; rememberPage(); }
+    // The board's saved viewport remains the first page's fallback.
+    if (activePageRef.current === defaultPageId) { viewport.current = next; if (loaded && !cloud) markDirty(); }
+  };
+  // Cards and React Flow get functions that never change identity and always run the latest code, so an editor render
+  // re-renders no card by itself; changing values reach cards through the canvas store below.
+  const latest = useRef(null);
+  latest.current = { renameGroup: setRenamingGroup, editGroup, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, clearFocus: () => setFocusId(null), toggleNodeCollapsed, toggleGroup, ungroup,
+    editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
+    editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
+    run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
+    nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null) };
+  const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renamingGroup, readinessKey: readiness.key, readinessAction: readiness.action,
+    userName: cloudSession?.user?.name, inputs: inputs.counts, templates, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded };
+  const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
+  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage }));
+  useLayoutEffect(() => { canvasStore.update(canvasState); });
+  const flowStore = useStoreApi();
+  // Zoom reaches the canvas as a CSS variable (group titles) and a detail bucket (card variants), without rendering anything.
+  // The canvas element can mount after the first viewport, so it is also brought up to date when it appears.
+  const showZoom = element => { if (!element) return; element.style.setProperty('--zoom', flowStore.getState().transform[2]); element.dataset.detail = canvasStore.get().detail; };
+  const canvasRef = useCallback(element => { canvasElement.current = element; showZoom(element); }, []);
+  useLayoutEffect(() => {
+    let zoom;
+    const follow = ({ transform: [, , next] }) => {
+      if (next === zoom) return;
+      zoom = next;
+      canvasStore.update({ detail: detailLevel(next, canvasStore.get().detail) });
+      showZoom(canvasElement.current);
+    };
+    follow(flowStore.getState());
+    return flowStore.subscribe(follow);
+  }, []);
+  // An output that lands off screen, inside a folded group or on a far zoomed-out crowded board is never drawn,
+  // so its arrival cannot wait for the image to decode.
+  useEffect(() => {
+    if (!effects.pending.size) return;
+    const viewport = flow.getViewport(), { width, height } = flowStore.getState(), far = crowded && canvasStore.get().detail === 'tiny';
+    for (const node of view.nodes) if (effects.pending.has(node.id) && (far || node.hidden || outsideViewport(node, viewport, width, height))) effects.outputReady(node.id);
+  });
+  const connectionLineStyle = useMemo(() => ({ stroke: connectionColor(connectionType), strokeWidth: 2 }), [connectionType]);
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
-  return <Actions.Provider value={actions}><div className="app-shell" data-cloud={cloud || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
+  return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
     <header className="app-header"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? 'Live' : cloudSession.connection === 'offline' ? 'Offline · edits kept in this tab' : 'Connecting…' : transfer === 'export' ? 'Exporting board…' : transfer === 'import' ? 'Importing board…' : switching ? 'Switching board…' : saved}</div><div className="header-right">{cloudSession?.toolbar}{desktopMode && <button className="mcp-connect-button" type="button" aria-label="Connect MCP" onClick={() => setAgentConnect(true)} data-tooltip="Connect MCP"><Icon name="branch" size={15}/><span>Connect MCP</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={`Sounds ${effects.sounds ? 'on' : 'off'}`} aria-pressed={effects.sounds} data-tooltip={`Sounds ${effects.sounds ? 'on' : 'off'}`} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><button className="getting-started-help" type="button" aria-label="Getting started" data-tooltip="Getting started and canvas tips" onClick={guide.reopen}>?</button><button className="theme-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} data-tooltip={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || 'Check Codex connection'}><span/>{status.connected && status.signedIn && status.imageGeneration ? 'Codex connected' : desktopMode && status.connected && !status.signedIn ? 'Sign in with ChatGPT' : cloud && !cloudSession.paired ? 'Pair helper' : 'Check Codex'}</button>}</div></header>
     <aside className="sidebar" inert={!!transfer || switching ? true : undefined}>
       <div className="board-heading"><span className="eyebrow">YOUR BOARDS</span><div className="board-picker"><select data-tooltip="Switch board" aria-label="Board" value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select><button data-tooltip="Rename board" aria-label="Rename board" className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button></div><button className="new-board" data-tooltip="Create a new board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> New board</button>{!cloud && <div className="board-transfer"><button data-tooltip="Save this board with its images" aria-label="Export board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> Export</button><button data-tooltip="Import a .conceptgraph file as a new board" aria-label="Import board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> Import</button></div>}</div>
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
       <div className="sidebar-tabs"><button data-tooltip="Show creation tools" className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>Create</button><button data-tooltip="View generation history" className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History <small>{runs.length}</small></button></div>
-      {tab === 'canvas' ? <><div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip="Add text prompt · T" aria-label="Add text prompt" className="add-prompt-tool" onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>+ Add text prompt</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip="Upload reference images" aria-label="Add reference image" onClick={() => fileInput.current.click()}><span className="tool-icon image"><Icon name="image"/></span><span>Reference image</span></button></div><section className="custom-nodes" aria-label="Custom nodes"><div className="custom-nodes-heading"><span className="eyebrow">CUSTOM NODES</span><button type="button" className="icon-button" aria-label="Create custom node" data-tooltip="Create custom node" disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button></div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} Retry</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" onClick={() => addText(undefined, '', template)} data-tooltip="Add custom node to board"><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button><button className="icon-button custom-node-edit" type="button" aria-label={`Edit ${template.name}`} data-tooltip="Edit custom node" onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button></div>)}</div> : <p className="custom-nodes-empty">Save instructions and images to use again.</p>}</section><p className="paste-hint"><kbd>⌘ V</kbd> Paste text or an image.<br/>Drag a node’s output into empty space to add a prompt.<br/>Select nodes, then group them with the bottom toolbar.</p></> : <div className="history-list">{!runs.length && <p className="empty-history">Generations on this board will appear here.</p>}{[...runs].reverse().map(run => <div className={`history-item ${run.status}`} key={run.id}><button className="history-focus" data-tooltip="Show this generation" onClick={() => showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? runTiming(run, runs, now).label : run.status}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.outputIds.length} image{run.outputIds.length === 1 ? '' : 's'}{pages.length > 1 && ` · ${pages.find(page => page.id === resolvePage(pages, run.page))?.name}`}</small></button>{busy(run) && (!cloud || run.by?.name === cloudSession.user.name) && <button className="cancel-link" data-tooltip="Cancel generation" onClick={() => cancel(run.id)}>Cancel run</button>}{run.error && <p>{run.error}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => openRunDetails(run.id)}>Run details</button>}</div>)}</div>}
+      {tab === 'canvas' ? <><div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip="Add text prompt · T" aria-label="Add text prompt" className="add-prompt-tool" onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>+ Add text prompt</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip="Upload reference images" aria-label="Add reference image" onClick={() => fileInput.current.click()}><span className="tool-icon image"><Icon name="image"/></span><span>Reference image</span></button></div><section className="custom-nodes" aria-label="Custom nodes"><div className="custom-nodes-heading"><span className="eyebrow">CUSTOM NODES</span><button type="button" className="icon-button" aria-label="Create custom node" data-tooltip="Create custom node" disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button></div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} Retry</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" onClick={() => addText(undefined, '', template)} data-tooltip="Add custom node to board"><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button><button className="icon-button custom-node-edit" type="button" aria-label={`Edit ${template.name}`} data-tooltip="Edit custom node" onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button></div>)}</div> : <p className="custom-nodes-empty">Save instructions and images to use again.</p>}</section><p className="paste-hint"><kbd>⌘ V</kbd> Paste text or an image.<br/>Drag a node’s output into empty space to add a prompt.<br/>Select nodes, then group them with the bottom toolbar.</p></> : <div className="history-list">{!runs.length && <p className="empty-history">Generations on this board will appear here.</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!cloud || run.by?.name === cloudSession.user.name} canvas={canvas}/>)}</div>}
       <div className="sidebar-bottom"><span className="legend-text"/> Text <span className="legend-image"/> Image</div>
     </aside>
-    <main ref={canvasElement} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (!mcpLocked.current && [...event.dataTransfer.types].includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (!mcpLocked.current) addImages([...event.dataTransfer.files], flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })); }}>
+    <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (!mcpLocked.current && [...event.dataTransfer.types].includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (!mcpLocked.current) addImages([...event.dataTransfer.files], flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} onCancel={cancel} onFocus={showRun}/>}</div>
-      <ReactFlow nodes={view.nodes} edges={view.edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} elevateNodesOnSelect={false} onNodesChange={nodesChanged} onEdgesChange={changes => { if (mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (changes.some(c => c.type !== 'select')) markDirty(); }} onConnect={connect} onConnectStart={(_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === params.nodeId)?.type || 'text'); }} onConnectEnd={connectEnd} connectionLineStyle={{ stroke: connectionColor(connectionType), strokeWidth: 2 }} onNodeDragStart={(event, node) => { if (mcpLocked.current) return; effects.dragStart(event, node); moving.current = true; checkpoint(); }} onNodeDrag={(event, node) => { if (!mcpLocked.current) effects.dragMove(event, node); }} onNodeDragStop={nodeDragStopped} onMoveStart={event => {
-        moving.current = true;
-        if (event) viewerMoved.current = true;
-        // A canvas gesture keeps ownership when the pointer crosses an editor.
-        if (document.activeElement?.matches('.text-node textarea')) document.activeElement.blur();
-      }} onMoveEnd={(_, view) => {
-        moving.current = false; if (mcpLocked.current) return;
-        if (openingViewDone.current) { pagePreference.current.viewports[activePageRef.current] = view; rememberPage(); }
-        // The board's saved viewport remains the first page's fallback.
-        if (activePageRef.current === defaultPageId) { viewport.current = view; if (loaded && !cloud) markDirty(); }
-      }} onPaneClick={() => setViewId(null)} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select'} nodesConnectable={tool === 'select'} elementsSelectable={tool === 'select'} defaultEdgeOptions={{ type: 'default' }} minZoom={.15} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} panOnDrag={[1, 2]} selectionKeyCode="Shift" multiSelectionKeyCode="Meta" proOptions={{ hideAttribution: true }}>
-        <Background color="var(--grid)" gap={24} size={1}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/>
+      <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select'} nodesConnectable={tool === 'select'} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} minZoom={.15} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} panOnDrag={panButtons} selectionKeyCode="Shift" multiSelectionKeyCode="Meta" proOptions={proOptions}>
+        <Background color="var(--grid)" gap={24} size={1}/><GroupTitles frames={frames}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">ONE IDEA. MANY DIRECTIONS.</span><h2>What are you imagining?</h2><p>Describe an image, then click Generate.</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> Add text prompt</button></div>}
       <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} ready={readiness.key === 'ready'} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>
@@ -1580,7 +1720,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         <div className="lightbox-actions"><button data-tooltip="Download original image" onClick={() => downloadImage(viewNode.data.asset)}><Icon name="download" size={17}/> Download original</button></div>
       </div>
     </div></div>}
-  </div>{mcpBusy && <div className="toast" role="status">Synchronizing the board with the agent…</div>}<ButtonHelp/></Actions.Provider>;
+  </div>{mcpBusy && <div className="toast" role="status">Synchronizing the board with the agent…</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [

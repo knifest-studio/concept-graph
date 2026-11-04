@@ -34,9 +34,11 @@ export function validateTemplate(value) {
   return { name: value.name.trim(), instructions: value.instructions, assets: [...value.assets], ...(value.labelOutputs === true ? { labelOutputs: true } : {}), ...(value.color === undefined ? {} : { color: value.color }) };
 }
 
+// Large team boards hold tens of thousands of images; these bounds only stop runaway or hostile documents.
+export const maxNodes = 250000, maxEdges = 500000;
 export function validateGraph(value) {
   if (!value || !Array.isArray(value.nodes) || !Array.isArray(value.edges)) throw new Error('Invalid canvas.');
-  if (value.nodes.length > 2000 || value.edges.length > 10000) throw new Error('Canvas is too large.');
+  if (value.nodes.length > maxNodes || value.edges.length > maxEdges) throw new Error('Canvas is too large.');
   if (value.pages !== undefined) validatePages(value.pages);
   const ids = new Set(), page = pageResolver(boardPages(value));
   for (const node of value.nodes) {
@@ -90,15 +92,19 @@ export function validateGraph(value) {
   // Every connection must remain acyclic, including image provenance.
   const incoming = new Map(value.nodes.map(n => [n.id, []]));
   value.edges.forEach(edge => incoming.get(edge.target).push(edge.source));
-  const visited = new Set(), visiting = new Set();
-  function visit(id) {
-    if (visiting.has(id)) throw new Error('Connections cannot form a loop.');
-    if (visited.has(id)) return;
-    visiting.add(id);
-    incoming.get(id).forEach(visit);
-    visiting.delete(id); visited.add(id);
+  // Iterative, so a chain of thousands of generations cannot overflow the call stack.
+  const state = new Map();
+  for (const node of value.nodes) {
+    if (state.has(node.id)) continue;
+    const stack = [[node.id, 0]]; state.set(node.id, 'visiting');
+    while (stack.length) {
+      const top = stack.at(-1), sources = incoming.get(top[0]);
+      if (top[1] === sources.length) { state.set(top[0], 'done'); stack.pop(); continue; }
+      const source = sources[top[1]++];
+      if (state.get(source) === 'visiting') throw new Error('Connections cannot form a loop.');
+      if (!state.has(source)) { state.set(source, 'visiting'); stack.push([source, 0]); }
+    }
   }
-  value.nodes.forEach(node => visit(node.id));
   return value;
 }
 
@@ -220,8 +226,9 @@ export function positionRunOutput(node, graph, run) {
 // Leave room for the first result and its frame without jumping past distant content.
 export function positionFirstOutput(node, graph) {
   const bounds = graph.nodes.map(item => ({ id: item.id, x: item.position.x, y: item.position.y - captionHeight(item), width: nodeSize(item).width, height: nodeSize(item).height + captionHeight(item) }));
+  const byId = new Map(bounds.map(item => [item.id, item]));
   for (const group of graph.groups || []) {
-    const members = bounds.filter(item => group.nodeIds.includes(item.id));
+    const members = group.nodeIds.map(id => byId.get(id)).filter(Boolean);
     if (!members.length) continue;
     const x = Math.min(...members.map(item => item.x)) - 24, y = Math.min(...members.map(item => item.y)) - 72;
     bounds.push({ x, y, width: Math.max(...members.map(item => item.x + item.width)) - x + 24, height: Math.max(...members.map(item => item.y + item.height)) - y + 24 });

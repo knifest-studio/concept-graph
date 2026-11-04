@@ -3,6 +3,7 @@ import { eventOnce, soundPreferenceKey, readSoundPreference, writeSoundPreferenc
 import { claimCelebration, dragTilt, fireFeel, mountFeelOverlay, nodeElement, presets } from './feel.mjs';
 import { newOutputIds } from './feedback.mjs';
 import { useUpdateNodeInternals } from '@xyflow/react';
+import { useCanvasValue } from './canvas-context.jsx';
 
 export function useInteractionFeedback(viewer) {
   const key = soundPreferenceKey(viewer);
@@ -96,10 +97,14 @@ export function useInteractionFeedback(viewer) {
     },
     dragStart: (event, node) => { drag.current = { id: node.id, x: event.clientX ?? event.touches?.[0]?.clientX ?? 0, time: performance.now(), tilt: 0 }; },
     dragMove: (event, node) => {
-      const previous = drag.current, element = nodeElement(node.id)?.querySelector('.feel-inner') || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
-      if (!previous || !element) return;
+      const previous = drag.current;
+      if (!previous) return;
+      // Found once per drag: a document-wide attribute lookup on every pointer move is costly on a full board.
+      if (previous.element === undefined || (previous.element && !previous.element.isConnected)) previous.element = nodeElement(node.id)?.querySelector('.feel-inner') || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
+      const element = previous.element;
+      if (!element) return;
       const time = performance.now(), x = event.clientX ?? event.touches?.[0]?.clientX ?? previous.x, tilt = previous.tilt * .6 + dragTilt(x - previous.x, time - previous.time) * .4;
-      element.style.setProperty('--drag-tilt', `${tilt}deg`); drag.current = { id: node.id, x, time, tilt };
+      element.style.setProperty('--drag-tilt', `${tilt}deg`); drag.current = { id: node.id, x, time, tilt, element };
     },
     dragStop: (_, node) => {
       drag.current = null; const element = nodeElement(node.id) || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
@@ -152,7 +157,8 @@ export function useInteractionFeedback(viewer) {
   };
 }
 
-export function NodeFeedback({ id, effects, working, children, ...props }) {
-  const effect = effects.nodes.get(id), updateNodeInternals = useUpdateNodeInternals();
-  return <div {...props} data-feel-node={id} onAnimationEnd={event => { if (event.target === event.currentTarget && ['node-created', 'image-arrived'].includes(event.animationName)) updateNodeInternals(id); }} className={`node-feedback${working ? ' feedback-working' : ''}${effects.pending.has(id) ? ' feedback-waiting' : ''}${effect ? ` feedback-${effect.kind}` : ''}`} style={effect?.color ? { '--presence-color': effect.color } : undefined}><div className="feel-inner">{children}</div></div>;
+// Reads only this node's effect from the canvas store, so another node's animation does not re-render it.
+export function NodeFeedback({ id, working, children, ...props }) {
+  const effect = useCanvasValue(state => state.effectNodes.get(id)), waiting = useCanvasValue(state => state.pending.has(id)), updateNodeInternals = useUpdateNodeInternals();
+  return <div {...props} data-feel-node={id} onAnimationEnd={event => { if (event.target === event.currentTarget && ['node-created', 'image-arrived'].includes(event.animationName)) updateNodeInternals(id); }} className={`node-feedback${working ? ' feedback-working' : ''}${waiting ? ' feedback-waiting' : ''}${effect ? ` feedback-${effect.kind}` : ''}`} style={effect?.color ? { '--presence-color': effect.color } : undefined}><div className="feel-inner">{children}</div></div>;
 }
