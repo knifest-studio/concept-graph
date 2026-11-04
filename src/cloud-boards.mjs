@@ -13,3 +13,16 @@ export function coverHue(id) {
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) | 0;
   return (hash >>> 0) % 360;
 }
+
+// Board links are /b/<board ID>: the app opens that board after sign-in, and Back returns to the boards home.
+export const boardPath = id => `/b/${encodeURIComponent(id)}`;
+export function boardFromPath(pathname) {
+  const match = /^\/b\/([^/]+)\/?$/.exec(pathname);
+  try { return match ? decodeURIComponent(match[1]) : null; } catch { return null; }
+}
+// Sign-in may return only to a board link on this site.
+export const signInReturn = value => typeof value === 'string' && /^\/b\/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/.test(value) ? value : '/';
+
+export const accessNames = { private: 'Only invited people', link: 'Anyone with the link', everyone: 'Everyone who signs in' };
+export const accessBadges = { private: 'Private', link: 'Link', everyone: 'Everyone' };
+export const roleNames = { owner: 'Owner', edit: 'Can edit', view: 'Can view' };

@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
 import { boardPages, defaultPages, maxPages, pageResolver, validPageId } from './pages.mjs';
 import { validLayer } from './layers.mjs';
+import { maxSections, readSection } from './sections.mjs';
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const copy = value => structuredClone(value);
@@ -16,6 +17,8 @@ const nodeFields = (node, nodes) => {
     ...(canAttachStamp(parent) ? { stampAttachment: { nodeId: parent.id, x: node.position.x - parent.position.x, y: node.position.y - parent.position.y } } : {}) };
 };
 const groupFields = group => ({ name: group.name, collapsed: group.collapsed, nodeIds: group.nodeIds, color: group.color });
+// One Y.Map per section, so a move, a resize and a rename by different people all survive.
+const sectionFields = section => ({ name: section.name, x: section.x, y: section.y, width: section.width, height: section.height, color: section.color, page: section.page });
 
 // Pairs each next item with its previous version. Lists that kept their order (the usual edit) need no maps.
 function changes(before = [], next = []) {
@@ -85,6 +88,8 @@ function patchValues(map, next, before, value) {
 const readPages = doc => [...doc.getMap('pages')].filter(([id, page]) => validPageId(id) && typeof page?.name === 'string')
   .sort(([a, left], [b, right]) => (Number.isFinite(left.order) ? left.order : 0) - (Number.isFinite(right.order) ? right.order : 0) || compare(a, b))
   .slice(0, maxPages).map(([id, page]) => ({ id, name: page.name.trim().slice(0, 80).trim() || 'Untitled page' }));
+// Raw page IDs are kept, as for nodes: a section whose page was deleted concurrently is shown on the first page.
+const readSections = doc => [...doc.getMap('sections')].sort(byKey).flatMap(([id, entry]) => { const section = entry instanceof Y.Map && readSection(id, entry.toJSON()); return section ? [section] : []; }).slice(0, maxSections);
 // Raw page IDs are kept; a node whose page was deleted concurrently is shown on the first page.
 const pageTest = pages => { const page = pageResolver(boardPages({ pages })); return (a, b) => page(a.page) === page(b.page); };
 
@@ -154,10 +159,11 @@ function groupValues(entries, nodes, samePage) {
 
 const withLocalNode = (local, value) => { const { page, z, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalGroup = (local, value) => { const { color, ...rest } = local || {}; return { ...rest, ...value }; };
+const withLocalSection = (local, value) => { const { color, page, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalEdge = (local, id, edge) => ({ ...local, id, ...copy(edge) });
 
 export function readCloudGraph(doc, local = {}) {
-  const locals = keyed(local.nodes), localGroups = keyed(local.groups), localEdges = keyed(local.edges), pages = readPages(doc), samePage = pageTest(pages);
+  const locals = keyed(local.nodes), localGroups = keyed(local.groups), localEdges = keyed(local.edges), localSections = keyed(local.sections), pages = readPages(doc), samePage = pageTest(pages);
   const map = doc.getMap('nodes');
   const merged = [...map].sort(byKey).map(([id, node]) => withLocalNode(locals.get(id), nodeValue(id, node)));
   const byId = keyed(merged);
@@ -166,7 +172,8 @@ export function readCloudGraph(doc, local = {}) {
   const edges = acceptedEdges([...doc.getMap('edges')].sort(byKey), byId, samePage).map(([id, edge]) => withLocalEdge(localEdges.get(id), id, edge));
   const groups = groupValues([...doc.getMap('groups')].sort(byKey), byId, samePage).map(group => withLocalGroup(localGroups.get(group.id), group));
   const runs = [...doc.getMap('runs').values()].map(copy).sort(byRun);
-  return { nodes, edges, groups, runs, ...(pages.length ? { pages } : {}) };
+  const sections = readSections(doc).map(section => withLocalSection(localSections.get(section.id), section));
+  return { nodes, edges, groups, runs, ...(pages.length ? { pages } : {}), ...(sections.length ? { sections } : {}) };
 }
 
 // Keys kept in sorted order across reads, so a move never re-sorts and an addition is one binary insert.
@@ -191,10 +198,12 @@ const showsNode = (local, value) => local.id === value.id && local.type === valu
 const showsGroup = (local, value) => local.name === value.name && local.collapsed === value.collapsed && sameList(local.nodeIds, value.nodeIds)
   && local.color === value.color && ('color' in local) === ('color' in value) && sameKeys(local, value);
 const showsEdge = (local, edge) => Object.keys(edge).every(key => same(local[key], edge[key]));
+const showsSection = (local, value) => local.name === value.name && local.x === value.x && local.y === value.y && local.width === value.width && local.height === value.height
+  && local.color === value.color && ('color' in local) === ('color' in value) && local.page === value.page && ('page' in local) === ('page' in value) && sameKeys(local, value);
 
 /**
  * The editor's view of a board, read incrementally. Work per transaction follows what changed, and every node,
- * connection, group and run that did not change keeps its object identity, so React and React Flow skip it.
+ * connection, group, section and run that did not change keeps its object identity, so React and React Flow skip it.
  * read() returns exactly what readCloudGraph() returns for the same document and local state.
  */
 export class CloudGraphReader {
@@ -202,7 +211,7 @@ export class CloudGraphReader {
     this.doc = doc; this.values = new Map(); this.anchors = new Map(); this.stamps = new Map(); this.derived = new Map();
     this.nodeOrder = new SortedKeys(); this.edgeOrder = new SortedKeys(); this.edgeIds = new Set(); this.runs = new Map(); this.shown = new WeakMap(); this.clean = new WeakMap();
     this.dirty = new Set(doc.getMap('nodes').keys()); this.edgeKeys = new Set(doc.getMap('edges').keys()); this.runKeys = new Set(doc.getMap('runs').keys());
-    this.structural = true; this.groupsChanged = true; this.pagesChanged = true; this.runOrder = [];
+    this.structural = true; this.groupsChanged = true; this.pagesChanged = true; this.sectionsChanged = true; this.runOrder = []; this.sectionList = []; this.sectionValues = new Map();
     const nodes = doc.getMap('nodes');
     this.observers = [
       [nodes, 'Deep', events => { for (const event of events) { if (event.target === nodes) event.keysChanged.forEach(id => this.dirty.add(id)); else this.dirty.add(event.path[0]); } }],
@@ -210,6 +219,7 @@ export class CloudGraphReader {
       [doc.getMap('groups'), 'Deep', () => { this.groupsChanged = true; }],
       [doc.getMap('runs'), '', event => { event.keysChanged.forEach(id => this.runKeys.add(id)); }],
       [doc.getMap('pages'), '', () => { this.pagesChanged = true; }],
+      [doc.getMap('sections'), 'Deep', () => { this.sectionsChanged = true; }],
     ];
     for (const [type, deep, listener] of this.observers) type[`observe${deep}`](listener);
   }
@@ -273,7 +283,7 @@ export class CloudGraphReader {
     const withLocal = local !== undefined;
     // The caller's lists usually match the stored order item for item; the ID map is only built when they do not.
     const finder = (list = []) => { let byId; return (id, index) => list[index]?.id === id ? list[index] : (byId ||= keyed(list)).get(id); };
-    const localNode = finder(local?.nodes), localEdge = finder(local?.edges), localGroup = finder(local?.groups);
+    const localNode = finder(local?.nodes), localEdge = finder(local?.edges), localGroup = finder(local?.groups), localSection = finder(local?.sections);
     const nodes = this.nodeOrder.keys.map((id, index) => {
       const value = this.node(id);
       if (!withLocal) return value;
@@ -312,9 +322,25 @@ export class CloudGraphReader {
     });
     if (this.runsResort) { this.runOrder = [...this.runs.values()].map(({ run }) => run).sort(byRun); this.runsResort = false; this.runsChanged = false; }
     else if (this.runsChanged) { this.runOrder = this.runOrder.map(run => this.runs.get(run.id).run); this.runsChanged = false; }
+    // Sections depend on nothing else in the document, so only their own changes re-read them.
+    if (this.sectionsChanged) {
+      const previous = this.sectionValues;
+      this.sectionValues = new Map();
+      this.sectionList = readSections(this.doc).map(section => { const old = previous.get(section.id), kept = old && same(old, section) ? old : section; this.sectionValues.set(section.id, kept); return kept; });
+      this.sectionsChanged = false;
+    }
+    const sections = this.sectionList.map((section, index) => {
+      if (!withLocal) return section;
+      const current = localSection(section.id, index);
+      if (current && (this.shown.get(current) === section || showsSection(current, section))) { this.shown.set(current, section); return current; }
+      const shown = withLocalSection(current, section);
+      this.shown.set(shown, section);
+      return shown;
+    });
     // Unchanged lists are returned as the caller's own arrays, so state setters can skip them.
     const own = (list, mine) => withLocal && mine && sameList(list, mine) ? mine : list;
-    return { nodes: own(nodes, local?.nodes), edges: own(edges, local?.edges), groups: own(groups, local?.groups), runs: this.runOrder, ...(this.pages.length ? { pages: this.pages } : {}) };
+    return { nodes: own(nodes, local?.nodes), edges: own(edges, local?.edges), groups: own(groups, local?.groups), runs: this.runOrder, ...(this.pages.length ? { pages: this.pages } : {}),
+      ...(sections.length ? { sections: own(sections, local?.sections) } : {}) };
   }
 }
 
@@ -336,6 +362,8 @@ export function applyLocalGraph(doc, graph, previous, origin, stampIds) {
     patchMaps(map, nodes, previous.nodes, nodeFields, true);
     patchValues(doc.getMap('edges'), graph.edges, previous.edges, edge => ({ source: edge.source, target: edge.target }));
     patchMaps(doc.getMap('groups'), (graph.groups || []).map(group => group.nodeIds.every(id => ids.has(id)) ? group : { ...group, nodeIds: group.nodeIds.filter(id => ids.has(id)) }).filter(group => group.nodeIds.length), previous.groups, groupFields);
+    // A caller that leaves sections out keeps them as they are.
+    patchMaps(doc.getMap('sections'), graph.sections ?? previous.sections ?? [], previous.sections ?? [], sectionFields);
     patchValues(doc.getMap('runs'), graph.runs, previous.runs, run => run);
     // New pages sort after every page this replica has seen; existing pages keep their order.
     const order = new Map([...stored].map(([id, page]) => [id, page?.order]));

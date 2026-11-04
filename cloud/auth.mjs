@@ -1,3 +1,5 @@
+import { signInReturn } from '../src/cloud-boards.mjs';
+
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 const OAUTH_MAX_AGE = 10 * 60;
 const palette = ['#e63946', '#f4a261', '#d4a017', '#2a9d8f', '#238636', '#0077b6', '#6366f1', '#9b5de5', '#d63384', '#8d6e63'];
@@ -30,10 +32,15 @@ function signingKey(secret) {
   return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 
-export function sessionIdentity({ name, email }) {
-  if (typeof email !== 'string') throw new Error('Invalid email.');
-  email = email.trim().toLowerCase();
+export function normalizeEmail(value) {
+  if (typeof value !== 'string') throw new Error('Invalid email.');
+  const email = value.trim().toLowerCase();
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error('Invalid email.');
+  return email;
+}
+
+export function sessionIdentity({ name, email }) {
+  email = normalizeEmail(email);
   return { name: validateName(name), email, color: userColor(email) };
 }
 
@@ -123,7 +130,8 @@ export async function googleSignIn(request, env) {
   const url = new URL(request.url);
   if (!googleConfigured(env)) return authRedirect('/?auth_error=unavailable', [oauthCookie('', url)]);
   const random = () => encode(crypto.getRandomValues(new Uint8Array(32)));
-  const state = { kind: 'google', state: random(), nonce: random(), verifier: random(), origin: url.origin };
+  // A board link survives the round trip, so signing in from a shared link opens that board.
+  const state = { kind: 'google', state: random(), nonce: random(), verifier: random(), origin: url.origin, next: signInReturn(url.searchParams.get('next')) };
   const challenge = encode(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(state.verifier))));
   const target = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   target.search = new URLSearchParams({
@@ -137,12 +145,14 @@ export async function googleSignIn(request, env) {
 export async function googleCallback(request, env) {
   const url = new URL(request.url), cookies = [oauthCookie('', url)];
   if (!googleConfigured(env)) return authRedirect('/?auth_error=unavailable', cookies);
+  let next = '/';
   try {
     const state = await verifyPayload(cookieValue(request, 'cg_google'), env.SESSION_SECRET, OAUTH_MAX_AGE);
     if (!state || state.kind !== 'google' || state.origin !== url.origin || state.state !== url.searchParams.get('state')
       || ![state.state, state.nonce, state.verifier].every(value => typeof value === 'string' && /^[\w-]{43}$/.test(value))) throw new Error('Invalid sign-in state.');
+    next = signInReturn(state.next);
     if (url.searchParams.has('error')) console.error('Google sign-in returned an error:', String(url.searchParams.get('error')).slice(0, 64));
-    if (url.searchParams.has('error')) return authRedirect(url.searchParams.get('error') === 'access_denied' ? '/?auth_error=cancelled' : '/?auth_error=failed', cookies);
+    if (url.searchParams.has('error')) return authRedirect(`${next}?auth_error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`, cookies);
     const code = url.searchParams.get('code');
     if (!code || code.length > 4096) throw new Error('Missing code.');
     const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -172,10 +182,10 @@ export async function googleCallback(request, env) {
     const user = sessionIdentity({ email, name: (displayName || (typeof email === 'string' ? email.split('@')[0] : '')).slice(0, 40).trim() });
     cookies.push(sessionCookie(await signSession(user, env.SESSION_SECRET), url));
     await recordLogin(user, env, claims.sub);
-    return authRedirect('/', cookies);
+    return authRedirect(next, cookies);
   } catch (cause) {
     console.error('Google sign-in failed:', cause.message);
-    return authRedirect('/?auth_error=failed', cookies);
+    return authRedirect(`${next}?auth_error=failed`, cookies);
   }
 }
 

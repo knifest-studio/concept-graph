@@ -1,4 +1,3 @@
-export const groupPalette = Object.freeze(['#e9e2ff', '#dceaff', '#dcf3ef', '#e4f2d4', '#fff3cd', '#ffe5d5', '#fbddec', '#e7e9ef']);
 export const stickyPalette = Object.freeze(['#fff3ad', '#ffd9e5', '#dceaff', '#d9f2d0', '#eadcff']);
 export const penPalette = Object.freeze(['#25243d', '#8b5cf6', '#2563eb', '#e63946', '#238636', '#d4a017']);
 export const penWidths = Object.freeze([2, 4, 8]);

@@ -3,6 +3,7 @@
   "name": "concept-graph-cloud",
   "main": "worker.mjs",
   "compatibility_date": "2026-10-01",
+  "vars": { "NANO_BANANA_DAILY_IMAGES": "50", "NANO_BANANA_MONTHLY_USD": "50" },
   "durable_objects": {
     "bindings": [
       { "name": "BoardRoom", "class_name": "BoardRoom" },
@@ -22,6 +23,6 @@
     "directory": "../dist-cloud",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/concept-graph-helper-downloads.json", "/privacy", "/api/*", "/assets/*", "/downloads/*", "/parties/*"]
+    "run_worker_first": ["/concept-graph-helper-downloads.json", "/privacy", "/b/*", "/api/*", "/assets/*", "/downloads/*", "/parties/*"]
   }
 }

@@ -1,0 +1,15 @@
+/* The generator arrow joins the Generate button as one split control and follows its colours. */
+.generator-picker{position:relative;display:grid;place-items:center;flex:0 0 auto;width:18px;height:27px;margin-left:-5px;border-left:1px solid color-mix(in srgb,var(--blue) 25%,transparent);border-radius:0 6px 6px 0;background:var(--soft-blue);color:var(--text);cursor:pointer}
+.generator-picker:hover{background:color-mix(in srgb,var(--blue) 23%,var(--card))}
+.generator-picker select{position:absolute;inset:0;width:100%;height:100%;min-width:0;max-width:none;margin:0;padding:0;border:0;opacity:0;cursor:pointer;font-size:12px}
+.generator-picker:focus-within{outline:2px solid var(--blue);outline-offset:1px}
+.react-flow__node.selected .generator-picker,.text-node:focus-within .generator-picker{background:var(--blue);color:#fff;border-left-color:#ffffff55}
+.run-controls .generate-slot:has(+.generator-picker) .run-button{border-top-right-radius:0;border-bottom-right-radius:0}
+/* Nano Banana prompts are banana-coloured, so the generator is clear at a glance. */
+.run-controls .run-button.nano,.generator-picker.nano{background:#fbefc6;color:#6b4800}
+.generator-picker.nano{border-left-color:#e9cf7a}
+.run-controls .run-button.nano:hover:not(:disabled),.generator-picker.nano:hover{background:#f7e09a}
+.react-flow__node.selected .run-controls .run-button.nano,.text-node:focus-within .run-controls .run-button.nano,.react-flow__node.selected .generator-picker.nano,.text-node:focus-within .generator-picker.nano{background:#f2c230;color:#2e2000;border-left-color:#c99a10}
+:root[data-theme=dark] .run-controls .run-button.nano,:root[data-theme=dark] .generator-picker.nano{background:#3b3420;color:#f3cf63}
+:root[data-theme=dark] .generator-picker.nano{border-left-color:#5a4d26}
+:root[data-theme=dark] .react-flow__node.selected .run-controls .run-button.nano,:root[data-theme=dark] .text-node:focus-within .run-controls .run-button.nano,:root[data-theme=dark] .react-flow__node.selected .generator-picker.nano,:root[data-theme=dark] .text-node:focus-within .generator-picker.nano{background:#e0b52c;color:#241a00;border-left-color:#a98417}

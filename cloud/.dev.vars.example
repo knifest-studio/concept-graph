@@ -1,5 +1,11 @@
 GOOGLE_CLIENT_ID="replace-with-your-web-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET="replace-with-your-google-client-secret"
 SESSION_SECRET="replace-with-a-long-random-secret"
+# Optional: the site owner's Google email. They own the boards made before sharing and can share them.
+# SITE_OWNER_EMAIL="you@example.com"
 # Optional localhost/127.0.0.1-only test sign-in. Never enable in deployed vars.
 # DEV_LOGIN="1"
+# Optional Nano Banana (company Gemini key). The endpoint override is for a local fake server only.
+# GEMINI_API_KEY="replace-with-a-gemini-api-key"
+# NANO_BANANA_ALLOWED="you@example.com, @example.com"
+# NANO_BANANA_ENDPOINT="http://127.0.0.1:8788"

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import { boardStats } from '../cloud/board-stats.mjs';
 import { applyLocalGraph } from '../src/cloud-sync.mjs';
-import { coverHue, relativeTime } from '../src/cloud-boards.mjs';
+import { boardFromPath, boardPath, coverHue, relativeTime, signInReturn } from '../src/cloud-boards.mjs';
 
 test('board covers use the latest four distinct valid image assets from a Yjs snapshot', () => {
   const doc = new Y.Doc(), restored = new Y.Doc();
@@ -36,4 +36,15 @@ test('relative times handle boundaries, old data, future clocks and invalid date
   assert.equal(relativeTime('invalid', now), 'recently');
   assert.equal(coverHue('board-id'), coverHue('board-id'));
   assert.ok(coverHue('board-id') >= 0 && coverHue('board-id') < 360);
+});
+
+test('board links put the board in the URL and only a board link can be a sign-in return path', () => {
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.equal(boardPath(id), `/b/${id}`);
+  for (const [path, expected] of [[`/b/${id}`, id], [`/b/${id}/`, id], ['/b/caf%C3%A9', 'café'], ['/', null], ['/b/', null], ['/b', null], [`/b/${id}/extra`, null], [`/boards/${id}`, null], ['/b/%E0%A4%A', null], [`/x/b/${id}`, null]]) {
+    assert.equal(boardFromPath(path), expected, path);
+  }
+  assert.equal(boardFromPath(boardPath(id)), id);
+  for (const value of [`/b/${id}`]) assert.equal(signInReturn(value), value);
+  for (const value of [undefined, null, '', '/', '//evil.example', 'https://evil.example/b/' + id, `/b/${id}/`, `/b/${id}?x=1`, `/b/${id.toUpperCase()}`, '/b/not-a-board', `/b/${id}/../api`]) assert.equal(signInReturn(value), '/', String(value));
 });

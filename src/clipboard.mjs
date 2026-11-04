@@ -1,5 +1,7 @@
 import { validateGraph, duplicateNodes } from '../graph.mjs';
 import { detachMissingStampTargets } from './annotations.mjs';
+import { sectionContents } from './canvas.mjs';
+import { cleanSections } from './sections.mjs';
 
 export const nodeClipboardType = 'application/x-concept-graph-nodes';
 
@@ -27,11 +29,15 @@ export function copyImageToClipboard(response) {
   return navigator.clipboard.write([new ClipboardItem({ 'image/png': Promise.resolve(response).then(imageClipboardPng) })]);
 }
 
-export function selectedGraph(nodes, edges) {
-  const selected = nodes.filter(node => node.selected), ids = new Set(selected.map(node => node.id));
+// A selected section is copied with everything it holds; copies land on the page they are pasted on.
+export function selectedGraph(nodes, edges, { sections = [], groups = [], measure } = {}) {
+  const chosen = new Set(sections.filter(section => section.selected).map(section => section.id));
+  const held = chosen.size ? sectionContents({ nodes, groups, sections }, chosen, measure) : null;
+  const selected = nodes.filter(node => node.selected || held?.nodeIds.has(node.id)), ids = new Set(selected.map(node => node.id));
   return structuredClone({ format: nodeClipboardType, version: 1,
     nodes: detachMissingStampTargets(selected.map(({ id, type, position, data, z }) => ({ id, type, position, data, ...(z === undefined ? {} : { z }) }))),
     edges: edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).map(({ id, source, target }) => ({ id, source, target })),
+    ...(held ? { sections: cleanSections(sections.filter(section => held.sectionIds.has(section.id))).map(({ page, ...section }) => section) } : {}),
   });
 }
 
@@ -39,15 +45,17 @@ export function readNodeClipboard(text) {
   if (!text || text.length > 4 * 1024 * 1024) return null;
   try {
     const value = JSON.parse(text);
-    if (value?.format !== nodeClipboardType || value.version !== 1 || !value.nodes?.length) return null;
+    if (value?.format !== nodeClipboardType || value.version !== 1 || !(value.nodes?.length || value.sections?.length)) return null;
     return validateGraph(value);
   } catch { return null; }
 }
 
 export function cloneSelection(selection, position, graph = selection) {
-  if (!selection.nodes.length) return { nodes: [], edges: [] };
-  const left = Math.min(...selection.nodes.map(node => node.position.x)), top = Math.min(...selection.nodes.map(node => node.position.y));
+  const sections = selection.sections || [];
+  if (!selection.nodes.length && !sections.length) return { nodes: [], edges: [] };
+  const left = Math.min(...selection.nodes.map(node => node.position.x), ...sections.map(section => section.x)), top = Math.min(...selection.nodes.map(node => node.position.y), ...sections.map(section => section.y));
   const offset = { x: (position?.x ?? left + 40) - left, y: (position?.y ?? top + 40) - top };
-  const copied = duplicateNodes(graph, selection.nodes.map(node => node.id), { offset });
-  return { ...copied, nodes: copied.nodes.map(node => ({ ...node, selected: true })) };
+  const copied = selection.nodes.length ? duplicateNodes(graph, selection.nodes.map(node => node.id), { offset }) : { nodes: [], edges: [] };
+  return { ...copied, nodes: copied.nodes.map(node => ({ ...node, selected: true })),
+    ...(sections.length ? { sections: sections.map(({ page, ...section }) => ({ ...section, id: crypto.randomUUID(), x: section.x + offset.x, y: section.y + offset.y, selected: true })) } : {}) };
 }

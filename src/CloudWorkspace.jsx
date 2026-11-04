@@ -9,10 +9,14 @@ import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
 import { CodexRequests, CodexShareMenu, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
+import { generators } from '../graph.mjs';
+import { terminalRun } from './run-outputs.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { sharedPreviews } from './canvas-thumbnails.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
-import { coverHue, relativeTime } from './cloud-boards.mjs';
+import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNames } from './cloud-boards.mjs';
+import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './board-templates.mjs';
+import { ShareDialog } from './ShareDialog.jsx';
 import { fireFeel, mountFeelOverlay, presets } from './feel.mjs';
 import { soundPreferenceKey, readSoundPreference, unlockSounds, playSound } from './sounds.mjs';
 import './cloud.css';
@@ -27,6 +31,11 @@ function BoardCover({ board }) {
   return <div className={`cloud-board-cover covers-${covers.length}`} style={{ '--cover-hue': coverHue(board.id) }} aria-hidden="true">
     {covers.length ? covers.map(asset => <img key={asset} src={`/assets/${encodeURIComponent(asset)}${failed.includes(`${asset}/thumb`) ? '' : '/thumb'}`} alt="" loading="lazy" decoding="async" onError={() => setFailed(current => [...current, current.includes(`${asset}/thumb`) ? asset : `${asset}/thumb`])}/>) : <span>{Array.from(board.name.trim())[0]?.toLocaleUpperCase() || 'C'}</span>}
   </div>;
+}
+
+function BoardAccess({ board }) {
+  return <span className="cloud-board-access"><span className={`cloud-access-badge ${board.access || 'private'}`}>{accessBadges[board.access] || accessBadges.private}</span>
+    {board.role !== 'owner' && <span>{roleNames[board.role] || roleNames.view}{board.ownerName ? ` · ${board.ownerName}` : ''}</span>}</span>;
 }
 
 function BoardsHome({ user, boards, setBoards, services, onOpen, onLogout, theme, toggleTheme, error }) {
@@ -81,20 +90,24 @@ function BoardsHome({ user, boards, setBoards, services, onOpen, onLogout, theme
     {createError && <p id="cloud-create-error" className="cloud-error" role="alert">{createError}</p>}
     <div><button type="button" className="cloud-nav" disabled={busy} onClick={cancel}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Creating…' : 'Create board'}</button></div>
   </form> : <button type="button" className="cloud-new-tile" onClick={start}><span className="cloud-new-plus" aria-hidden="true">+</span><strong>New board</strong><small>Start a new direction</small></button>}</>;
+  const sorted = [...boards].sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
+  const own = sorted.filter(board => board.role === 'owner'), shared = sorted.filter(board => board.role !== 'owner');
+  const tile = (board, index) => {
+    const updated = board.updatedAt || board.createdAt;
+    return <div className="cloud-board-entry" key={board.id} style={{ '--card-delay': `${Math.min(index, 7) * 40}ms` }}><button type="button" className="cloud-board-tile" aria-label={`Open board ${board.name}`} onClick={() => onOpen(board.id)}><BoardCover board={board}/><div className="cloud-board-info"><strong>{board.name}</strong><small>{Number.isInteger(board.imageCount) && `${board.imageCount} image${board.imageCount === 1 ? '' : 's'} · `}updated <time dateTime={updated} title={new Date(updated).toLocaleString()}>{relativeTime(updated, now)}</time></small><BoardAccess board={board}/><span className="cloud-board-open" aria-hidden="true">Open board <span>↗</span></span></div></button></div>;
+  };
   return <div className="cloud-home">
     <header className="app-header cloud-home-header"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
       <span className="cloud-person cloud-home-user" style={{ '--person-color': user.color }} title={`Signed in as ${user.name}`}>{user.name}</span>
       <button className="theme-button" type="button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={toggleTheme}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{theme === 'dark' ? <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></> : <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>}</svg></button>
       <button type="button" className="cloud-home-signout" onClick={onLogout}>Sign out</button>
     </div></header>
-    <main className="cloud-home-main"><div className="cloud-home-heading"><div><h1>Team boards</h1><p>Shared with everyone who signs in.</p></div><button ref={createButton} type="button" className="primary-button" onClick={start}><span aria-hidden="true">+</span> New board</button></div>
+    <main className="cloud-home-main"><div className="cloud-home-heading"><div><h1>Boards</h1><p>New boards are private. Share each one by link or with the people you invite.</p></div><button ref={createButton} type="button" className="primary-button" onClick={start}><span aria-hidden="true">+</span> New board</button></div>
       {(error || loadError) && <p role="alert" className="cloud-error cloud-home-error">{error || loadError}{loadError && <button type="button" onClick={() => refresh.current?.()}>Try again</button>}</p>}
       {loading && !boards.length && !editing ? <p role="status" className="cloud-home-status">Loading boards…</p> : <>
-        {loaded && !boards.length && !editing && <section className="cloud-boards-empty"><div className="empty-glyph" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="4" width="7" height="7" rx="2"/><rect x="14" y="13" width="7" height="7" rx="2"/><path d="M10 7.5h4a3 3 0 0 1 3 3V13M7 15v6m-3-3h6"/></svg></div><h2>No boards yet</h2><p>Create the first board for your team.</p><button type="button" className="primary-button" onClick={start}>+ New board</button></section>}
-        {(loaded || boards.length > 0 || editing) && <div className="cloud-board-grid" aria-label="Team boards">{newBoard}{[...boards].sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt)).map((board, index) => {
-          const updated = board.updatedAt || board.createdAt;
-          return <div className="cloud-board-entry" key={board.id} style={{ '--card-delay': `${Math.min(index, 7) * 40}ms` }}><button type="button" className="cloud-board-tile" aria-label={`Open board ${board.name}`} onClick={() => onOpen(board.id)}><BoardCover board={board}/><div className="cloud-board-info"><strong>{board.name}</strong><small>{Number.isInteger(board.imageCount) && `${board.imageCount} image${board.imageCount === 1 ? '' : 's'} · `}updated <time dateTime={updated} title={new Date(updated).toLocaleString()}>{relativeTime(updated, now)}</time></small><span className="cloud-board-open" aria-hidden="true">Open board <span>↗</span></span></div></button></div>;
-        })}</div>}
+        {loaded && !boards.length && !editing && <section className="cloud-boards-empty"><div className="empty-glyph" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="4" width="7" height="7" rx="2"/><rect x="14" y="13" width="7" height="7" rx="2"/><path d="M10 7.5h4a3 3 0 0 1 3 3V13M7 15v6m-3-3h6"/></svg></div><h2>No boards yet</h2><p>Create a board, then share it by link or invite people by email.</p><button type="button" className="primary-button" onClick={start}>+ New board</button></section>}
+        {(loaded || boards.length > 0 || editing) && <><section className="cloud-board-section" aria-labelledby="cloud-own-boards"><h2 id="cloud-own-boards">Your boards</h2><div className="cloud-board-grid">{newBoard}{own.map(tile)}</div></section>
+          {shared.length > 0 && <section className="cloud-board-section" aria-labelledby="cloud-shared-boards"><h2 id="cloud-shared-boards">Shared with you</h2><div className="cloud-board-grid">{shared.map(tile)}</div></section>}</>}
       </>}
     </main>
   </div>;
@@ -115,10 +128,27 @@ function Cursors({ cursors, visible }) {
 
 const emptySharing = { ready: false, teammates: [], outgoing: null, incoming: [], shared: [] };
 
-function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helperStatus, openPair, unpair, pairDialog, finishPair, onBack, onLogout, services, Editor, ...editorProps }) {
-  const user = boardAuthor(account) || { name: 'Teammate' };
+// Remounted (with a fresh document) whenever the person's role changes, so edits the room ignored never linger.
+function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, user: account, paired, pairing, pairCancel, helperStatus, openPair, unpair, pairDialog, finishPair, onBack, onLogout, services, Editor, ...editorProps }) {
+  const user = boardAuthor(account) || { name: 'Teammate' }, editable = role !== 'view';
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
-  const latest = useRef({}); latest.current = { pairing, finishPair };
+  const [shareOpen, setShareOpen] = useState(false), shareButton = useRef(null);
+  const latest = useRef({}); latest.current = { pairing, finishPair, onAccess };
+  const [nano, setNano] = useState(undefined), nanoSoon = useRef(() => {});
+  useEffect(() => {
+    // What Nano Banana allows this person; teammates' runs change the team's spend and the day rolls over, so it is re-read.
+    let request = 0, timer = 0;
+    const refresh = async () => {
+      const id = ++request;
+      try { const value = await services.api('/api/nano'); if (id === request) setNano(current => JSON.stringify(current) === JSON.stringify(value) ? current : value); }
+      catch {}
+    };
+    nanoSoon.current = () => { clearTimeout(timer); timer = setTimeout(refresh, 800); };
+    refresh();
+    const interval = setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+    window.addEventListener('focus', refresh);
+    return () => { request = -1; clearTimeout(timer); clearInterval(interval); window.removeEventListener('focus', refresh); nanoSoon.current = () => {}; };
+  }, [services]);
   useEffect(() => {
     const doc = new Y.Doc(), origin = {};
     const provider = new YProvider(location.host, boardId, doc, { party: 'board-room', disableBc: true, protocol: location.protocol === 'https:' ? 'wss' : 'ws' });
@@ -136,12 +166,19 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     const ownPresence = ({ added, updated, removed }, origin) => { if (origin === 'local' && [...added, ...updated, ...removed].includes(doc.clientID)) sendPresence(); };
     provider.awareness.on('update', ownPresence);
     const sharing = new CodexSharing(provider.awareness);
-    const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages')], { trackedOrigins: new Set([origin]) });
+    const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages'), doc.getMap('sections')], { trackedOrigins: new Set([origin]) });
     const reader = new CloudGraphReader(doc), cursors = store([]);
     const next = {
       doc, provider, undo, origin, user, paired, openPair, unpair, cursorStore: cursors,
       read: local => reader.read(local),
-      apply: (graph, before) => applyLocalGraph(doc, graph, before, origin, reader.stampIds()),
+      // A viewer's edits are never written; the next read shows the board as it is.
+      apply: (graph, before) => { if (editable) applyLocalGraph(doc, graph, before, origin, reader.stampIds()); },
+      templates: {
+        read: () => readBoardTemplates(doc),
+        subscribe: callback => { const map = doc.getMap('templates'); map.observe(callback); return () => map.unobserve(callback); },
+        save: (value, existing) => { if (!editable) throw new Error('You can only view this board.'); return saveBoardTemplate(doc, value, existing, origin); },
+        remove: existing => { if (!editable) throw new Error('You can only view this board.'); deleteBoardTemplate(doc, existing.id, origin); },
+      },
       subscribe: callback => {
         // Remote changes reach the editor once per frame, however many transactions arrive (ten people dragging send dozens a second).
         let frame = 0, timer = 0, pending = null;
@@ -160,7 +197,8 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(message); if (failure?.status === 403) unpair(); } });
     // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
     next.sharing = sharing;
-    next.shareCodex = ready => sharing.setReady(ready);
+    // A viewer's helper could not place images on this board, so their Codex is never offered to teammates.
+    next.shareCodex = ready => sharing.setReady(editable && ready);
     let sharingBusy = false;
     const share = () => {
       // Presence and run writes made here call back synchronously; the outer pass sees their result.
@@ -172,7 +210,7 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
           next.notify?.(sharingMessage(event));
           if (event.type === 'granted' && latest.current.pairing) latest.current.finishPair();
         }
-        next.jobs.maintain();
+        if (editable) next.jobs.maintain();
         const view = sharing.view([...doc.getMap('runs').values()]);
         setSharingView(current => JSON.stringify(current) === JSON.stringify(view) ? current : view);
       } finally { sharingBusy = false; }
@@ -183,6 +221,8 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     const shareLater = () => { if (!shareSoon) shareSoon = setTimeout(() => { shareSoon = 0; share(); }, 200); };
     const shareTimer = setInterval(share, 2000), runsChanged = shareLater;
     doc.getMap('runs').observe(runsChanged);
+    const nanoFinished = event => { if ([...event.keysChanged].some(id => { const run = doc.getMap('runs').get(id); return run?.provider === generators.nanoBanana && terminalRun(run.status); })) next.refreshNano?.(); };
+    doc.getMap('runs').observe(nanoFinished);
     let lastPointer = 0, lastSelection = '';
     next.pointer = position => {
       if (document.hidden) position = null;
@@ -214,20 +254,27 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
       const local = provider.awareness.getLocalState();
       if (document.hidden && local && Date.now() - renewed > 10000) provider.awareness.setLocalState({ ...local });
     };
+    // The room states this person's role when they connect and whenever the owner changes it. A refused reconnect (access
+    // removed while away) looks like any failed connection, so the server is asked again, at most every 15 seconds.
+    const accessMessage = message => { try { const value = JSON.parse(message); if (value?.type === 'access') latest.current.onAccess(value.role); } catch {} };
+    let checked = 0;
+    const closed = event => { if (event?.code === 4403 || (!provider.wsconnected && Date.now() - checked > 15000)) { checked = Date.now(); latest.current.onAccess(undefined); } };
+    provider.on('custom-message', accessMessage); provider.on('connection-close', closed);
     provider.awareness.setLocalState({ user, cursor: null });
     provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.awareness.on('change', shareLater); provider.awareness.on('update', keepAlive); provider.on('status', status); provider.on('sync', sync);
     document.addEventListener('visibilitychange', hidden);
     setSession(next);
     return () => {
       next.flush?.(); next.closed = true;
-      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null);
+      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null);
       document.removeEventListener('visibilitychange', hidden);
       provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
+      provider.off('custom-message', accessMessage); provider.off('connection-close', closed);
       undo.destroy(); provider.destroy(); doc.destroy();
     };
   }, [boardId, user.name, user.color]);
   useEffect(() => {
-    if (!session || !paired) return;
+    if (!session || !paired || !editable) return;
     session.jobs.startPolling();
     return () => session.jobs.stop();
   }, [session, paired]);
@@ -236,22 +283,35 @@ function CloudBoard({ boardId, user: account, paired, pairing, pairCancel, helpe
     onRequest: owner => { session.sharing.request(owner); session.share(); }, onWithdraw: () => { session.sharing.withdraw(); session.share(); },
     onAllow: id => { session.sharing.allow(id); session.share(); }, onDecline: id => { session.sharing.decline(id); session.share(); },
   };
-  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView });
+  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), role });
   session.cursors = visible => <Cursors cursors={session.cursorStore} visible={visible}/>;
   session.toolbar = <>
     <div className="cloud-presence" aria-label="People on this board">{[{ id: 'me', user }, ...peers].map(peer => <span key={peer.id} className="cloud-person" title={peer.user.name} style={{ '--person-color': peer.user.color }}>{peer.user.name}</span>)}</div>
-    <CodexShareMenu view={sharingView} {...sharingActions}/>
+    {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
+    <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>Share</button>
     <button className="cloud-nav" onClick={() => session.leave?.(onBack)}>Boards</button><button className="cloud-nav" onClick={() => session.leave?.(onLogout)}>Sign out</button>
   </>;
   return <>
     <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>
-    <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>
-    {pairDialog(!sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
+    {editable && <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>}
+    {pairDialog(editable && !sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
+    {shareOpen && <ShareDialog boardId={boardId} name={boardName} sharing={sharing} services={services} onChange={onSharing} onClose={() => { setShareOpen(false); shareButton.current?.focus(); }}/>}
   </>;
 }
 
+// Shown instead of a board the person may not open; it names the owner to ask.
+function BoardUnavailable({ state, user, onBack, onRetry, onSwitch }) {
+  return <main className="cloud-startup"><section className="cloud-card cloud-unavailable" role="alert"><img src="/favicon.svg" alt="" width="40"/>
+    <h1>{state.denied ? 'You don’t have access to this board' : state.error ? 'Couldn’t open this board' : 'Board not found'}</h1>
+    <p>{state.denied ? <>{state.owner ? <>Ask <b>{state.owner}</b>, who owns it,</> : 'Ask its owner'} to invite <b>{user.email}</b> or to share it with anyone who has the link.</> : state.error || 'Check the link, or ask the person who sent it for a new one.'}</p>
+    <div><button className="primary-button" type="button" onClick={state.error ? onRetry : onBack}>{state.error ? 'Try again' : 'Back to boards'}</button>
+      {state.denied ? <button type="button" className="cloud-nav" onClick={onSwitch}>Use another account</button> : state.error && <button type="button" className="cloud-nav" onClick={onBack}>Back to boards</button>}</div>
+  </section></main>;
+}
+
 export default function CloudWorkspace({ Editor, HelperSetup, services }) {
-  const [user, setUser] = useState(undefined), [boards, setBoards] = useState([]), [boardId, setBoardId] = useState(null);
+  const [user, setUser] = useState(undefined), [boards, setBoards] = useState([]), [boardId, setBoardId] = useState(() => boardFromPath(location.pathname));
+  const [opened, setOpened] = useState(null), [accessCheck, setAccessCheck] = useState(0);
   const [devLogin, setDevLogin] = useState(false), [email, setEmail] = useState(''), [name, setName] = useState('');
   const [error, setError] = useState(() => new Map([
     ['unavailable', 'Google sign-in is not configured.'], ['cancelled', 'Google sign-in was cancelled.'],
@@ -296,23 +356,58 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
-  const signOut = async () => {
-    try { await services.api('/api/cloud/logout', { method: 'POST' }); setBoardId(null); setUser(null); setBoards([]); setError(''); }
+  // The open board lives in the URL, so its link opens it (after sign-in) and Back returns to the boards home.
+  const openBoard = id => { const path = id ? boardPath(id) : '/'; if (location.pathname !== path) history.pushState(null, '', path); setBoardId(id); };
+  useEffect(() => {
+    const back = () => setBoardId(boardFromPath(location.pathname));
+    window.addEventListener('popstate', back);
+    return () => window.removeEventListener('popstate', back);
+  }, []);
+  // What this person may do on the board; asked again when the room reports a different role or refuses to connect.
+  useEffect(() => {
+    if (!user || !boardId) return;
+    let active = true;
+    services.api(`/api/cloud/boards/${encodeURIComponent(boardId)}`).then(({ board, sharing }) => {
+      if (!active) return;
+      setOpened({ id: boardId, board, role: board.role, sharing });
+      setBoards(current => current.some(item => item.id === board.id) ? current.map(item => item.id === board.id ? board : item) : [board, ...current]);
+    }).catch(failure => {
+      if (!active) return;
+      if (failure.status === 401) setUser(null);
+      else if (failure.status === 403 || failure.status === 404) setOpened({ id: boardId, denied: failure.status === 403, owner: failure.value?.owner?.name || '' });
+      // A dropped connection keeps the open board; only a definite answer replaces it.
+      else setOpened(current => current?.id === boardId && current.role ? current : { id: boardId, error: failure.message });
+    });
+    return () => { active = false; };
+  }, [user, boardId, accessCheck]);
+  // A board opened from its link still offers the person's other boards in the editor's board picker.
+  useEffect(() => {
+    if (user && boardId) services.api('/api/cloud/boards').then(result => setBoards(current => [...result.boards, ...current.filter(item => !result.boards.some(board => board.id === item.id))])).catch(() => {});
+  }, [user]);
+  const changeSharing = sharing => {
+    setOpened(current => current?.id === boardId ? { ...current, sharing } : current);
+    setBoards(current => current.map(item => item.id === boardId ? { ...item, access: sharing.access, linkRole: sharing.linkRole } : item));
+  };
+  const signOut = async (keepBoard = false) => {
+    try { await services.api('/api/cloud/logout', { method: 'POST' }); if (!keepBoard) openBoard(null); setUser(null); setOpened(null); setBoards([]); setError(''); }
     catch (failure) { setError(failure.message); }
   };
   if (user === undefined) return <div className="startup">Checking sign-in…</div>;
-  if (!user) return <main className="cloud-startup"><section className="cloud-card"><img src="/favicon.svg" alt="" width="40"/><h1>Concept Graph Cloud</h1><p>Sign in with Google to access all shared boards.</p>
+  if (!user) return <main className="cloud-startup"><section className="cloud-card"><img src="/favicon.svg" alt="" width="40"/><h1>Concept Graph Cloud</h1><p>{boardId ? 'Sign in with Google to open this board.' : 'Sign in with Google to see your boards and the boards shared with you.'}</p>
     {error && <p role="alert" className="cloud-error">{error}</p>}
-    <a className="primary-button" href="/api/auth/google" style={{ display: 'inline-block', textDecoration: 'none' }}>Sign in with Google</a>
+    <a className="primary-button" href={boardId ? `/api/auth/google?next=${encodeURIComponent(boardPath(boardId))}` : '/api/auth/google'} style={{ display: 'inline-block', textDecoration: 'none' }}>Sign in with Google</a>
     <p><a className="cloud-nav" href="/privacy">Privacy</a></p>
     {devLogin && <form onSubmit={signIn}><p>Local development sign-in</p>
       <label htmlFor="cloud-name">Display name</label><input id="cloud-name" autoComplete="nickname" required maxLength={40} value={name} onChange={event => setName(event.target.value)}/>
       <label htmlFor="cloud-email">Email</label><input id="cloud-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/>
       <button className="primary-button" disabled={busy || !name.trim() || !email.trim()}>{busy ? 'Signing in…' : 'Sign in locally'}</button>
     </form>}</section></main>;
+  const current = boardId && opened?.id === boardId ? opened : null;
   return <>
-    {boardId ? <CloudBoard key={boardId} boardId={boardId} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => setBoardId(null)} onLogout={signOut} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={setBoardId} theme={theme} toggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} waitForPreferences={async () => {}}/> :
-      <BoardsHome user={user} boards={boards} setBoards={setBoards} services={services} onOpen={setBoardId} onLogout={signOut} theme={theme} toggleTheme={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} error={error}/>}
+    {!boardId ? <BoardsHome user={user} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} toggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} error={error}/>
+      : current?.role ? <CloudBoard key={`${boardId}:${current.role}`} boardId={boardId} boardName={current.board.name} role={current.role} sharing={current.sharing} onSharing={changeSharing} onAccess={role => { if (role !== current.role) setAccessCheck(value => value + 1); }} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => openBoard(null)} onLogout={() => signOut()} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={openBoard} theme={theme} toggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} waitForPreferences={async () => {}}/>
+      : current ? <BoardUnavailable state={current} user={user} onBack={() => openBoard(null)} onRetry={() => setAccessCheck(value => value + 1)} onSwitch={() => signOut(true)}/>
+      : <div className="startup">Opening board…</div>}
     {!boardId && pairDialog()}
     {error && boardId && <div className="toast" role="alert">{error}<button onClick={() => setError('')}>Dismiss</button></div>}
   </>;

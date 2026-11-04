@@ -42,11 +42,11 @@ function PagePeople({ peers }) {
   </span>;
 }
 
-// Figma-like page list: click to open, double-click to rename, right-click for page actions.
-export function BoardPages({ pages, active, peers = [], disabled, onSelect, onAdd, onRename, onDelete }) {
+// Figma-like page list: click to open, double-click to rename, right-click for page actions. A viewer can only switch pages.
+export function BoardPages({ pages, active, peers = [], disabled, readOnly = false, onSelect, onAdd, onRename, onDelete }) {
   const [editing, setEditing] = useState(null), [draft, setDraft] = useState(''), [menu, setMenu] = useState(null);
   const cancelled = useRef(false), list = useRef(null);
-  const startEdit = page => { if (disabled) return; cancelled.current = false; setDraft(page.name); setEditing(page.id); };
+  const startEdit = page => { if (disabled || readOnly) return; cancelled.current = false; setDraft(page.name); setEditing(page.id); };
   const finishEdit = () => {
     const id = editing;
     setEditing(null);
@@ -56,13 +56,13 @@ export function BoardPages({ pages, active, peers = [], disabled, onSelect, onAd
   const add = () => { const page = onAdd(); if (page) startEdit(page); };
   const closeMenu = restore => { const id = menu?.page.id; setMenu(null); if (restore && id) list.current?.querySelector(`[data-page-id="${CSS.escape(id)}"]`)?.focus(); };
   return <section className="board-pages" aria-label="Pages">
-    <div className="board-pages-heading"><span className="eyebrow">PAGES</span><button type="button" className="icon-button" aria-label="Add page" data-tooltip="Add page" disabled={disabled || pages.length >= maxPages} onClick={add}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+    <div className="board-pages-heading"><span className="eyebrow">PAGES</span>{!readOnly && <button type="button" className="icon-button" aria-label="Add page" data-tooltip="Add page" disabled={disabled || pages.length >= maxPages} onClick={add}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>}</div>
     <ul ref={list} className="board-pages-list">{pages.map(page => <li key={page.id}>
       {editing === page.id ? <input className="board-page-input" autoFocus aria-label="Page name" maxLength={80} value={draft} onFocus={event => event.target.select()} onChange={event => setDraft(event.target.value)} onBlur={finishEdit}
         onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelled.current = true; event.currentTarget.blur(); } }}/>
         : <button type="button" data-page-id={page.id} className={`board-page${page.id === active ? ' active' : ''}`} aria-current={page.id === active ? 'page' : undefined} disabled={disabled} title={page.name}
           onClick={() => onSelect(page.id)} onDoubleClick={() => startEdit(page)} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); startEdit(page); } }}
-          onContextMenu={event => { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); if (!disabled) setMenu({ page, x: event.clientX || box.left + 12, y: event.clientY || box.bottom }); }}>
+          onContextMenu={event => { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); if (!disabled && !readOnly) setMenu({ page, x: event.clientX || box.left + 12, y: event.clientY || box.bottom }); }}>
           <svg className="board-page-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg>
           <span className="board-page-name">{page.name}</span><PagePeople peers={peersOnPage(peers, pages, page.id)}/>
         </button>}

@@ -16,7 +16,7 @@ function node(doc, id, fields, data) {
 // Random remote writes, the way other replicas change the document.
 function mutate(doc, next) {
   const pick = list => list[Math.floor(next() * list.length)], nodes = doc.getMap('nodes'), ids = [...nodes.keys()], page = () => pick([undefined, 'page-1', 'p2', 'gone']);
-  const operation = Math.floor(next() * 14);
+  const operation = Math.floor(next() * 16);
   doc.transact(() => {
     if (operation < 3 || ids.length < 4) {
       const id = `n${Math.floor(next() * 1e6)}`, type = pick(['text', 'image', 'image', 'sticky', 'stamp', 'drawing']);
@@ -35,6 +35,22 @@ function mutate(doc, next) {
     }
     else if (operation === 11) { const runs = doc.getMap('runs'), id = next() < .5 && runs.size ? pick([...runs.keys()]) : `r${Math.floor(next() * 1e6)}`; if (next() < .15) runs.delete(id); else runs.set(id, { id, nodeId: pick(ids), status: pick(['queued', 'completed']), startedAt: `2026-11-0${1 + Math.floor(next() * 3)}T00:00:00.000Z`, outputIds: [] }); }
     else if (operation === 12) { const pages = doc.getMap('pages'); if (next() < .3) pages.delete('p2'); else { pages.set('page-1', { name: 'Page 1', order: 0 }); pages.set('p2', { name: 'Two', order: 1 }); } }
+    else if (operation === 14) {
+      // Sections, sometimes with values another replica got wrong.
+      const section = new Y.Map(), fields = { name: pick(['Moodboard', '', '  Spaced  ']), x: Math.round(next() * 900), y: next() < .05 ? 'bad' : Math.round(next() * 900), width: pick([150, 400, 900]), height: pick([90, 300]), color: pick([undefined, '#dceaff', 'red']), page: page() };
+      for (const [key, value] of Object.entries(fields)) if (value !== undefined) section.set(key, value);
+      doc.getMap('sections').set(`s${Math.floor(next() * 1e6)}`, section);
+    }
+    else if (operation === 15) {
+      const sections = doc.getMap('sections'), keys = [...sections.keys()];
+      if (!keys.length) return;
+      const section = sections.get(pick(keys)), change = Math.floor(next() * 5);
+      if (change === 0) sections.delete(pick(keys));
+      else if (change === 1) { section.set('x', Math.round(next() * 900)); section.set('y', Math.round(next() * 900)); }
+      else if (change === 2) section.set('width', pick([100, 500, 1200]));
+      else if (change === 3) { if (next() < .5) section.delete('color'); else section.set('color', '#fff3cd'); }
+      else { const value = page(); if (value === undefined) section.delete('page'); else section.set('page', value); }
+    }
     else { const edges = doc.getMap('edges'); const [a, b] = [pick(ids), pick(ids)]; edges.set(`e${Math.floor(next() * 1e6)}`, { source: a, target: b }); edges.set(`e${Math.floor(next() * 1e6)}`, { source: b, target: a }); }
   });
 }
@@ -44,7 +60,8 @@ function localCopy(graph, next) {
   if (!graph) return undefined;
   const touch = item => next() < .1 ? { ...item, selected: true } : next() < .05 ? { ...item, measured: { width: 310, height: 200 } } : item;
   const nodes = graph.nodes.filter(() => next() > .05).map(item => next() < .05 ? { ...item, position: { x: item.position.x + 1, y: item.position.y } } : next() < .03 ? { ...item, page: 'p2' } : touch(item));
-  return { nodes: next() < .2 ? [...nodes].reverse() : nodes, edges: graph.edges.map(touch), groups: graph.groups.map(item => next() < .1 ? { ...item, selected: true, color: '#ffffff' } : item) };
+  return { nodes: next() < .2 ? [...nodes].reverse() : nodes, edges: graph.edges.map(touch), groups: graph.groups.map(item => next() < .1 ? { ...item, selected: true, color: '#ffffff' } : item),
+    sections: graph.sections?.filter(() => next() > .05).map(item => next() < .1 ? { ...item, selected: true } : next() < .05 ? { ...item, color: '#ffffff', page: 'p2' } : item) };
 }
 
 test('the incremental reader returns exactly what a full read returns, for any document and local copy', () => {

@@ -1,9 +1,14 @@
 import { isAnnotation, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
 import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
 import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
+import { validateSections } from './src/sections.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
+// A prompt without `generator` uses Codex; cloud prompts can pick server-side Nano Banana instead.
+export const generators = Object.freeze({ nanoBanana: 'nano-banana' });
+export const nanoModel = 'gemini-nano-banana-2.1';
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -57,6 +62,7 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.effort !== undefined && (typeof node.data.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(node.data.effort))) throw new Error('Invalid reasoning effort.');
     if (node.type === 'text' && node.data.template !== undefined) validateTemplate(node.data.template);
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
+    if (node.type === 'text' && node.data.generator !== undefined && node.data.generator !== generators.nanoBanana) throw new Error('Invalid image generator.');
     if (node.type === 'image' && !assetPattern.test(node.data?.asset || '')) throw new Error('Invalid image asset.');
     if (node.type === 'image' && node.data.caption !== undefined && (typeof node.data.caption !== 'string' || node.data.caption.length > 120)) throw new Error('Invalid image caption.');
     if (node.type === 'image' && node.data.aspect !== undefined && (!Number.isFinite(node.data.aspect) || node.data.aspect < 0.1 || node.data.aspect > 10)) throw new Error('Invalid image aspect.');
@@ -72,9 +78,10 @@ export function validateGraph(value) {
     if (page(byId.get(edge.source).page) !== page(byId.get(edge.target).page)) throw new Error('Connections cannot span pages.');
     edgeIds.add(edge.id);
   }
+  const groupIds = new Set();
   if (value.groups !== undefined) {
     if (!Array.isArray(value.groups) || value.groups.length > value.nodes.length) throw new Error('Invalid groups.');
-    const groupIds = new Set(), members = new Set();
+    const members = new Set();
     for (const group of value.groups) {
       if (!group || typeof group.id !== 'string' || !group.id || group.id.length > 120 || ids.has(group.id) || groupIds.has(group.id)
         || typeof group.name !== 'string' || !group.name.trim() || group.name.length > 80 || typeof group.collapsed !== 'boolean'
@@ -88,6 +95,7 @@ export function validateGraph(value) {
       }
     }
   }
+  if (value.sections !== undefined) validateSections(value.sections, id => ids.has(id) || groupIds.has(id));
   if (value.viewport && !['x', 'y', 'zoom'].every(key => Number.isFinite(value.viewport[key]))) throw new Error('Invalid viewport.');
   // Every connection must remain acyclic, including image provenance.
   const incoming = new Map(value.nodes.map(n => [n.id, []]));
@@ -133,23 +141,30 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   return { nodes, edges };
 }
 
-export function collectInputs(graph, nodeId) {
+// What every generator receives for a prompt: the prompt and its directly connected nodes (their own ancestors are
+// not sent, to keep runs small), the reference images in order with their labels, and the connected context texts.
+export function runInputs(graph, nodeId) {
   validateGraph(graph);
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const target = nodes.get(nodeId);
   if (target?.type !== 'text' || (!target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
-  // Only directly connected nodes are sent; their own ancestors are not, to keep runs small.
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
   const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: node.data.caption || node.data.label || 'Reference image' }]
     : (node.data.template?.assets || []).map(asset => ({ asset, label: `${node.data.template.name} reference` })));
   if (images.length > 10) throw new Error('Use at most 10 connected reference images per run.');
   const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && (node.data.text.trim() || node.data.template?.instructions.trim()));
-  const textFor = node => [node.data.template?.instructions.trim() ? `Custom node instructions:\n${node.data.template.instructions}` : '', node.data.text.trim() ? node.data.text : ''].filter(Boolean).join('\n\n');
+  return { target, ordered, images, context };
+}
+
+export const promptText = node => [node.data.template?.instructions.trim() ? `Custom node instructions:\n${node.data.template.instructions}` : '', node.data.text.trim() ? node.data.text : ''].filter(Boolean).join('\n\n');
+
+export function collectInputs(graph, nodeId) {
+  const { target, ordered, images, context } = runInputs(graph, nodeId);
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
-    ...context.map((node, i) => `Earlier context ${i + 1}:\n${textFor(node)}`),
+    ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
     images.length ? 'Attached images, in order:\n' + images.map((image, i) => `Image ${i + 1}: ${image.label}`).join('\n') : '',
-    `FINAL REQUEST:\n${textFor(target)}`,
+    `FINAL REQUEST:\n${promptText(target)}`,
     'Return actual images with the built-in image tool. If multiple images are requested, generate each separately. Do not use a paid API fallback.',
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
@@ -167,10 +182,11 @@ export function imageNode(run, asset, index, dimensions) {
 }
 
 export async function commitGraph(graph, next, persist) {
-  const previous = { nodes: graph.nodes, edges: graph.edges, groups: graph.groups, pages: graph.pages, viewport: graph.viewport, revision: graph.revision };
+  const previous = { nodes: graph.nodes, edges: graph.edges, groups: graph.groups, pages: graph.pages, sections: graph.sections, viewport: graph.viewport, revision: graph.revision };
   const revision = graph.revision + 1;
-  const assign = value => { Object.assign(graph, value); if (graph.pages === undefined) delete graph.pages; };
-  assign({ nodes: next.nodes, edges: next.edges, groups: next.groups, pages: next.pages, viewport: next.viewport || graph.viewport, revision });
+  // A board without sections stores none, so it keeps its earlier form.
+  const assign = value => { Object.assign(graph, value); if (graph.pages === undefined) delete graph.pages; if (!graph.sections?.length) delete graph.sections; };
+  assign({ nodes: next.nodes, edges: next.edges, groups: next.groups, pages: next.pages, sections: next.sections === undefined ? graph.sections : next.sections, viewport: next.viewport || graph.viewport, revision });
   try { await persist(); } catch (error) { assign(previous); throw error; }
   return revision;
 }

@@ -75,12 +75,12 @@ test('author snapshots strip email, prefer saved image authors and derive legacy
   }
 });
 
-test('group fills validate, survive snapshots, collapse and revision merges without overwriting local edits', () => {
+test('legacy group fills still validate and merge, but groups no longer draw them', () => {
   const value = graph(), group = { id: 'g', name: 'Notes', nodeIds: ['p', 's'], collapsed: false, color: '#ffe5d5' };
   value.groups = [group]; assert.doesNotThrow(() => validateGraph(value));
   assert.deepEqual(cleanGroups([{ ...group, selected: true }]), [group]);
   for (const color of ['', null, 'red', '#abc', '#abcdef00', 3]) assert.throws(() => validateGraph({ ...value, groups: [{ ...group, color }] }), /group/);
-  for (const collapsed of [false, true]) assert.equal(canvasView(value.nodes, [], [{ ...group, collapsed }]).nodes[0].data.color, group.color);
+  for (const collapsed of [false, true]) assert.equal(Object.hasOwn(canvasView(value.nodes, [], [{ ...group, collapsed }]).nodes[0].data, 'color'), false);
   const remote = { ...group, color: '#dceaff', name: 'Renamed' };
   assert.deepEqual(mergeAddedGroups([group], [remote], [group], value.nodes), [remote]);
   const edited = { ...group, color: '#111111' };

@@ -1,6 +1,7 @@
 import { nodeSize, captionHeight } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
 import { layerIndex, sameShape } from './layers.mjs';
+import { sectionMinimum, sectionPadding } from './sections.mjs';
 
 export const connectionColor = type => type === 'image' ? 'var(--purple)' : 'var(--blue)';
 
@@ -156,12 +157,27 @@ const frameHandles = Object.freeze([{ id: null, type: 'target', position: 'left'
 const edgeStyles = { text: Object.freeze({ stroke: connectionColor('text'), strokeWidth: 2 }), image: Object.freeze({ stroke: connectionColor('image'), strokeWidth: 2 }) };
 
 // Per-editor memory for canvasView: unchanged inputs give back the same objects (and arrays), so React Flow skips them.
-export const createViewCache = () => ({ nodes: new WeakMap(), frames: new WeakMap(), edges: new WeakMap(), sizes: new Map(), layers: null, view: null });
+export const createViewCache = () => ({ nodes: new WeakMap(), frames: new WeakMap(), edges: new WeakMap(), sections: new WeakMap(), sizes: new Map(), layers: null, sectionLayers: null, view: null });
 const folded = Object.freeze({ width: 72, height: 72 });
 const sameItems = (a, b) => a?.length === b.length && a.every((item, index) => item === b[index]);
+const noItems = Object.freeze([]);
 
-// Groups are display containers; original node IDs and generation edges stay intact.
-export function canvasView(nodes, edges, groups, cache = createViewCache()) {
+// Larger sections lie behind the smaller ones drawn on them, and every section lies behind group frames (-1) and
+// connections (0). Equal sizes break the tie by ID, the same way sections nest.
+function sectionLayers(sections, cache) {
+  if (cache.sectionLayers && sameItems(cache.sectionLayers.sections, sections)) return cache.sectionLayers.layers;
+  const order = [...sections].sort((a, b) => b.width * b.height - a.width * a.height || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const layers = new Map(order.map((section, index) => [section.id, index - order.length - 1]));
+  cache.sectionLayers = { sections, layers };
+  return layers;
+}
+
+// The size a node is drawn at: its last measurement, or the same estimate canvasView uses for a card not drawn yet.
+export const viewSize = cache => node => (node.data?.collapsed === true ? folded : node.measured || cache.sizes.get(node.id)) || cache.nodes.get(node)?.view.measured || estimatedSize(node);
+
+// Groups are display containers; original node IDs and generation edges stay intact. Sections are background frames
+// drawn behind everything.
+export function canvasView(nodes, edges, groups, cache = createViewCache(), sections = noItems) {
   const collapsed = new Map();
   for (const group of groups) if (group.collapsed) for (const id of group.nodeIds) collapsed.set(id, group.id);
   if (collapsed.size) for (const node of nodes) if (node.type === 'stamp' && collapsed.has(node.data.attachedTo)) collapsed.set(node.id, collapsed.get(node.data.attachedTo));
@@ -190,9 +206,10 @@ export function canvasView(nodes, edges, groups, cache = createViewCache()) {
     const bounds = groupBounds(group, nodes, byId, shown);
     const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height, saved = cache.frames.get(group);
     if (saved && saved.x === bounds.x && saved.y === bounds.y && saved.width === width && saved.height === height) return saved.view;
+    // A stored group colour is kept for older boards but no longer drawn: groups only bundle and fold nodes.
     const view = { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
-      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, color: group.color },
-      // Below the connections' layer (0): an opaque group colour must never hide the links between its members.
+      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed },
+      // Below the connections' layer (0), so a folded frame never hides the links between its members.
       width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? frameHandles : [] };
     cache.frames.set(group, { x: bounds.x, y: bounds.y, width, height, view });
     return view;
@@ -205,20 +222,32 @@ export function canvasView(nodes, edges, groups, cache = createViewCache()) {
     cache.edges.set(edge, { source, target, kind, view });
     return view;
   });
-  const all = [...frames, ...viewNodes], last = cache.view;
-  cache.view = { nodes: last && sameItems(last.nodes, all) ? last.nodes : all, edges: last && sameItems(last.edges, viewEdges) ? last.edges : viewEdges };
+  const sectionZ = sections.length ? sectionLayers(sections, cache) : null;
+  const sectionViews = sections.map(section => {
+    const zIndex = sectionZ.get(section.id), saved = cache.sections.get(section);
+    if (saved && saved.zIndex === zIndex) return saved.view;
+    const { width, height } = section;
+    // Only the title and border pick a section up; its empty inside lets a drag select or pan, as in FigJam.
+    const view = { id: section.id, type: 'section', position: { x: section.x, y: section.y }, selected: !!section.selected, dragHandle: '.section-handle',
+      data: { name: section.name, color: section.color }, width, height, measured: { width, height }, zIndex, handles: [] };
+    cache.sections.set(section, { zIndex, view });
+    return view;
+  });
+  const all = sectionViews.length ? [...sectionViews, ...frames, ...viewNodes] : [...frames, ...viewNodes], last = cache.view;
+  cache.view = { nodes: last && sameItems(last.nodes, all) ? last.nodes : all, edges: last && sameItems(last.edges, viewEdges) ? last.edges : viewEdges,
+    sections: last && sameItems(last.sections, sectionViews) ? last.sections : sectionViews };
   return cache.view;
 }
 
-// Far out, titles of small neighbouring groups would pile up. Like labels on a map, the selected and larger groups keep
-// theirs and a title that would overlap one already placed waits until the board is closer. Sizes are screen pixels and
-// follow the CSS for .group-title.
+// Far out, titles of small neighbouring sections would pile up. Like labels on a map, the selected and larger sections
+// keep theirs and a title that would overlap one already placed waits until the board is closer. Sizes are screen
+// pixels and follow the CSS for .section-title: a pill inside the frame's top-left corner.
 export function visibleTitles(frames, zoom) {
-  const size = Math.min(Math.max(16, 24 * zoom), 20), height = Math.ceil(size * 1.3), cell = 160, grid = new Map(), shown = new Set();
+  const size = 15, height = Math.ceil(size * 1.3) + 6, cell = 160, grid = new Map(), shown = new Set();
   const order = [...frames].sort((a, b) => b.selected - a.selected || b.width * b.height - a.width * a.height || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const frame of order) {
-    const width = Math.min(Math.max(frame.width * zoom, 360), String(frame.data.name).length * size * .62 + 12);
-    const left = frame.position.x * zoom, bottom = frame.position.y * zoom - 6, box = { left, right: left + width, top: bottom - height, bottom };
+    const width = Math.min(Math.max(frame.width * zoom, 360), String(frame.data.name).length * size * .62 + 28);
+    const left = frame.position.x * zoom + 6, top = frame.position.y * zoom + 6, box = { left, right: left + width, top, bottom: top + height };
     const cells = [];
     for (let x = Math.floor(box.left / cell); x <= Math.floor(box.right / cell); x++) for (let y = Math.floor(box.top / cell); y <= Math.floor(box.bottom / cell); y++) cells.push(`${x}:${y}`);
     if (cells.some(key => grid.get(key)?.some(other => other.left < box.right && box.left < other.right && other.top < box.bottom && box.top < other.bottom))) continue;
@@ -234,6 +263,71 @@ export function moveGroup(nodes, group, position, moveStamps = true) {
   const members = new Set(group.nodeIds);
   const moved = nodes.map(node => members.has(node.id) ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } } : node);
   return moveStamps ? reconcileStampAttachments(nodes, moved) : moved;
+}
+
+// A node's drawn box, caption included.
+const nodeBox = (node, measure) => { const caption = captionHeight(node), { width, height } = measure(node); return { x: node.position.x, y: node.position.y - caption, width, height: height + caption }; };
+const centre = box => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+const holds = (rect, point) => point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+const area = rect => rect.width * rect.height;
+// A section lies in another when its centre does and it is smaller; equal ones by ID, so two never hold each other.
+const nests = (inner, outer) => inner.id !== outer.id && holds(outer, centre(inner)) && (area(inner) < area(outer) || (area(inner) === area(outer) && inner.id > outer.id));
+export const frameBox = (group, nodes, byId, measure = size) => { const bounds = groupBounds(group, nodes, byId, measure); return group.collapsed ? { ...bounds, width: 240, height: 72 } : bounds; };
+
+/**
+ * What sections hold, like things dropped into a FigJam section: each node whose centre lies inside, each group whose
+ * frame centre lies inside (with all its members), nested sections with their own contents, and the stamps attached to
+ * any node taken. `page` is one page's { nodes, groups, sections }; `roots` are section IDs. Returns the node IDs and
+ * the section IDs, roots included.
+ */
+export function sectionContents(page, roots, measure = estimatedSize) {
+  const sections = page.sections || [], sectionIds = new Set(), stack = sections.filter(section => roots.has(section.id));
+  stack.forEach(section => sectionIds.add(section.id));
+  while (stack.length) {
+    const outer = stack.pop();
+    for (const section of sections) if (!sectionIds.has(section.id) && nests(section, outer)) { sectionIds.add(section.id); stack.push(section); }
+  }
+  const rects = sections.filter(section => sectionIds.has(section.id)), inside = box => { const point = centre(box); return rects.some(rect => holds(rect, point)); };
+  const byId = new Map(page.nodes.map(node => [node.id, node])), nodeIds = new Set(), grouped = new Set();
+  if (!rects.length) return { nodeIds, sectionIds };
+  // A grouped node goes where its group goes, and an attached stamp where its node goes.
+  for (const group of page.groups || []) {
+    group.nodeIds.forEach(id => grouped.add(id));
+    if (inside(frameBox(group, page.nodes, byId, measure))) for (const id of group.nodeIds) if (byId.has(id)) nodeIds.add(id);
+  }
+  const follows = node => node.type === 'stamp' && canAttachStamp(byId.get(node.data.attachedTo));
+  for (const node of page.nodes) if (!grouped.has(node.id) && !follows(node) && inside(nodeBox(node, measure))) nodeIds.add(node.id);
+  for (const node of page.nodes) if (follows(node) && nodeIds.has(node.data.attachedTo)) nodeIds.add(node.id);
+  return { nodeIds, sectionIds };
+}
+
+// Where everything a section move takes along started. Taken when the move begins, so what it passes over stays put.
+export function captureSections(page, roots, measure) {
+  const { nodeIds, sectionIds } = sectionContents(page, roots, measure);
+  return { nodes: new Map(page.nodes.filter(node => nodeIds.has(node.id)).map(node => [node.id, node.position])),
+    sections: new Map((page.sections || []).filter(section => sectionIds.has(section.id)).map(section => [section.id, { x: section.x, y: section.y }])) };
+}
+
+// Places captured items at their start plus `delta`; everything else keeps its identity.
+export function moveCaptured({ nodes, sections }, capture, delta) {
+  const there = (start, x, y) => x === start.x + delta.x && y === start.y + delta.y;
+  return {
+    nodes: nodes.map(node => { const start = capture.nodes.get(node.id); return !start || there(start, node.position.x, node.position.y) ? node : { ...node, position: { x: start.x + delta.x, y: start.y + delta.y } }; }),
+    sections: sections.map(section => { const start = capture.sections.get(section.id); return !start || there(start, section.x, section.y) ? section : { ...section, x: start.x + delta.x, y: start.y + delta.y }; }),
+  };
+}
+
+// A new section around the chosen nodes, groups (a chosen member takes its whole group) and sections, with room for its title.
+export function wrapBounds(page, ids, measure = estimatedSize) {
+  const byId = new Map(page.nodes.map(node => [node.id, node])), boxes = [], taken = new Set();
+  for (const group of page.groups || []) if (ids.has(group.id) || group.nodeIds.some(id => ids.has(id))) { boxes.push(frameBox(group, page.nodes, byId, measure)); group.nodeIds.forEach(id => taken.add(id)); }
+  for (const node of page.nodes) if (ids.has(node.id)) taken.add(node.id);
+  for (const node of page.nodes) if (taken.has(node.id) || (node.type === 'stamp' && taken.has(node.data.attachedTo))) boxes.push(nodeBox(node, measure));
+  for (const section of page.sections || []) if (ids.has(section.id)) boxes.push(section);
+  if (!boxes.length) return null;
+  const x = Math.min(...boxes.map(box => box.x)) - sectionPadding.side, y = Math.min(...boxes.map(box => box.y)) - sectionPadding.top;
+  const right = Math.max(...boxes.map(box => box.x + box.width)) + sectionPadding.side, bottom = Math.max(...boxes.map(box => box.y + box.height)) + sectionPadding.side;
+  return { x, y, width: Math.max(sectionMinimum.width, right - x), height: Math.max(sectionMinimum.height, bottom - y) };
 }
 
 export function stampTargetAt(nodes, point, stampId) {

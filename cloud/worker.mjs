@@ -1,7 +1,9 @@
-import { routePartykitRequest } from 'partyserver';
+import { getServerByName, routePartykitRequest } from 'partyserver';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
 import { assetPattern, imageFormat, imageTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
+import { nanoAllowed, nanoSettings } from './nano-banana.mjs';
+import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
 
@@ -36,6 +38,49 @@ function name(value, max = 40) {
   catch (cause) { throw Object.assign(cause, { status: 400 }); }
 }
 
+// The room trusts these headers to say who connected and what they may do, so no copy a client sent reaches it.
+function admitted(request, role, email) {
+  const next = new Request(request);
+  for (const key of [...next.headers.keys()]) if (key.startsWith('x-concept-graph-') || key === 'x-partykit-props') next.headers.delete(key);
+  next.headers.set('x-concept-graph-role', role); next.headers.set('x-concept-graph-email', email);
+  return next;
+}
+
+// Everyone connected to the board gets their new role at once; if this fails, they get it when they next connect.
+async function refreshRoom(env, id) {
+  try { await (await getServerByName(env.BoardRoom, id)).refreshAccess(); }
+  catch (cause) { console.error('Could not update access on the open board:', cause); }
+}
+
+// Usage figures are shown only to people who may use the site's Gemini key.
+async function nanoStatus(user, env) {
+  const settings = nanoSettings(env), allowed = nanoAllowed(user.email, env.NANO_BANANA_ALLOWED);
+  if (!settings.configured || !allowed) return { configured: settings.configured, allowed };
+  const { usedToday, teamSpentUsd } = await directory(env).nanoUsage(user.email);
+  return { configured: true, allowed: true, dailyImages: settings.dailyImages, usedToday, monthlyUsd: settings.monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
+}
+
+// Generation runs in the board's room, which holds the board; the Worker only checks who may spend the site's key.
+async function nanoRoute(request, env, user, url, boardId, runId) {
+  if (request.method !== 'POST') return error('Method not allowed.', 405);
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+  const board = boardPattern.test(boardId) && await directory(env).boardFor(boardId, user.email);
+  if (!board) return error('Board not found.', 404);
+  if (!canEdit(board.role)) return error(board.role ? 'You can only view this board.' : 'You don’t have access to this board.', 403);
+  if (runId !== undefined) {
+    if (!boardPattern.test(runId)) return error('Generation not found.', 404);
+    const result = await (await getServerByName(env.BoardRoom, boardId)).cancelNano({ runId, email: user.email });
+    return result.error ? error(result.error, result.status) : json({ ok: true });
+  }
+  if (!nanoSettings(env).configured) return error('Nano Banana isn’t set up on this site.', 503);
+  if (!nanoAllowed(user.email, env.NANO_BANANA_ALLOWED)) return error('Nano Banana is not available for your account.', 403);
+  const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
+  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
+  return result.error ? error(result.error, result.status) : json({ run: result.run }, 202);
+}
+
 async function route(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method;
   if (path === '/concept-graph-helper-downloads.json') {
@@ -56,6 +101,8 @@ async function route(request, env) {
       'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff'
     } });
   }
+  // Board links load the app, which signs the person in and then opens the board.
+  if (/^\/b\/[^/]+\/?$/.test(path)) return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
   if (path === '/api/auth/google') return method === 'GET' ? googleSignIn(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/google/callback') return method === 'GET' ? googleCallback(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/config') return method === 'GET' ? json({ devLogin: devLoginEnabled(request, env) }) : error('Method not allowed.', 405);
@@ -78,6 +125,9 @@ async function route(request, env) {
   if (protectedPath && !user) return error('Sign in required.', 401);
   if (path === '/api/cloud/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url) });
   if (path === '/api/cloud/me' && method === 'GET') return json({ user });
+  if (path === '/api/nano') return method === 'GET' ? json(await nanoStatus(user, env)) : error('Method not allowed.', 405);
+  const nanoMatch = path.match(/^\/api\/boards\/([^/]+)\/nano(?:\/([^/]+)\/cancel)?$/);
+  if (nanoMatch) return nanoRoute(request, env, user, url, nanoMatch[1], nanoMatch[2]);
   if (path === '/api/templates') {
     if (method === 'GET') return json({ templates: await directory(env).listTemplates() });
     if (method === 'POST') {
@@ -95,16 +145,40 @@ async function route(request, env) {
     return result.error ? error(result.error, result.status) : json(result);
   }
   if (path === '/api/cloud/boards') {
-    if (method === 'GET') return json({ boards: await directory(env).listBoards() });
-    if (method === 'POST') return json({ board: await directory(env).createBoard(name((await body(request)).name, 80)) }, 201);
+    if (method === 'GET') return json({ boards: await directory(env).boardsFor(user.email) });
+    if (method === 'POST') {
+      const board = await directory(env).createBoard(name((await body(request)).name, 80), user);
+      return json({ board: await directory(env).boardFor(board.id, user.email) }, 201);
+    }
     return error('Method not allowed.', 405);
   }
-  const boardMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)$/);
+  const boardMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)(\/sharing)?$/);
   if (boardMatch) {
-    if (!boardPattern.test(boardMatch[1])) return error('Board not found.', 404);
+    const id = boardMatch[1], store = directory(env);
+    if (!boardPattern.test(id)) return error('Board not found.', 404);
+    if (boardMatch[2]) {
+      if (method === 'GET') {
+        const sharing = await store.sharing(id, user.email);
+        return !sharing ? error('Board not found.', 404) : sharing.role ? json({ sharing }) : error('You don’t have access to this board.', 403);
+      }
+      if (method !== 'PATCH') return error('Method not allowed.', 405);
+      const origin = request.headers.get('Origin');
+      if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+      const input = await body(request), result = await store.changeSharing(id, user.email, { access: input.access, linkRole: input.linkRole, member: input.member });
+      if (result.error) return error(result.error, result.status);
+      await refreshRoom(env, id);
+      return json(result);
+    }
+    if (method === 'GET') {
+      const result = await store.openBoard(id, user);
+      return result.error ? json({ error: result.error, ...(result.owner ? { owner: result.owner } : {}) }, result.status) : json(result);
+    }
     if (method !== 'PATCH') return error('Method not allowed.', 405);
-    const board = await directory(env).renameBoard(boardMatch[1], name((await body(request)).name, 80));
-    return board ? json({ board }) : error('Board not found.', 404);
+    const board = await store.boardFor(id, user.email);
+    if (!board) return error('Board not found.', 404);
+    if (board.role !== 'owner') return error(board.role ? 'Only the board’s owner can rename it.' : 'You don’t have access to this board.', 403);
+    await store.renameBoard(id, name((await body(request)).name, 80));
+    return json({ board: await store.boardFor(id, user.email) });
   }
   if (path === '/api/assets') {
     if (method !== 'POST') return error('Method not allowed.', 405);
@@ -181,7 +255,10 @@ async function route(request, env) {
       onBeforeConnect: async (incoming, lobby) => {
         const origin = incoming.headers.get('Origin');
         if (origin && origin !== url.origin) return error('Invalid origin.', 403);
-        if (lobby.className !== 'BoardRoom' || !await directory(env).getBoard(lobby.name)) return error('Board not found.', 404);
+        const board = lobby.className === 'BoardRoom' && await directory(env).boardFor(lobby.name, user.email);
+        if (!board) return error('Board not found.', 404);
+        if (!board.role) return error('You don’t have access to this board.', 403);
+        return admitted(incoming, board.role, user.email);
       }
     }) || error('Board not found.', 404);
   }

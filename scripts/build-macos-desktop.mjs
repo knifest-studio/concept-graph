@@ -51,7 +51,7 @@ try {
   await cp(path.join(temp, `node-v22.22.3-darwin-${arch}/LICENSE`), path.join(resources, 'runtime/NODE-LICENSE'));
   for (const file of ['server.mjs', 'mcp.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'graph.mjs', 'board-archive.mjs', 'helper-auth.mjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) await cp(path.join(root, file), path.join(app, file));
   await mkdir(path.join(app, 'src'), { recursive: true });
-  for (const file of ['canvas.mjs', 'node-template.mjs', 'annotations.mjs', 'pages.mjs', 'layers.mjs']) await cp(path.join(root, 'src', file), path.join(app, 'src', file));
+  for (const file of ['canvas.mjs', 'node-template.mjs', 'annotations.mjs', 'pages.mjs', 'layers.mjs', 'sections.mjs']) await cp(path.join(root, 'src', file), path.join(app, 'src', file));
   for (const dependency of ['yauzl', 'yazl', 'pend', 'buffer-crc32']) await cp(path.join(root, 'node_modules', dependency), path.join(app, 'node_modules', dependency), { recursive: true });
   run(process.execPath, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build', '--outDir', path.join(app, 'dist'), '--emptyOutDir'], { VITE_CONCEPT_GRAPH_HOSTED: '0' });
   const target = arch === 'arm64' ? 'arm64-apple-macos12.0' : 'x86_64-apple-macos12.0';

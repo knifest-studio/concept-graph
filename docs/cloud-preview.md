@@ -1,10 +1,10 @@
 # Cloud boards preview
 
-Cloud prototype. Boards live on Cloudflare, several people edit one board at once and see each other's cursors, and each person generates images with their own Codex through the local helper. Results are uploaded to the shared board.
+Cloud prototype. Boards live on Cloudflare, several people edit one board at once and see each other's cursors, and each person generates images with their own Codex through the local helper, or, when the site owner sets it up, with Nano Banana on the company's Gemini API key (see [Nano Banana](#nano-banana-on-the-companys-gemini-key)). Results are added to the shared board.
 
-The stack uses Workers static assets + API (`cloud/worker.mjs`), one Durable Object per board running Yjs (`cloud/board-room.mjs`), a board directory Durable Object, R2 for images, and D1 for registered users. **Sign in with Google** accepts any verified Google account. Every signed-in person can use all features and access all shared boards, images, templates, and helper downloads. There is no allowlist or role system.
+The stack uses Workers static assets + API (`cloud/worker.mjs`), one Durable Object per board running Yjs (`cloud/board-room.mjs`), a board directory Durable Object, R2 for images, and D1 for registered users. **Sign in with Google** accepts any verified Google account, and anyone signed in can create boards. A new board is private to its owner and the people they invite; the owner can also share it by link or with everyone who signs in, and chooses who can edit and who can only view (see [Sharing boards](#sharing-boards)). Nano Banana is limited to its allowed list. There is no other allowlist.
 
-Google authenticates the person. Generation continues through each person's own Codex and local helper. Signing into Google and signing into Codex are separate steps.
+Google authenticates the person. Codex generation continues through each person's own Codex and local helper. Signing into Google and signing into Codex are separate steps.
 
 ## Configure Google sign-in
 
@@ -34,9 +34,9 @@ Browse registrations in **Cloudflare dashboard → Storage & databases → D1 �
 npx wrangler d1 execute concept-graph-cloud --remote -c cloud/wrangler.jsonc --command "SELECT * FROM users"
 ```
 
-The table appears after the first successful registry write. Local development sign-in also records users in local D1 storage; `google_sub` is null for a dev-only user, and a dev sign-in preserves any previously recorded Google ID. D1 failures are logged and do not block sign-in, so the registry and login counts are best effort. There are no roles, account restrictions, or user-list API; the owner browses D1 directly.
+The table appears after the first successful registry write. Local development sign-in also records users in local D1 storage; `google_sub` is null for a dev-only user, and a dev sign-in preserves any previously recorded Google ID. D1 failures are logged and do not block sign-in, so the registry and login counts are best effort. There are no account restrictions or user-list API; the owner browses D1 directly. Board roles live in the board directory, not in D1.
 
-The `/privacy` page describes Google identity and sign-in bookkeeping, the session cookie, shared board and image storage on Cloudflare, generation through each person's local helper and own Codex/ChatGPT account with prompts/reference images sent to OpenAI, no ads or data sales, and deletion requests to `knifest17@gmail.com`. It discloses access by signed-in workspace users and the services used by the app.
+The `/privacy` page describes Google identity and sign-in bookkeeping, the session cookie, shared board and image storage on Cloudflare, generation through each person's local helper and own Codex/ChatGPT account with prompts/reference images sent to OpenAI, Nano Banana generations sent to Google's Gemini API under the site owner's account with per-person usage records, no ads or data sales, and deletion requests to `knifest17@gmail.com`. It describes who can see a board (owner, invited people, link and everyone sharing, view-only access), what is stored to enforce that, and the services used by the app.
 
 ## Run locally
 
@@ -57,17 +57,18 @@ For local browser verification without Google credentials, add `DEV_LOGIN="1"` t
 2. `npx wrangler login`
 3. `npx wrangler r2 bucket create concept-graph-files`
 4. `npm run cloud:deploy` — prints the site URL. To include helper downloads on the site, deploy again with `CONCEPT_GRAPH_NODE_ARCHIVES` (folder with the Node.js archives listed in `scripts/helper-build.mjs`) and `CONCEPT_GRAPH_HELPER_SITE=<site URL>`; the launchers then point at your site.
-5. Configure the three secrets, then verify **Sign in with Google** at the deployed URL.
+5. Configure the secrets, then verify **Sign in with Google** at the deployed URL. `SITE_OWNER_EMAIL` is your own Google email: you become the owner of the boards created before sharing (see [Sharing boards](#sharing-boards)).
 
    ```sh
    npx wrangler secret put GOOGLE_CLIENT_ID -c cloud/wrangler.jsonc
    npx wrangler secret put GOOGLE_CLIENT_SECRET -c cloud/wrangler.jsonc
    npx wrangler secret put SESSION_SECRET -c cloud/wrangler.jsonc
+   npx wrangler secret put SITE_OWNER_EMAIL -c cloud/wrangler.jsonc
    ```
 
    The shared `TEAM_CODE` secret and `/api/cloud/login` endpoint have been retired. If the old secret exists in Cloudflare, remove it with `npx wrangler secret delete TEAM_CODE -c cloud/wrangler.jsonc`.
 
-Share the URL. Anyone with a verified Google account can sign in and access the shared workspace. Each person who generates needs the helper. Download it from **Pair helper** on the site (when built with helper downloads), or run it from a checkout of this repository.
+Share the URL. Anyone with a verified Google account can sign in and create boards; each person sees only the boards they own, were invited to, opened from a link, or that are open to everyone. Each person who generates needs the helper. Download it from **Pair helper** on the site (when built with helper downloads), or run it from a checkout of this repository.
 
 ```sh
 npm ci
@@ -84,18 +85,81 @@ The Windows installer is built entirely on macOS using the .NET SDK at `~/.dotne
 
 Setup requires no administrator privileges and installs under `%LOCALAPPDATA%\Programs\Concept Graph Helper`, with Start-menu and desktop shortcuts. Rerun setup to upgrade; if the helper is open, finish or stop any generation, close its window, and choose **Retry**. Setup and uninstall never force-kill a running helper. Closing the helper asks for confirmation, requests a graceful stop, then terminates remaining child processes with a Windows Job Object; killing the launcher also terminates its job. Uninstall removes only the packaged files, shortcuts, and HKCU uninstall entry. It preserves `%USERPROFILE%\.concept-graph`, Codex authentication, and `%LOCALAPPDATA%\Concept Graph\codex`. There is no ZIP fallback, login autostart, automatic update, or Windows code signing. Compilation and packaging on macOS do not prove Windows runtime behavior; verify installation, pairing, duplicate launch, normal/forced shutdown, upgrade, and data-preserving uninstall in a Windows VM before publication.
 
+## Nano Banana on the company's Gemini key
+
+Cloud prompts can generate with **Nano Banana 2.1** (`gemini-nano-banana-2.1`) on one Gemini API key that the company pays for, so allowed teammates need no helper or Codex. Codex stays the default: the arrow beside a prompt's **Generate** button switches that prompt between **Codex** and **Nano Banana**; the choice is saved with the prompt and synced. The menu's last line shows how many images you have left today and the team's spend this month, or why Nano Banana is unavailable.
+
+Generation runs on the server. The Worker checks the person and the limits; the board's Durable Object then sends one request per Generate to Google's Interactions API (`POST https://generativelanguage.googleapis.com/v1beta/interactions`, `Api-Revision: 2026-05-20`, `store: false`), as documented in Google's [image generation guide](https://aistudio.google.com/docs/image-generation). It sends the same inputs as a Codex run: the prompt, its directly connected text and custom-node instructions, and up to 10 reference images (20 MB in total). Each returned image is saved to R2 and placed on the board exactly like a Codex result, with connections, captions, groups, the author's name and history, so everyone on the board sees it. The key never leaves the Worker. A paid call is never retried automatically: if the board's server restarts during a call, the run fails with **Generation was interrupted. Run the prompt again.** Only the person who started a run can cancel it.
+
+### Set up
+
+1. In Google AI Studio, create an API key in a project with billing enabled. Nano Banana 2.1 has no free tier for image output.
+2. Store the key and the allowed list as Worker secrets. Each command asks for the value: paste it at the prompt, not on the command line.
+
+   ```sh
+   npx wrangler secret put GEMINI_API_KEY -c cloud/wrangler.jsonc
+   npx wrangler secret put NANO_BANANA_ALLOWED -c cloud/wrangler.jsonc
+   ```
+
+   `NANO_BANANA_ALLOWED` lists emails and whole domains separated by commas or spaces, for example `lead@studio.com, @studio.com`. Case is ignored, and `@studio.com` does not include subdomains. Everyone else can still sign in and use their own Codex. To change the list, run the second command again; secrets take effect without a redeploy.
+3. Limits are variables in `cloud/wrangler.jsonc`: `NANO_BANANA_DAILY_IMAGES` (images per person per UTC day, default 50) and `NANO_BANANA_MONTHLY_USD` (the team's spend per UTC calendar month, default 50). Edit the values and run `npm run cloud:deploy`; `0` stops Nano Banana generation.
+
+Without `GEMINI_API_KEY`, the option shows **Nano Banana isn’t set up on this site**. Also set a budget alert in Google Cloud: the monthly cap is the site's own estimate, not a limit Google enforces.
+
+### Limits and cost
+
+Before each call the site reserves one image for the person and an estimated cost for the team; open reservations count, so simultaneous clicks cannot overshoot a limit. When the call ends it records the images placed and the cost from the token usage Google returns, using the Standard-tier prices read on 2026-11-04 from Google's [pricing page](https://aistudio.google.com/docs/pricing): $1.50 per million input tokens, $7.50 per million text and thinking tokens, and $30 per million image tokens ($0.0336 per 1K image). They are kept in `cloud/nano-banana.mjs`. Calls that Google refused or failed with an error cost nothing; a cancelled or unanswered call keeps its estimate in the month, because Google may still bill it. A reservation that never finishes stops counting against the person after 15 minutes. Usage rows live in the board-directory Durable Object with the person's email; boards store only display names. A full limit stops generation with **Daily limit reached (50/50)** or **Team budget for this month is used up**.
+
+The routes are `GET /api/nano` (setup, access and usage for the signed-in person), `POST /api/boards/<board>/nano` with `{ "nodeId": "…" }`, and `POST /api/boards/<board>/nano/<run>/cancel`.
+
+### Test locally without Google
+
+Run the fake Gemini server (`node scripts/fake-gemini.mjs`, port 8788; put `[two]`, `[text]`, `[refuse]`, `[busy]`, `[error]` or `[slow]` in a prompt to choose its answer) and point a local Worker at it:
+
+```sh
+npx wrangler dev -c cloud/wrangler.jsonc --port 8787 --var DEV_LOGIN:1 --var GEMINI_API_KEY:fake-key --var NANO_BANANA_ALLOWED:@example.com --var NANO_BANANA_ENDPOINT:http://127.0.0.1:8788
+```
+
+`NANO_BANANA_ENDPOINT` is honoured only for `localhost`, `127.0.0.1` or `[::1]` addresses, so the key can never be sent to another host by mistake. Keep it out of deployed configuration. The automated tests (`tests/nano-banana.test.mjs`) use a fake fetch and never contact Google.
+
+## Sharing boards
+
+Sign-in stays open to any verified Google account. Each board has an owner, the person who created it, and one of three general access settings, chosen in the board's **Share** dialog (top bar):
+
+- **Only invited people**, the default for new boards: the owner and the people they invite by email.
+- **Anyone with the link**: also anyone signed in who opens the board's link (`/b/<board ID>`). The board then appears in that person's list; nobody else sees it listed.
+- **Everyone who signs in**: every signed-in person sees it under **Shared with you**.
+
+The owner chooses **Can edit** or **Can view** for each invited person and for the link or everyone setting. A person gets the strongest role that applies, as in Google Docs: an invited viewer can still edit when the link lets anyone edit. Only the owner can rename the board or change its sharing. Everyone with access can open the dialog to see who has access and their own role: the owner sees invited people's emails, others see display names. No email is sent. The owner copies the link and sends it; an invited person sees the board after signing in with the invited address. Someone who opens a link without access sees **You don't have access to this board** with the owner's name.
+
+Viewers see changes and cursors live and can select, copy, zoom, pan, switch pages and open images fullscreen, but cannot change anything; the editor shows **View only**. The server enforces this: the Worker admits a board connection only for someone with a role and passes that role to the board's Durable Object in a header it sets itself (any copy the client sent is dropped), and the room ignores document updates from view-only connections while their presence still syncs. Renaming and sharing changes need the owner, and Nano Banana needs edit access. When the owner changes access, people already on the board get their new role at once (their board reloads), and anyone who lost access is disconnected.
+
+Boards created before sharing have no recorded owner. They stay open to everyone who signs in, with editing, and belong to the site owner, who can change each one in its Share dialog. The site owner's Google email is a Worker secret, never stored in the repository:
+
+```sh
+npx wrangler secret put SITE_OWNER_EMAIL -c cloud/wrangler.jsonc
+```
+
+Without it, those boards stay open to everyone and nobody can change their sharing; their Share dialog says so. For local development, add `SITE_OWNER_EMAIL="you@example.com"` to `cloud/.dev.vars`.
+
+Custom nodes belong to boards. Each board keeps its templates in its Yjs document, so they sync live: everyone who can open the board can use them, and people who can edit it can change them (the last edit wins). A board created before this change copies the old site-wide library into its document the first time it opens; new boards start with none. The old library stays untouched in the board directory, and `/api/templates` still serves it to tabs left open from older versions. The desktop app keeps its own library.
+
+Owners, access settings, invitations and visits live in the board-directory Durable Object (the `owner`, `ownerName`, `access` and `linkRole` columns of `boards` and the `board_people` table); board documents hold only display names and colors. Limitation: images and their previews are not tied to boards. They stay behind sign-in under long random names, so anyone signed in who obtains an image's address can load it.
+
+The routes are `GET /api/cloud/boards` (the boards you can open, with your role), `GET /api/cloud/boards/<board>` (open a board: your role and who has access; a 403 names the owner), `GET` and `PATCH /api/cloud/boards/<board>/sharing` (owner only for changes: `{ "access": "private" | "link" | "everyone", "linkRole": "view" | "edit", "member": { "email": "…", "role": "view" | "edit" | null } }`, where a null role removes the invitation) and `PATCH /api/cloud/boards/<board>` (rename, owner only).
+
 ## Not yet supported in cloud boards
 
-Board export/import, custom template library, MCP, run diagnostics beyond the error text, board permissions, voice chat.
+Board export/import, board deletion, ownership transfer, access requests and email invitations, MCP, run diagnostics beyond the error text, voice chat.
 
 ## Verify authentication
 
 Run the port-free cloud suites with Node.js 22.15 or later so the Worker runtime tests execute.
 
 ```sh
-node --test tests/cloud-worker-auth.test.mjs tests/cloud-worker-runtime.test.mjs tests/cloud-boards.test.mjs tests/cloud-sync.test.mjs tests/cloud-sync-generation.test.mjs tests/cloud-download-upload.test.mjs
+node --test tests/cloud-worker-auth.test.mjs tests/cloud-worker-runtime.test.mjs tests/board-access.test.mjs tests/cloud-boards.test.mjs tests/cloud-sync.test.mjs tests/cloud-sync-generation.test.mjs tests/cloud-download-upload.test.mjs tests/nano-banana.test.mjs
 ```
 
-The tests mock Google's token endpoint and cover state/nonce/PKCE, malformed and rejected tokens, callback errors, cookie expiry and flags, old-cookie rejection, email identity, loopback-only dev sign-in, logout, and authenticated access to shared resources. A D1 stub backed by in-memory SQLite checks first and repeat sign-in records, profile updates, preserved creation times, independent users, and sign-in continuing when D1 fails. Tests also check the database binding and public `/privacy` route without authentication or other bindings. The helper integration tests in `tests/cloud-jobs.test.mjs` bind local ports and can be run separately with `node --test tests/cloud-jobs.test.mjs`.
+The tests mock Google's token endpoint and cover state/nonce/PKCE, malformed and rejected tokens, callback errors, cookie expiry and flags, old-cookie rejection, email identity, loopback-only dev sign-in, logout, and authenticated access to shared resources. A D1 stub backed by in-memory SQLite checks first and repeat sign-in records, profile updates, preserved creation times, independent users, and sign-in continuing when D1 fails. Tests also check the database binding and public `/privacy` route without authentication or other bindings. `tests/board-access.test.mjs` covers the role rules, the directory migration of older boards, invitations, link visits and the board list, the owner-only routes, WebSocket admission and header stripping, read-only room connections, board links and the sign-in return to a board, and the one-time copy of the old custom-node library. The helper integration tests in `tests/cloud-jobs.test.mjs` bind local ports and can be run separately with `node --test tests/cloud-jobs.test.mjs`.
 
-For a live check, configure the Google client and local secrets, run `npm run cloud:dev`, and visit `http://localhost:8787`. Verify Google sign-in, account selection, shared board access, logout, cancellation, and signing in again. Also verify the dev form appears only with `DEV_LOGIN="1"` on loopback and remains hidden on the deployed hostname. Pair the helper and generate an image to confirm the existing Codex path end to end.
+For a live check, configure the Google client and local secrets, run `npm run cloud:dev`, and visit `http://localhost:8787`. Verify Google sign-in, account selection, opening a shared board link while signed out (sign-in returns to that board), logout, cancellation, and signing in again. With two people (for example `localhost` and `127.0.0.1` windows), check that a new board is private, that inviting someone as a viewer shows them the board read-only and live, and that changing or removing their access takes effect without a reload. Also verify the dev form appears only with `DEV_LOGIN="1"` on loopback and remains hidden on the deployed hostname. Pair the helper and generate an image to confirm the existing Codex path end to end.

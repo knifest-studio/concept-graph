@@ -1,10 +1,10 @@
-import { collectInputs, generationSettings, imageNode, imageSize, positionRunOutput, groupRunOutputs } from '../graph.mjs';
+import { getState } from 'yjs';
+import { collectInputs, generationSettings, generators, imageSize } from '../graph.mjs';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
-import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 import { delegateAction } from './codex-sharing.mjs';
+import { placeRunOutput, runOutputId, runSummary, terminalRun as terminal } from './run-outputs.mjs';
 
-const terminal = status => ['completed', 'failed', 'cancelled'].includes(status);
 const timestamp = () => new Date().toISOString();
 // The helper reports the settings it used; older helpers do not, so the submitted defaults stay.
 const jobSettings = job => ({ ...(typeof job.model === 'string' && /^[\w.\/:+-]{1,128}$/.test(job.model) ? { model: job.model } : {}),
@@ -46,7 +46,7 @@ export class CloudGeneration {
     const graph = this.read();
     if (graph.runs.some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { prompt, images, target } = collectInputs(graph, nodeId);
-    const run = { id: crypto.randomUUID(), nodeId, ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}), ...generationSettings, status: 'queued', by: this.user, startedAt: timestamp() };
+    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), ...generationSettings, status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
     if (owner !== undefined) {
       if (this.sharing?.using()?.to !== owner) throw new Error('Your teammate’s Codex is no longer available. Ask for access again.');
@@ -71,9 +71,21 @@ export class CloudGeneration {
     } finally { this.submitting.delete(run.id); }
     this.tick();
   }
+  // Nano Banana runs in the board's room on the server, which writes the run and places its images; no helper is involved.
+  // The room first waits for this client's own latest edits (its clock), so it reads the prompt as it is shown here.
+  async startNano(nodeId) {
+    if (!this.ready()) throw new Error('Wait for a live board connection before generating.');
+    if ([...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
+    const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId, client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID) }) });
+    this.onStart?.(run);
+  }
+  // Runs that need no local helper to start or cancel.
+  remote(id) { const run = this.doc.getMap('runs').get(id); return !!run?.delegate || run?.provider === generators.nanoBanana; }
   async cancel(id) {
     const run = this.doc.getMap('runs').get(id);
     if (!run || run.by?.name !== this.user.name || terminal(run.status)) return;
+    if (run.provider === generators.nanoBanana) return void await this.api(`/api/boards/${this.boardId}/nano/${id}/cancel`, { method: 'POST' });
     // The board is the only channel to a teammate's helper; their client stops the job when it sees this.
     if (run.delegate) {
       if (!this.ready()) throw new Error('Wait for a live board connection before cancelling.');
@@ -87,7 +99,7 @@ export class CloudGeneration {
     if (terminal(map.get(job.id)?.status)) return true;
     for (const output of job.outputs || []) {
       if (!this.active || !this.ready()) return false;
-      const id = `${job.id}-output-${output.index}`;
+      const id = runOutputId(job.id, output.index);
       if (map.get(job.id)?.outputIds?.includes(id)) continue;
       const key = `${job.id}:${output.index}`;
       let uploaded = this.uploaded.get(key);
@@ -103,32 +115,8 @@ export class CloudGeneration {
       this.doc.transact(() => {
         const current = map.get(job.id);
         if (terminal(current?.status) || current?.outputIds?.includes(id)) return;
-        // Copies only what this step changes; untouched nodes stay shared, so the diff skips them.
-        const before = this.read(), graph = { ...before, nodes: [...before.nodes], edges: [...before.edges], groups: before.groups.map(group => ({ ...group, nodeIds: [...group.nodeIds] })), runs: [...before.runs] };
-        const target = graph.nodes.find(node => node.id === job.nodeId) || { position: { x: 0, y: 0 } };
-        const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || this.user), ...jobSettings(job), startedAt: job.startedAt || current?.startedAt, status: 'running', outputIds: [...(current?.outputIds || [])] };
-        let node = graph.nodes.find(node => node.id === id);
-        if (!node) {
-          node = imageNode({ id: job.id, target, by: run.by }, uploaded.asset, output.index, uploaded.dimensions);
-          node.id = id;
-          if (output.caption || output.index > 0) node.data.caption = output.caption || `Image ${output.index + 1}`;
-          positionRunOutput(node, graph, run);
-          graph.nodes.push(node);
-        }
-        run.outputIds.push(id); run.count = run.outputIds.length;
-        if (run.outputIds.length === 2) {
-          const index = graph.nodes.findIndex(node => node.id === run.outputIds[0]), first = graph.nodes[index];
-          if (first && !Object.hasOwn(first.data, 'caption')) graph.nodes[index] = { ...first, data: { ...first.data, caption: 'Image 1' } };
-        }
-        if (samePage(graph, graph.nodes.find(item => item.id === job.nodeId), node) && !graph.edges.some(edge => edge.id === `${id}-edge`)) graph.edges.push({ id: `${id}-edge`, source: job.nodeId, target: id });
-        const previousGroup = run.autoGroupId;
-        groupRunOutputs(graph, run, id);
-        if (!previousGroup && run.autoGroupId) {
-          graph.groups.find(group => group.id === run.autoGroupId).id = `${job.id}-group`;
-          run.autoGroupId = `${job.id}-group`;
-        }
-        graph.runs = [...graph.runs.filter(item => item.id !== job.id), run];
-        applyLocalGraph(this.doc, graph, before, this.origin);
+        const before = this.read(), graph = placeRunOutput(before, { runId: job.id, nodeId: job.nodeId, run: current, author: this.user, fields: { ...jobSettings(job), startedAt: job.startedAt || current?.startedAt }, output, ...uploaded });
+        if (graph) applyLocalGraph(this.doc, graph, before, this.origin);
       }, this.origin);
     }
     if (!this.active || !this.ready()) return false;

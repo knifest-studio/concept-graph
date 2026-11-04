@@ -63,6 +63,18 @@ test('format 4 round trips annotations, group fills and author metadata; older v
   await assert.rejects(importBoardArchive(await pack(files), destination), /annotations or author/);
 });
 
+test('format 6 round trips sections; an older format claiming no sections is refused', async t => {
+  const { source, destination } = await fixture(t), saved = structuredClone(board);
+  saved.graph.sections = [{ id: 'section', name: 'References', x: -440, y: -40, width: 1200, height: 600, color: '#dceaff' }];
+  const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive), manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 6);
+  assert.deepEqual((await importBoardArchive(archive, destination)).graph.sections, saved.graph.sections);
+  manifest.version = 5; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /uses sections/);
+  // A board without sections keeps its earlier format, so older apps still open it.
+  assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(board, source)))).get('board.json')).version, 1);
+});
+
 test('portable board round trip retains graph/history/groups and original images without overwriting destination assets', async t => {
   const { directory, source, destination } = await fixture(t), before = structuredClone(board);
   const existing = Buffer.concat([png, Buffer.from('another board owns this filename')]);
@@ -118,7 +130,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 6;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 7;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));

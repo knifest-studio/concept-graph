@@ -12,6 +12,7 @@ import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspa
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
 import { boardPages, nodePage, pageField, samePage } from './src/pages.mjs';
+import { cleanSections } from './src/sections.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.CONCEPT_GRAPH_DATA || path.join(root, 'data'));
@@ -478,10 +479,12 @@ async function applyGraph(board, next, ensureConnected = () => {}) {
   const graph = board.graph;
   if (next.revision !== graph.revision) throw conflict(graph);
   const nodeIds = new Set((next.nodes || []).map(node => node.id));
-  // Editors that do not send pages keep the board's page list.
+  // Editors and agents that do not send pages or sections keep the board's.
   next.pages ??= graph.pages;
+  next.sections ??= graph.sections;
   next.groups ??= (graph.groups || []).map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => nodeIds.has(id)) })).filter(group => group.nodeIds.length);
   validateGraph(next);
+  if (next.sections) next.sections = cleanSections(next.sections);
   const nodeAssets = node => node.type === 'image' ? [node.data.asset] : node.data.template?.assets || [];
   const availableAssets = new Set(graph.nodes.flatMap(nodeAssets));
   for (const asset of next.nodes.flatMap(nodeAssets)) {

@@ -20,6 +20,6 @@ export function useCanvasValue(selector, equal = Object.is) {
 // The zoom bucket chooses full or light cards. A node that is being focused, highlighted or renamed, or that holds
 // the text cursor, keeps its controls so that focus, onboarding hints and edits work at any zoom.
 export function useDetail(id) {
-  const detail = useCanvasValue(state => state.focusId === id || state.renamingGroup === id || state.highlight?.startsWith(`${id}:`) ? 'full' : state.detail), element = document.activeElement;
+  const detail = useCanvasValue(state => state.focusId === id || state.renaming === id || state.highlight?.startsWith(`${id}:`) ? 'full' : state.detail), element = document.activeElement;
   return detail !== 'full' && element?.matches?.('textarea,input') && element.closest('.react-flow__node')?.getAttribute('data-id') === id ? 'full' : detail;
 }

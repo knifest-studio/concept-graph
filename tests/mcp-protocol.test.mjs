@@ -89,6 +89,12 @@ test('stdio MCP discovers the authenticated local app and synchronizes graph edi
   assert.equal((await call('apply_graph', bulkArgs)).result.isError, true);
   assert.equal(board.graph.nodes.length, 2); assert.equal(graphWrites, 2);
   assert.equal((await call('get_board', { boardId })).result.isError, undefined);
+  // Sections pass through: apply_graph takes the complete list (page-1 is implicit), and get_board names each one's page.
+  const sectioned = { ...bulkArgs, expectedRevision: board.graph.revision, sections: [{ id: 'agent-section', name: 'Agent section', x: -40, y: -80, width: 640, height: 400, color: '#dceaff', page: 'page-1' }] };
+  assert.equal((await call('apply_graph', sectioned)).result.isError, undefined);
+  assert.deepEqual(board.graph.sections, [{ id: 'agent-section', name: 'Agent section', x: -40, y: -80, width: 640, height: 400, color: '#dceaff' }]);
+  assert.equal(JSON.parse((await call('get_board', { boardId })).result.content[0].text).graph.sections[0].page, 'page-1');
+  assert.equal((await call('apply_graph', { ...sectioned, expectedRevision: board.graph.revision, sections: [{ id: 'small', name: 'Small', x: 0, y: 0, width: 20, height: 400 }] })).result.isError, true);
   assert.equal((await call('rename_board', { boardId, name: 'Agent rename' })).result.isError, true);
   assert.equal(board.name, 'Concurrent rename'); assert.equal(renameCalls, 1);
   assert.equal((await call('rename_board', { boardId, name: 'Agent rename' })).result.isError, undefined);

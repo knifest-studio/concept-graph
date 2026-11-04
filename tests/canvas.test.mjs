@@ -365,8 +365,8 @@ test('a folded card is 72px square whatever it last measured, and unfolding uses
   assert.deepEqual(canvasView([unmeasured], [], [], cache).nodes[0].measured, measured);
 });
 
-test('zoomed-out group titles never overlap: the selected and larger groups keep theirs', () => {
-  const frame = (id, x, y, width, height, selected = false, name = 'Group name') => ({ id, position: { x, y }, width, height, selected, data: { name } });
+test('zoomed-out section titles never overlap: the selected and larger sections keep theirs', () => {
+  const frame = (id, x, y, width, height, selected = false, name = 'Section 12') => ({ id, position: { x, y }, width, height, selected, data: { name } });
   const frames = [frame('small', 0, 0, 300, 300), frame('big', 100, 0, 2000, 900), frame('far', 0, 5000, 300, 300), frame('picked', 50, 10, 200, 200, true)];
   assert.deepEqual([...visibleTitles(frames, .05)].sort(), ['far', 'picked']);
   // Close enough, every title fits.

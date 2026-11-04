@@ -72,13 +72,17 @@ test('board-scoped saves and queued generation stay isolated across edits and re
   assert.equal(final[0].nodes[0].data.text,changed.data.text);
   assert.equal(final[1].nodes[0].data.text,'Make a test image');
   final[0].groups=[{id:'test-group',name:'Saved group',nodeIds:final[0].nodes.map(node=>node.id),collapsed:true}];
+  final[0].sections=[{id:'test-section',name:'Saved section',x:-40,y:-80,width:900,height:600,selected:true}];
   assert.equal((await request(`/api/boards/${a}/graph`,'PUT',final[0])).status,200);
   final[0]=(await request(`/api/boards/${a}`)).value.board.graph;
-  // An older tab without the additive groups field must not erase memberships.
-  const {groups,...oldClient}=final[0];
+  // Editor-only fields are not stored.
+  assert.deepEqual(final[0].sections,[{id:'test-section',name:'Saved section',x:-40,y:-80,width:900,height:600}]);
+  // An older tab without the additive groups and sections fields must not erase them.
+  const {groups,sections,...oldClient}=final[0];
   assert.equal((await request(`/api/boards/${a}/graph`,'PUT',oldClient)).status,200);
   final[0]=(await request(`/api/boards/${a}`)).value.board.graph;
-  assert.deepEqual(final[0].groups,groups);
+  assert.deepEqual(final[0].groups,groups);assert.deepEqual(final[0].sections,sections);
+  assert.equal((await request(`/api/boards/${a}/graph`,'PUT',{...final[0],sections:[{...sections[0],width:20}]})).status,400);
   const oldName=(await request(`/api/boards/${a}`)).value.board.name;
   assert.equal((await request(`/api/boards/${a}`,'PATCH',{name:'🧙'.repeat(40),expectedName:oldName})).status,200);
   assert.equal((await request(`/api/boards/${a}`,'PATCH',{name:'Stale rename',expectedName:oldName})).status,409);
@@ -91,7 +95,7 @@ test('board-scoped saves and queued generation stay isolated across edits and re
     assert.equal(result.status,201);const {board}=await result.json();assert.notEqual(board.id,a);assert.ok(board.name.length<=80);assert.doesNotThrow(()=>encodeURIComponent(board.name));
     const graph=(await request(`/api/boards/${board.id}`)).value.board.graph;
     assert.deepEqual(graph.nodes.map(n=>n.id),final[0].nodes.map(n=>n.id));
-    assert.deepEqual(graph.edges,final[0].edges);assert.deepEqual(graph.groups,groups);assert.deepEqual(graph.runs,final[0].runs);
+    assert.deepEqual(graph.edges,final[0].edges);assert.deepEqual(graph.groups,groups);assert.deepEqual(graph.sections,sections);assert.deepEqual(graph.runs,final[0].runs);
     const image=graph.nodes.find(n=>n.type==='image');assert.notEqual(image.data.asset,final[0].nodes.find(n=>n.type==='image').data.asset);
     assert.equal((await fetch('http://127.0.0.1:14319/assets/'+image.data.asset)).status,200);
     imported.push({board,graph});

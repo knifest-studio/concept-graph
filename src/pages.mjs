@@ -36,7 +36,8 @@ export function assignPage(node, pageId) {
 
 export function pageContent(graph, pageId, pages = boardPages(graph)) {
   const resolve = pageResolver(pages), nodes = graph.nodes.filter(node => resolve(node.page) === pageId), ids = new Set(nodes.map(node => node.id));
-  return { nodes, edges: graph.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)), groups: (graph.groups || []).filter(group => group.nodeIds.some(id => ids.has(id))) };
+  return { nodes, edges: graph.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)), groups: (graph.groups || []).filter(group => group.nodeIds.some(id => ids.has(id))),
+    ...(graph.sections ? { sections: graph.sections.filter(section => resolve(section.page) === pageId) } : {}) };
 }
 
 export function samePage(graph, a, b) {
@@ -53,7 +54,7 @@ export function nextPageName(pages) {
 
 // Untouched single-page boards store no page list, so older apps can still open them.
 export const storedPages = (pages, saved) => saved === undefined && JSON.stringify(pages) === JSON.stringify(defaultPages()) ? undefined : pages;
-export const hasPageData = graph => graph.pages !== undefined || graph.nodes.some(node => node.page !== undefined) || (graph.runs || []).some(run => run.page !== undefined);
+export const hasPageData = graph => graph.pages !== undefined || graph.nodes.some(node => node.page !== undefined) || (graph.runs || []).some(run => run.page !== undefined) || (graph.sections || []).some(section => section.page !== undefined);
 
 // Accept pages another editor added or renamed without undoing local deletions or renames.
 export function mergePages(local, remote, base) {

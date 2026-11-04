@@ -2,6 +2,7 @@ import React, { cloneElement, useEffect, useLayoutEffect, useRef, useState } fro
 import { createPortal } from 'react-dom';
 import { contextMenuShortcut } from './node-context-menu.mjs';
 import { layerShortcut } from './layers.mjs';
+import { sectionPalette } from './sections.mjs';
 import './node-context-menu.css';
 
 // Every card renders one of these menus, so the platform labels are worked out once.
@@ -37,6 +38,8 @@ export function NodeContextMenu({ children, id, type, actions }) {
     };
   }, [position]);
 
+  // A viewer's menu only copies. Read when the menu is open, so closed menus on every card cost nothing.
+  const readOnly = !!position && !!actions.store?.get().readOnly;
   const open = event => {
     if (event.target.closest('input, textarea, [contenteditable="true"]')) return;
     event.preventDefault();
@@ -50,9 +53,9 @@ export function NodeContextMenu({ children, id, type, actions }) {
       choose(shortcutAction === 'image' ? actions.copyImage : actions.copyNodeId);
       return;
     }
-    const layer = type !== 'group' && layerShortcut(event);
+    const layer = !readOnly && !['group', 'section'].includes(type) && layerShortcut(event);
     if (layer) { event.preventDefault(); event.stopPropagation(); choose(nodeId => actions.arrange(layer, nodeId)); return; }
-    if (['Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); choose(actions.removeNode); return; }
+    if (!readOnly && ['Delete', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); choose(actions.removeNode); return; }
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setPosition(null); return; }
     if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
@@ -68,11 +71,15 @@ export function NodeContextMenu({ children, id, type, actions }) {
     {cloneElement(children, { onContextMenu: open })}
     {position && createPortal(<div ref={menu} className="node-context-menu" role="menu" aria-label={`${type === 'text' ? 'Prompt' : type} options`} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>Copy image</span><kbd>{shortcut}</kbd></button>}
-      {type === 'text' && <button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>Save as custom node</button>}
+      {!readOnly && <>{type === 'text' && <button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>Save as custom node</button>}
       {type === 'group' && <button type="button" role="menuitem" onClick={() => choose(actions.renameGroup)}>Rename</button>}
-      {type !== 'group' && <>{layers.map(([action, label, key]) => <button type="button" role="menuitem" key={action} onClick={() => choose(nodeId => actions.arrange(action, nodeId))}><span>{label}</span><kbd>{key}</kbd></button>)}<hr role="separator"/></>}
-      <button type="button" role="menuitem" onClick={() => choose(actions.removeNode)}>{type === 'group' ? 'Delete group; keep nodes' : 'Delete node'}</button>
-      <button type="button" role="menuitem" onClick={() => choose(actions.copyNodeId)}><span>Copy {type === 'group' ? 'group' : 'node'} ID</span><kbd>{idShortcut}</kbd></button>
+      {type === 'section' && <><button type="button" role="menuitem" onClick={() => choose(actions.renameSection)}>Rename</button>
+        <div className="menu-colors" role="group" aria-label="Section color">{[undefined, ...sectionPalette].map(color => <button type="button" role="menuitem" key={color || 'default'} className="color-swatch" aria-label={color ? `Section color ${color}` : 'Default section color'} title={color || 'Default'} style={{ background: color || 'var(--card)' }} onClick={() => choose(sectionId => actions.editSection(sectionId, { color }))}/>)}</div><hr role="separator"/></>}
+      {!['group', 'section'].includes(type) && <>{layers.map(([action, label, key]) => <button type="button" role="menuitem" key={action} onClick={() => choose(nodeId => actions.arrange(action, nodeId))}><span>{label}</span><kbd>{key}</kbd></button>)}<hr role="separator"/></>}
+      <button type="button" role="menuitem" onClick={() => choose(actions.wrapInSection)}><span>Wrap in section</span><kbd>⇧ S</kbd></button>
+      {type === 'section' && <button type="button" role="menuitem" onClick={() => choose(actions.unwrapSection)}>Remove section; keep contents</button>}
+      <button type="button" role="menuitem" onClick={() => choose(actions.removeNode)}>{type === 'group' ? 'Delete group; keep nodes' : type === 'section' ? 'Delete section and contents' : 'Delete node'}</button></>}
+      <button type="button" role="menuitem" onClick={() => choose(actions.copyNodeId)}><span>Copy {type === 'group' || type === 'section' ? type : 'node'} ID</span><kbd>{idShortcut}</kbd></button>
     </div>, document.body)}
   </>;
 }

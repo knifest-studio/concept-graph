@@ -63,3 +63,11 @@ test('uploaded references show what exists: file name, date and size', () => {
   const captioned = imageInfo({ ...node, data: { ...node.data, caption: 'Mood board' } }, [], { formatDate });
   assert.equal(captioned.caption, 'Mood board'); assert.equal(captioned.rows.some(row => row.key === 'name'), false);
 });
+
+test('Nano Banana images name the model and show no reasoning effort', () => {
+  const run = { id: 'run', nodeId: 'p', label: 'A courier robot', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: { name: 'Lead', color: '#0077b6' },
+    status: 'completed', createdAt: '2026-11-04T10:00:00.000Z', startedAt: '2026-11-04T10:00:00.000Z', finishedAt: '2026-11-04T10:00:21.000Z', outputIds: ['a'], count: 1 };
+  const info = imageInfo({ id: 'a', type: 'image', data: { asset, runId: 'run', createdAt: '2026-11-04T10:00:20.000Z' } }, [run], { width: 1024, height: 1024, formatDate });
+  assert.deepEqual(info.author, { name: 'Lead', color: '#0077b6' }); assert.equal(info.prompt, 'A courier robot');
+  assert.deepEqual(rows(info), { model: 'Nano Banana 2.1', duration: '21 s', created: 'date:2026-11-04T10:00:20.000Z', size: '1024 × 1024 px' });
+});
