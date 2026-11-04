@@ -135,10 +135,11 @@ export function groupBounds(group, nodes, byId, measure = size) {
 // side from data-handlepos; without it the links would leave from the bottom and enter from the top.
 export const lodHandleProps = type => ({ className: `lod-handle ${type}`, 'data-handlepos': type === 'source' ? 'right' : 'left' });
 
-export function estimatedSize(node) {
+// A prompt not drawn yet: header, text lines and, when something feeds it, the "Inputs" row, as the card will lay them out.
+export function estimatedSize(node, inputs = false) {
   if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
-  return { width: 310, height: Math.round(58 + 22.1 * Math.min(lines, 400)) };
+  return { width: 310, height: Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0)) };
 }
 
 // React Flow draws a connection only between handles it knows. These match the CSS: 10px dots centred on the card's
@@ -170,20 +171,21 @@ export function canvasView(nodes, edges, groups, cache = createViewCache()) {
   // A card keeps its last measured size when undo, a reload or a remote edit hands back an unmeasured copy; React Flow
   // re-measures it on screen. Folded cards are always 72px square.
   const known = node => node.data?.collapsed === true ? folded : node.measured || cache.sizes.get(node.id);
+  const fed = new Set(edges.map(edge => edge.target)), inputs = node => fed.has(node.id) || !!node.data?.template?.assets?.length;
   const viewNodes = nodes.map(node => {
     byId.set(node.id, node);
-    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node);
-    if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size) return saved.view;
+    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node);
+    if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size && saved.input === input) return saved.view;
     if (node.measured && node.data?.collapsed !== true) cache.sizes.set(node.id, node.measured);
     const view = { ...node, zIndex, hidden, selected: hidden ? false : node.selected };
     if (!hidden) {
-      const measured = size || estimatedSize(node);
+      const measured = size || estimatedSize(node, input);
       Object.assign(view, { measured, handles: nodeHandles(node, measured) });
     }
-    cache.nodes.set(node, { zIndex, hidden, size, view });
+    cache.nodes.set(node, { zIndex, hidden, size, input, view });
     return view;
   });
-  const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node);
+  const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node, inputs(node));
   const frames = groups.map(group => {
     const bounds = groupBounds(group, nodes, byId, shown);
     const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height, saved = cache.frames.get(group);

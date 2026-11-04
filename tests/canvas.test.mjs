@@ -334,6 +334,8 @@ test('unmeasured cards get estimated sizes and handles; measured ones keep their
   assert.deepEqual(byId.get('o').handles.map(handle => handle.type), ['target', 'source']);
   assert.deepEqual(byId.get('s').handles, []);
   assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 80 });
+  // A fed prompt also shows its "Inputs" row (the card measures 101.5 px with one line of text).
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: 'one line' } }, true), { width: 310, height: 102 });
   assert.deepEqual(nodeHandles({ type: 'text', data: { template: { name: 'T' } } }, { width: 310, height: 100 }).map(handle => handle.x), [-8, 308]);
   // Once measured, a node keeps that size even when undo hands back a copy without it.
   const measured = { ...prompt, measured: { width: 310, height: 210 } };

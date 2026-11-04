@@ -87,6 +87,7 @@ function Icon({ name, size = 18 }) {
 
 const noInputs = { images: 0, text: 0 };
 const failedRun = run => ['error', 'failed'].includes(run?.status);
+const Readiness = ({ readiness, action, fix }) => <div className="node-readiness nodrag"><span>{readiness === 'helper' ? 'Helper not connected.' : readiness === 'install' ? 'Codex is not installed.' : readiness === 'signin' ? 'Sign-in needed.' : 'Codex is not ready.'}</span><button type="button" onClick={fix}>{action}</button></div>;
 // What a prompt shows about its latest run; `now` counts only while that run is active, so idle cards ignore the timer.
 const runView = (state, id) => {
   const run = state.latestRun.get(id), active = busy(run);
@@ -145,7 +146,7 @@ function ExpandedTextNode({ id, data, selected }) {
     </div>
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
     {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}
-    {selected && blocked && !pending && <div className="node-readiness nodrag"><span>{view.readiness === 'helper' ? 'Helper not connected.' : view.readiness === 'install' ? 'Codex is not installed.' : view.readiness === 'signin' ? 'Sign-in needed.' : 'Codex is not ready.'}</span><button type="button" onClick={canvas.fixReadiness}>{view.readinessAction}</button></div>}
+    {selected && blocked && !pending && <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>}
     {failedRun(view) && <div className="node-error nodrag">{view.error}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>View run details</button>}</div>}
     <Handle type="source" position={Position.Right} aria-label="Connect prompt to another node"/>
   </article></NodeContextMenu>;
@@ -243,11 +244,12 @@ function CollapsedNode({ id, data, kind }) {
 
 // Zoomed-out cards keep their size, colour and connection points but drop controls, menus, badges and effects.
 // A prompt takes the height React Flow knows (measured, or estimated if never drawn), so crossing the zoom threshold moves nothing.
-function LightNode({ id, type, data, height }) {
-  const isImage = type === 'image';
+function LightNode({ id, type, data, selected }) {
+  const isImage = type === 'image', canvas = useCanvas();
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
-    return { working: busy(run) || state.starting === id, error: failedRun(run) ? run.error || 'Generation failed' : '', inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), create: state.detail !== 'tiny' || !state.crowded };
+    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), create: state.detail !== 'tiny' || !state.crowded,
+      readiness: state.readinessKey, readinessAction: state.readinessAction };
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || '');
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
@@ -256,9 +258,12 @@ function LightNode({ id, type, data, height }) {
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
   if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><LodHandle type="source"/></article></div>;
-  return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}`} style={{ ...template, height }}>
-    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text.length > 600 ? `${text.slice(0, 600)}…` : text || 'Describe the image you want, then click Generate'}</div>
-    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}{view.error && <div className="node-error">{view.error}</div>}<LodHandle type="source"/>
+  // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
+  return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}`} style={template}>
+    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text || 'Describe the image you want, then click Generate'}</div>
+    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}
+    {selected && view.readiness !== 'ready' && !view.working && <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>}
+    {view.failed && <div className="node-error nodrag">{view.error}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>View run details</button>}</div>}<LodHandle type="source"/>
   </article>;
 }
 

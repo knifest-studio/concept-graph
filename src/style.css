@@ -179,6 +179,6 @@ button,a,.image-collapse,.image-caption-add,.image-prompt-from,.image-expand,.im
 .text-node.lod-node{display:flex;flex-direction:column}
 .text-node.lod-node>header{flex-shrink:0}
 .lod-text{flex:1 1 auto;min-height:0;overflow:hidden;padding:4px 16px 17px;font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;overflow-wrap:break-word}
-.lod-text.empty{color:var(--muted);opacity:.7}
+.lod-text.empty{overflow:hidden;color:var(--muted);opacity:.7;white-space:nowrap;text-overflow:ellipsis}
 .lod-caption{overflow:hidden;line-height:20px}
 .image-placeholder{display:block;border-radius:9px;background:color-mix(in srgb,var(--purple) 9%,var(--card))}
