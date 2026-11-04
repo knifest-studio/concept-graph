@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasView, createViewCache, visibleTitles, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
+import { canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
 
 test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
   const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
@@ -370,4 +370,10 @@ test('zoomed-out group titles never overlap: the selected and larger groups keep
   // Close enough, every title fits.
   const apart = [frame('a', 0, 0, 1000, 600), frame('b', 1400, 0, 1000, 600), frame('c', 0, 1000, 1000, 600)];
   assert.deepEqual([...visibleTitles(apart, .3)].sort(), ['a', 'b', 'c']);
+});
+
+test('light cards expose connection dots on the same sides as full cards', () => {
+  // React Flow reads the side from data-handlepos; a missing one bends links to the bottom and top when zoomed out.
+  assert.deepEqual(lodHandleProps('source'), { className: 'lod-handle source', 'data-handlepos': 'right' });
+  assert.deepEqual(lodHandleProps('target'), { className: 'lod-handle target', 'data-handlepos': 'left' });
 });

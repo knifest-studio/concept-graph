@@ -131,6 +131,10 @@ export function groupBounds(group, nodes, byId, measure = size) {
 }
 
 // An unmeasured prompt grows with its text (13px type, 22px lines, ~44 characters per line in a 310px card).
+// A light card's connection dot. React Flow measures connection points by their `source`/`target` class and reads the
+// side from data-handlepos; without it the links would leave from the bottom and enter from the top.
+export const lodHandleProps = type => ({ className: `lod-handle ${type}`, 'data-handlepos': type === 'source' ? 'right' : 'left' });
+
 export function estimatedSize(node) {
   if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);

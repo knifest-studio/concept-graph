@@ -8,7 +8,7 @@ import { formatDuration, runElapsed } from '../timing.mjs';
 import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, createViewCache, visibleTitles, moveGroup, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, moveGroup, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
@@ -251,16 +251,18 @@ function LightNode({ id, type, data, height }) {
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || '');
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
-    {(!isImage || data.runId) && <i className="lod-handle target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
-    {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<i className="lod-handle source"/>
+    {(!isImage || data.runId) && <LodHandle type="target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
+    {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
-  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <i className="lod-handle target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><i className="lod-handle source"/></article></div>;
+  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><LodHandle type="source"/></article></div>;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}`} style={{ ...template, height }}>
-    <i className="lod-handle target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text.length > 600 ? `${text.slice(0, 600)}…` : text || 'Describe the image you want, then click Generate'}</div>
-    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}{view.error && <div className="node-error">{view.error}</div>}<i className="lod-handle source"/>
+    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text.length > 600 ? `${text.slice(0, 600)}…` : text || 'Describe the image you want, then click Generate'}</div>
+    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}{view.error && <div className="node-error">{view.error}</div>}<LodHandle type="source"/>
   </article>;
 }
+
+const LodHandle = ({ type }) => <i {...lodHandleProps(type)}/>;
 
 function LightImage({ id, asset, aspect, create, collapsed = false }) {
   const ref = useRef(null), image = useCanvasImage(assetUrl(asset), { small: true, create });
@@ -287,7 +289,7 @@ function FullGroupNode({ id, data }) {
 
 function LightGroupNode({ id, data }) {
   return <article data-feel-node={id} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''} ${data.color ? 'colored' : ''}`} style={data.color ? { background: data.color, '--group-ink': contrastColor(data.color) } : undefined}>
-    <header/>{data.collapsed && <><i className="lod-handle target"/><i className="lod-handle source"/></>}
+    <header/>{data.collapsed && <><LodHandle type="target"/><LodHandle type="source"/></>}
   </article>;
 }
 
