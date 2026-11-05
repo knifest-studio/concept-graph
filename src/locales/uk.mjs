@@ -296,6 +296,7 @@ export default {
   'Connecting to board…': 'Підключаємося до дошки…',
   'People on this board': 'Люди на цій дошці',
   'Go to {name}': 'Перейти до {name}',
+  'Everyone on this board': 'Усі на цій дошці',
   'Share': 'Поділитися',
   'You don’t have access to this board': 'У вас немає доступу до цієї дошки',
   'Couldn’t open this board': 'Не вдалося відкрити цю дошку',

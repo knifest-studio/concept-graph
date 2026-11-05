@@ -639,3 +639,17 @@ export function reselect(items, ids, scope) {
   const next = items.map(item => { if (!scope.has(item.id) || !!item.selected === ids.has(item.id)) return item; changed = true; return { ...item, selected: ids.has(item.id) }; });
   return changed ? next : items;
 }
+
+// FigJam frames a selection of two or more items in one box. An arrow counts by its line and an image with its caption;
+// cards folded into a group are left out.
+export function selectionBounds(nodes) {
+  let count = 0, left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const node of nodes) {
+    if (!node.selected || node.hidden) continue;
+    const { x, y } = node.position, line = node.type === 'arrow' && node.data.line, caption = captionHeight(node);
+    const box = line ? { x: x + Math.min(line.x1, line.x2), y: y + Math.min(line.y1, line.y2), width: Math.abs(line.x2 - line.x1), height: Math.abs(line.y2 - line.y1) }
+      : { x, y: y - caption, width: node.measured?.width ?? node.width ?? 0, height: (node.measured?.height ?? node.height ?? 0) + caption };
+    count++; left = Math.min(left, box.x); top = Math.min(top, box.y); right = Math.max(right, box.x + box.width); bottom = Math.max(bottom, box.y + box.height);
+  }
+  return count < 2 ? null : { x: left, y: top, width: right - left, height: bottom - top };
+}

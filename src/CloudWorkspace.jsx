@@ -22,11 +22,18 @@ import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './bo
 import { ShareDialog } from './ShareDialog.jsx';
 import { TeamAccessDialog } from './TeamAccessDialog.jsx';
 import { AccountMenu } from './AccountMenu.jsx';
+import { defaultPages } from './pages.mjs';
+import { BoardPresence } from './BoardPresence.jsx';
 import { fireFeel, mountFeelOverlay, presets } from './feel.mjs';
 import { soundPreferenceKey, readSoundPreference, unlockSounds, playSound } from './sounds.mjs';
 import './cloud.css';
 
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+// Page names for the people list; a board that never stored pages has only the first one.
+const presencePages = doc => {
+  const pages = [...doc.getMap('pages')].filter(([, page]) => typeof page?.name === 'string').sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0)).map(([id, page]) => ({ id, name: page.name }));
+  return pages.length ? pages : defaultPages();
+};
 sharedPreviews.enabled = true;
 const agoForms = { year: ['{count} year ago', '{count} years ago'], month: ['{count} month ago', '{count} months ago'], day: ['{count} day ago', '{count} days ago'], hour: ['{count} hour ago', '{count} hours ago'], minute: ['{count} minute ago', '{count} minutes ago'] };
 const timeWords = { recently: t('recently'), now: t('just now'), ago: (count, unit) => plural(count, ...agoForms[unit]) };
@@ -321,7 +328,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
   session.cursors = visible => <Cursors cursors={session.cursorStore} visible={visible}/>;
   session.toolbar = <>
-    <div className="cloud-presence" aria-label={t('People on this board')}>{peers.map(peer => <button type="button" key={peer.id} className="cloud-person" data-tooltip={t('Go to {name}', { name: peer.user.name })} aria-label={t('Go to {name}', { name: peer.user.name })} style={{ '--person-color': peer.user.color }} onClick={() => session.follow?.(peer.id)}>{peer.user.name}</button>)}</div>
+    <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)}/>
     {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>{t('Share')}</button>
   </>;

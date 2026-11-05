@@ -2,13 +2,15 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
 import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
+// React Flow's own drag helper (pinned by @xyflow/react), so the selection box's inside drags a selection like React Flow does.
+import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
 import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
@@ -339,7 +341,7 @@ function RenameField({ name, label, className, onSave, onDone }) {
 // slideshow (one run's images) shows one image instead, and its output dot connects that image.
 function FullGroupNode({ id, data }) {
   const canvas = useCanvas(), editing = useCanvasValue(state => state.renaming === id), slideshow = data.collapsed && data.slide, kind = data.slideshow ? 'slideshow' : 'group';
-  return <NodeContextMenu id={id} type="group" actions={canvas} slideshow={data.images ? !!data.slideshow : undefined}><article data-feel-node={id} className={`group-frame ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
+  return <NodeContextMenu id={id} type="group" actions={canvas} slideshow={data.images ? !!data.slideshow : undefined}><article data-feel-node={id} data-stack={slideshowStack(slideshow, data.images)} className={`group-frame ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
     <header><button className={`group-toggle nodrag ${data.collapsed ? '' : 'expanded'}`} aria-label={data.collapsed ? t('Expand {name}', { name: data.name }) : t('Collapse {name}', { name: data.name })} data-tooltip={data.collapsed ? kind === 'slideshow' ? t('Expand slideshow') : t('Expand group') : data.slideshow ? t('Fold into slideshow') : t('Collapse group')} onClick={() => canvas.toggleGroup(id)}><Icon name="chevron" size={16}/></button>{data.slideshow && <i className="group-kind" title={t('Slideshow')}><Icon name="slides" size={14}/></i>}{editing ? <RenameField name={data.name} label={t('Group name')} className="group-name-input" onSave={name => canvas.editGroup(id, { name })} onDone={() => canvas.renameGroup(null)}/> : <strong tabIndex={0} role="button" title={t('Double-click to rename group')} onDoubleClick={() => canvas.renameGroup(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameGroup(id); } }}>{data.name}</strong>}<span>{slideshow ? `${data.index + 1} / ${data.images}` : data.slideshow ? plural(data.images, '{count} image', '{count} images') : plural(data.count, '{count} node', '{count} nodes')}</span><button className="icon-button nodrag" aria-label={t('Ungroup {name}', { name: data.name })} data-tooltip={t('Ungroup; keep nodes')} onClick={() => canvas.ungroup(id)}><Icon name="ungroup" size={16}/></button></header>
     {slideshow && <SlideshowStage id={id} slide={data.slide} count={data.images}/>}
     {data.collapsed && <><Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} isConnectable={!!slideshow} aria-label={slideshow ? t('Connect the shown image as reference') : undefined}/></>}
@@ -369,10 +371,15 @@ function SlideshowStage({ id, slide, count }) {
   </div>;
 }
 
+// From afar a folded slideshow must not pass for one image: it is drawn as a stack, one sheet behind it for two images and
+// two for more, and shows its count, as photo apps mark their stacks. Both stay the same size on screen at any zoom.
+const slideshowStack = (slideshow, count) => slideshow && count > 1 ? Math.min(3, count) : undefined;
+
 function LightGroupNode({ id, data }) {
-  const slideshow = data.collapsed && data.slide, create = useCanvasValue(state => state.detail !== 'tiny' || !state.crowded);
-  return <article data-feel-node={id} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
-    <header/>{slideshow && <div className="slideshow-stage"><LightImage id={data.slide.id} asset={data.slide.asset} create={create} collapsed slide={data.slide}/></div>}{data.collapsed && <><LodHandle type="target"/><LodHandle type="source"/></>}
+  const slideshow = data.collapsed && data.slide, create = useCanvasValue(state => state.detail !== 'tiny' || !state.crowded), stack = slideshowStack(slideshow, data.images);
+  return <article data-feel-node={id} data-stack={stack} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
+    <header/>{slideshow && <div className="slideshow-stage"><LightImage id={data.slide.id} asset={data.slide.asset} create={create} collapsed slide={data.slide}/></div>}
+    {stack && <span className="slideshow-count" aria-label={plural(data.images, '{count} image', '{count} images')}><Icon name="slides" size={13}/>{data.images}</span>}{data.collapsed && <><LodHandle type="target"/><LodHandle type="source"/></>}
   </article>;
 }
 
@@ -392,6 +399,23 @@ function SectionNode({ id, data, selected }) {
 
 // Zoomed out, section titles are drawn above every card and connection at a steady size, so each section is still named
 // from afar. A section being renamed keeps its own editable title.
+// FigJam's selection box: one frame with corner squares around everything selected, however the selection was made.
+// Items inside it take their own clicks and Shift-clicks. Its empty inside (`.selection-grip`, under every card and
+// section) moves the whole selection when dragged and clears it when clicked, as in FigJam; Shift keeps it.
+function SelectionBounds({ nodes }) {
+  const store = useStoreApi(), grip = useRef(null), boxing = useStore(state => state.userSelectionActive), box = useMemo(() => selectionBounds(nodes), [nodes]), shown = !!box && !boxing;
+  useEffect(() => {
+    if (!shown) return;
+    const drag = XYDrag({ getStoreItems: () => store.getState() });
+    drag.update({ domNode: grip.current, isSelectable: true, nodeClickDistance: 0 });
+    return () => drag.destroy();
+  }, [shown]);
+  if (!shown) return null;
+  const place = { transform: `translate(${box.x}px, ${box.y}px)`, width: box.width, height: box.height };
+  const click = event => { if (!event.shiftKey) { store.getState().resetSelectedElements(); store.setState({ nodesSelectionActive: false }); } };
+  return <ViewportPortal><div ref={grip} className="selection-grip" style={place} onClick={click} onContextMenu={event => event.preventDefault()}/><div className="selection-bounds" style={place} aria-hidden="true">{['nw', 'ne', 'sw', 'se'].map(corner => <i key={corner} className={corner}/>)}</div></ViewportPortal>;
+}
+
 function SectionTitles({ sections }) {
   const { detail, renaming } = useCanvasValue(state => ({ detail: state.detail, renaming: state.renaming }), shallowEqual);
   const zoom = useStore(state => detail === 'full' ? 1 : state.transform[2]), shown = useMemo(() => detail === 'full' ? null : visibleTitles(sections, zoom), [sections, zoom, detail]);
@@ -2124,7 +2148,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addImages([...event.dataTransfer.files], position); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} onCancel={cancel} onFocus={showRun}/>}</div>
       <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
-        <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
+        <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
       {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}

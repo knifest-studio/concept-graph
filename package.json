@@ -25,6 +25,7 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4",
     "@xyflow/react": "^12.10.0",
+    "@xyflow/system": "0.0.83",
     "partyserver": "^0.5.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

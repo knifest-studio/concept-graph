@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback, boxTouches, boxSelection, reselect } from '../src/canvas.mjs';
+import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
 test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
   const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
@@ -471,4 +471,15 @@ test('Shift flips what the box touches against the starting selection, and only 
   const next = reselect(items, new Set(['b']), page);
   assert.deepEqual(next.map(item => !!item.selected), [false, true, true]);
   assert.equal(next[2], items[2]);
+});
+
+test('two or more selected items share one FigJam-style box, whatever selected them', () => {
+  const at = (id, type, x, y, width, height, extra = {}) => ({ id, type, position: { x, y }, measured: { width, height }, data: {}, selected: true, ...extra });
+  const sticky = at('sticky', 'sticky', 0, 100, 200, 200), image = at('image', 'image', 300, 100, 310, 200, { data: { caption: 'Hero' } });
+  assert.equal(selectionBounds([sticky]), null, 'one item shows its own outline');
+  assert.equal(selectionBounds([sticky, { ...image, selected: false }]), null);
+  assert.deepEqual(selectionBounds([sticky, image]), { x: 0, y: 76, width: 610, height: 224 }, 'an image counts with its caption above it');
+  const arrow = at('arrow', 'arrow', 600, 400, 232, 132, { data: { line: { x1: 16, y1: 16, x2: 216, y2: 116 } } });
+  assert.deepEqual(selectionBounds([sticky, arrow]), { x: 0, y: 100, width: 816, height: 416 }, 'an arrow counts by its line, not its padded box');
+  assert.equal(selectionBounds([sticky, { ...image, hidden: true }]), null, 'a card folded into a group is left out');
 });
