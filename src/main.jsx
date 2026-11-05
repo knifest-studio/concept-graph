@@ -336,7 +336,7 @@ function LightNode({ id, type, data, selected }) {
   const isImage = type === 'image', canvas = useCanvas();
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
-    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), create: state.detail !== 'tiny' || !state.crowded,
+    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, create: state.detail !== 'tiny' || !state.crowded,
       readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote };
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesNano(data), sized = textHeight(data);
@@ -347,9 +347,19 @@ function LightNode({ id, type, data, selected }) {
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
   if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
-  const describe = data.task === describeTask || data.task === upscaleTask;
+  if (data.task === upscaleTask) {
+    const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), sizes = upscaler === upscalers.nanoBanana ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']];
+    return <article data-feel-node={id} className={`node-card text-node lod-node describe-node upscale-node${view.working ? ' working' : ''}`}>
+      <LodHandle type="target"/><header><span className="describe-label"><Icon name="upscale" size={14}/>{t('Upscale image')}</span></header>
+      <div className="upscale-settings" aria-hidden="true"><div className="upscale-options">{upscaleOptions.map(([value, label]) => <span key={value} data-on={upscaler === value || undefined}>{label}</span>)}</div>
+        <div className="upscale-sizes">{sizes.map(([value, label]) => <span key={value} data-on={scale === value || undefined}>{label}</span>)}</div><small>{t(upscaleHints[upscaler])}</small></div>
+      <div className="node-inputs">{view.images ? plural(view.images, '{count} image to upscale', '{count} images to upscale') : t('Connect images, then click Upscale')}</div>
+      {view.failed && <div className="node-error nodrag">{t(view.error)}</div>}<LodHandle type="source"/>
+    </article>;
+  }
+  const describe = data.task === describeTask;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
-    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{data.task === upscaleTask ? t('Connect images, then click Upscale') : text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
+    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
     {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && (nano ? !view.nanoReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
@@ -1325,7 +1335,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         let size;
         try { size = imageSize(new Uint8Array(await file.arrayBuffer())); } catch {}
         const shape = size?.width > 0 && size?.height > 0 ? { pixels: { width: size.width, height: size.height }, ...(size.height / size.width >= .1 && size.height / size.width <= 10 ? { aspect: size.height / size.width } : {}) } : {};
-        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape } }, page);
+        // On team boards an image shows who added it, as a generated one shows who generated it.
+        const author = boardAuthor(cloudSession?.user);
+        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape, ...(author ? { author } : {}) } }, page);
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
     } } finally { uploads.current--; setUploading(uploads.current > 0); }
