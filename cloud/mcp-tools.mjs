@@ -7,6 +7,7 @@ import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
 import { switchNodeTemplate } from '../src/node-template.mjs';
+import { upscaleSettings } from './upscale.mjs';
 
 // Expected failures carry `expected`: the agent sees the message, and nothing is logged as a fault.
 export const fail = message => { throw Object.assign(new Error(message), { expected: true }); };
@@ -150,13 +151,14 @@ define('add_text_node', 'Add a prompt. Connect images or other prompts into it w
     setGenerator(data, args.generator); setVariants(data, args.variants);
     return addNode(ctx, 'text', data, targetPage(ctx.graph, args.pageId), args.position, { author: false });
   } });
-define('add_upscale_node', 'Add an upscale node fed by images on the board, then run it with start_run: each image comes back larger, beside the node, labelled with its new size. topaz keeps the image as it is (about $0.08 an image, as in Krea), seedvr restores detail (about $0.02), nano-banana redraws it at 2K or 4K (about $0.05 or $0.11). scale is 2 or 4 (for nano-banana, 2K or 4K). It runs on the team’s keys within the person’s daily images.',
-  { imageIds: array('Images to upscale, on one page', itemId, { minItems: 1, maxItems: maxUpscaleImages, uniqueItems: true }), upscaler: choice('Who upscales', Object.values(upscalers)), scale: integer('2 or 4', { enum: [2, 4], minimum: 2, maximum: 4 }), position: at }, ['imageIds'], { run: ctx => {
-    const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node');
+define('add_upscale_node', 'Add an upscale node fed by images on the board, then run it with start_run: each image comes back larger, beside the node, labelled with its new size. nano-banana redraws it at 2K or 4K (about $0.05 or $0.11); when the site has them on, topaz keeps the image as it is (about $0.08 an image, as in Krea) and seedvr restores detail (about $0.02). scale is 2 or 4 (for nano-banana, 2K or 4K). It runs on the team’s keys within the person’s daily images.',
+  { imageIds: array('Images to upscale, on one page', itemId, { minItems: 1, maxItems: maxUpscaleImages, uniqueItems: true }), upscaler: choice('Who upscales', Object.values(upscalers)), scale: integer('2 or 4', { enum: [2, 4], minimum: 2, maximum: 4 }), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
+    const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node'), upscaler = args.upscaler || (ctx.prepared.fal ? upscalers.topaz : upscalers.nanoBanana);
+    if (upscaler !== upscalers.nanoBanana && !ctx.prepared.fal) fail('Topaz and SeedVR2 are off on this site for now. Use nano-banana.');
     if (args.imageIds.some(nodeId => found.get(nodeId).type !== 'image')) fail('Upscale images only.');
     const page = targetPage(graph, undefined, args.imageIds), source = found.get(args.imageIds[0]);
     const where = args.position || { x: Math.round(source.position.x + sizeOf(source).width + 90), y: Math.round(source.position.y) };
-    const added = addNode(ctx, 'text', { text: '', task: upscaleTask, upscaler: args.upscaler || upscalers.topaz, scale: args.scale || 2 }, page, where, { author: false });
+    const added = addNode(ctx, 'text', { text: '', task: upscaleTask, upscaler, scale: args.scale || 2 }, page, where, { author: false });
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });

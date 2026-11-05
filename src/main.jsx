@@ -295,6 +295,8 @@ function CollapsedNode({ id, data, kind }) {
 // An upscale node makes a larger copy of each connected image on the site: Topaz or SeedVR2 through fal.ai, or Nano Banana
 // redrawing it at 2K or 4K. It needs no prompt, only images and the person's place on the site's allowed list.
 const upscaleOptions = [[upscalers.topaz, 'Topaz'], [upscalers.seedvr, 'SeedVR2'], [upscalers.nanoBanana, 'Nano Banana']];
+// Topaz and SeedVR2 are offered only while the site's fal.ai upscalers are on.
+const offeredUpscalers = fal => fal ? upscaleOptions : upscaleOptions.filter(([value]) => value === upscalers.nanoBanana);
 const upscaleHints = { [upscalers.topaz]: 'Keeps the image as it is, as in Krea · about $0.08 an image', [upscalers.seedvr]: 'Restores fine detail · about $0.02 an image', [upscalers.nanoBanana]: 'Redraws it at the new size · about $0.05 (2K) or $0.11 (4K)' };
 function UpscaleNode({ id, data, selected }) {
   const canvas = useCanvas();
@@ -303,7 +305,7 @@ function UpscaleNode({ id, data, selected }) {
   // A new node has no text to type into, so the focus request just ends.
   useEffect(() => { if (view.focus) canvas.clearFocus(); }, [view.focus]);
   const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), redraw = upscaler === upscalers.nanoBanana, unset = !redraw && !view.falReady;
-  const blocked = unset || !view.nanoReady, canRun = view.images > 0 && view.images <= maxUpscaleImages, note = unset ? t('Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.') : view.nanoNote;
+  const blocked = unset || !view.nanoReady, canRun = view.images > 0 && view.images <= maxUpscaleImages, note = unset ? t('Topaz and SeedVR2 are off on this site for now. Choose Nano Banana.') : view.nanoNote;
   const sizes = redraw ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']];
   return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node describe-node upscale-node ${pending ? 'working' : ''}`}>
     <Handle type="target" position={Position.Left} aria-label={t('Connect images to upscale')}/>
@@ -313,12 +315,12 @@ function UpscaleNode({ id, data, selected }) {
           data-tooltip={!view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxUpscaleImages }) : blocked ? note : `${t('Upscale connected images')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{t('Upscale')}</span></button></div>
         {pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
     <div className="upscale-settings nodrag">
-      <div className="upscale-options" role="radiogroup" aria-label={t('Upscaler')}>{upscaleOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={upscaler === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { upscaler: value })}>{label}</button>)}</div>
+      <div className="upscale-options" role="radiogroup" aria-label={t('Upscaler')}>{offeredUpscalers(view.falReady).map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={upscaler === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { upscaler: value })}>{label}</button>)}</div>
       <div className="upscale-sizes" role="radiogroup" aria-label={t('Size')}>{sizes.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={scale === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { scale: value })}>{label}</button>)}</div>
-      <small>{t(upscaleHints[upscaler])}</small>
+      <small>{unset ? note : t(upscaleHints[upscaler])}</small>
     </div>
     <div className="node-inputs">{view.images ? plural(view.images, '{count} image to upscale', '{count} images to upscale') : t('Connect images, then click Upscale')}</div>
-    {selected && blocked && !pending && <NanoReadiness note={note}/>}
+    {selected && blocked && !unset && !pending && <NanoReadiness note={note}/>}
     {failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}
     <Handle type="source" position={Position.Right} aria-label={t('Connect prompt to another node')}/>
   </article></NodeContextMenu>;
@@ -336,7 +338,7 @@ function LightNode({ id, type, data, selected }) {
   const isImage = type === 'image', canvas = useCanvas();
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
-    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, create: state.detail !== 'tiny' || !state.crowded,
+    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, falReady: state.falReady, create: state.detail !== 'tiny' || !state.crowded,
       readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote };
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesNano(data), sized = textHeight(data);
@@ -348,11 +350,11 @@ function LightNode({ id, type, data, selected }) {
   if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
   if (data.task === upscaleTask) {
-    const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), sizes = upscaler === upscalers.nanoBanana ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']];
+    const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), sizes = upscaler === upscalers.nanoBanana ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']], unset = upscaler !== upscalers.nanoBanana && !view.falReady;
     return <article data-feel-node={id} className={`node-card text-node lod-node describe-node upscale-node${view.working ? ' working' : ''}`}>
       <LodHandle type="target"/><header><span className="describe-label"><Icon name="upscale" size={14}/>{t('Upscale image')}</span></header>
-      <div className="upscale-settings" aria-hidden="true"><div className="upscale-options">{upscaleOptions.map(([value, label]) => <span key={value} data-on={upscaler === value || undefined}>{label}</span>)}</div>
-        <div className="upscale-sizes">{sizes.map(([value, label]) => <span key={value} data-on={scale === value || undefined}>{label}</span>)}</div><small>{t(upscaleHints[upscaler])}</small></div>
+      <div className="upscale-settings" aria-hidden="true"><div className="upscale-options">{offeredUpscalers(view.falReady).map(([value, label]) => <span key={value} data-on={upscaler === value || undefined}>{label}</span>)}</div>
+        <div className="upscale-sizes">{sizes.map(([value, label]) => <span key={value} data-on={scale === value || undefined}>{label}</span>)}</div><small>{unset ? t('Topaz and SeedVR2 are off on this site for now. Choose Nano Banana.') : t(upscaleHints[upscaler])}</small></div>
       <div className="node-inputs">{view.images ? plural(view.images, '{count} image to upscale', '{count} images to upscale') : t('Connect images, then click Upscale')}</div>
       {view.failed && <div className="node-error nodrag">{t(view.error)}</div>}<LodHandle type="source"/>
     </article>;
@@ -1259,12 +1261,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       putEdges(current => [...current, ...added]); markDirty();
     } catch (error) { notify(error.message); }
   };
-  // An upscale node fed by the given images, or by the selected ones; Topaz at ×2 to begin with.
-  const upscaleData = { task: upscaleTask, upscaler: upscalers.topaz, scale: 2 };
+  // An upscale node fed by the given images, or by the selected ones; Topaz at ×2 to begin with, or Nano Banana at 2K while
+  // the site's fal.ai upscalers are off.
+  const upscaleData = () => ({ task: upscaleTask, upscaler: nanoRef.current.fal ? upscalers.topaz : upscalers.nanoBanana, scale: 2 });
   const addUpscale = (sourceIds = pageGraph().nodes.filter(node => node.selected && node.type === 'image').map(node => node.id)) => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     try {
-      const sources = sourceIds.slice(0, maxUpscaleImages), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, upscaleData);
+      const sources = sourceIds.slice(0, maxUpscaleImages), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, upscaleData());
       if (!sources.length) return;
       const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
       putEdges(current => [...current, ...added]); markDirty();
@@ -1318,7 +1321,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const at = { x: point.x - 155, y: point.y - 40 };
     if (value?.kind === 'text') addText(at);
     else if (value?.kind === 'describe') addText(at, '', null, { task: describeTask });
-    else if (value?.kind === 'upscale' && cloud) addText(at, '', null, upscaleData);
+    else if (value?.kind === 'upscale' && cloud) addText(at, '', null, upscaleData());
     else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template); }
     // Images still come from a file; they are placed where the item was dropped.
     else if (value?.kind === 'image') { imageDrop.current = point; fileInput.current.click(); }

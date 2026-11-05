@@ -147,7 +147,7 @@ Topaz and SeedVR2 run on [fal.ai](https://fal.ai)'s queue API with a company key
 npx wrangler secret put FAL_KEY -c cloud/wrangler.jsonc
 ```
 
-Without it the node offers only Nano Banana and says why. The image is sent to fal.ai as a data URI; the key never leaves the Worker and is sent only to `queue.fal.run`, never to the host that serves the result. For local testing, `FAL_ENDPOINT` may point at a fake server on localhost (and `NANO_BANANA_ENDPOINT` likewise for Gemini).
+Without it the node offers only Nano Banana and says why. fal.ai is prepaid, so while its account has no credit keep `"FAL_UPSCALERS": "off"` in the `vars` of `cloud/wrangler.jsonc` (the setting as of 2026-11-05): the key stays stored, the node and agents offer only Nano Banana, and nodes already set to Topaz or SeedVR2 ask for Nano Banana instead. Remove it or set it to `"on"` and deploy once the account has credit. The image is sent to fal.ai as a data URI; the key never leaves the Worker and is sent only to `queue.fal.run`, never to the host that serves the result. For local testing, `FAL_ENDPOINT` may point at a fake server on localhost (and `NANO_BANANA_ENDPOINT` likewise for Gemini).
 
 ## Sharing boards
 

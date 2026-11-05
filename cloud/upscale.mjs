@@ -21,8 +21,9 @@ const localEndpoint = value => {
   try { const url = new URL(value); return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && ['http:', 'https:'].includes(url.protocol) ? url.origin : null; }
   catch { return null; }
 };
-// The endpoint override exists for a local fake server only, so the key can never be sent to another host by mistake.
-export const upscaleSettings = env => ({ fal: typeof env.FAL_KEY === 'string' && env.FAL_KEY.trim() !== '', endpoint: (env.FAL_ENDPOINT && localEndpoint(env.FAL_ENDPOINT)) || falHost });
+// FAL_UPSCALERS=off keeps Topaz and SeedVR2 out of the board while the fal.ai account has no credit, without removing the
+// key. The endpoint override exists for a local fake server only, so the key can never be sent to another host by mistake.
+export const upscaleSettings = env => ({ fal: typeof env.FAL_KEY === 'string' && env.FAL_KEY.trim() !== '' && String(env.FAL_UPSCALERS ?? '').trim().toLowerCase() !== 'off', endpoint: (env.FAL_ENDPOINT && localEndpoint(env.FAL_ENDPOINT)) || falHost });
 
 // What one upscale node asks for: its connected images, the upscaler and the size.
 export function upscaleRequest(graph, nodeId) {

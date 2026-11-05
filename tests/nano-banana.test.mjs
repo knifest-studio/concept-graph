@@ -513,7 +513,9 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
 });
 
 test('upscale nodes take one to four connected images, and sizes, prices and labels follow the chosen upscaler', async () => {
-  const { upscaleFactor, upscaleCost, upscaleEstimate, nanoAspect, falInput, nanoUpscaleFormat } = await import('../cloud/upscale.mjs');
+  const { upscaleFactor, upscaleCost, upscaleEstimate, nanoAspect, falInput, nanoUpscaleFormat, upscaleSettings } = await import('../cloud/upscale.mjs');
+  // FAL_UPSCALERS=off keeps the key but turns Topaz and SeedVR2 off.
+  assert.deepEqual([upscaleSettings({}).fal, upscaleSettings({ FAL_KEY: 'k' }).fal, upscaleSettings({ FAL_KEY: 'k', FAL_UPSCALERS: 'off' }).fal, upscaleSettings({ FAL_KEY: 'k', FAL_UPSCALERS: 'on' }).fal], [false, true, false, true]);
   const { resolutionLabel, runInputs } = await import('../graph.mjs');
   assert.equal(upscaleFactor({ width: 1024, height: 768 }, 4), 4);
   assert.equal(upscaleFactor({ width: 4096, height: 2048 }, 4), 2);
@@ -614,12 +616,15 @@ runtimeTest('Nano Banana upscales by redrawing the image at 2K or 4K in its own 
 test('agents add an upscale node fed by images on one page', async () => {
   const { toolByName, runBoardTool } = await import('../cloud/mcp-tools.mjs');
   const graph = { nodes: [{ id: 'i', type: 'image', position: { x: 0, y: 0 }, data: { asset: reference } }, { id: 'p', type: 'text', position: { x: 0, y: 400 }, data: { text: 'A robot' } }], edges: [], groups: [], runs: [] };
-  const run = args => runBoardTool(toolByName.get('add_upscale_node'), { graph, args, user: { name: 'Lead', email: 'lead@studio.example' }, prepared: {}, templates: [] });
+  const run = (args, fal = true) => runBoardTool(toolByName.get('add_upscale_node'), { graph, args, user: { name: 'Lead', email: 'lead@studio.example' }, prepared: { fal }, templates: [] });
   const { result, graph: next } = run({ imageIds: ['i'], upscaler: 'seedvr', scale: 4 });
   const added = next.nodes.find(node => node.id === result.nodeId);
   assert.deepEqual({ ...added.data, createdAt: 0 }, { text: '', task: 'upscale', upscaler: 'seedvr', scale: 4, createdAt: 0 });
   assert.deepEqual(next.edges.map(edge => [edge.source, edge.target]), [['i', result.nodeId]]);
   assert.equal(run({ imageIds: ['i'] }).graph.nodes.at(-1).data.upscaler, 'topaz');
+  // While the site's fal.ai upscalers are off, agents get Nano Banana and are told why Topaz is refused.
+  assert.equal(run({ imageIds: ['i'] }, false).graph.nodes.at(-1).data.upscaler, 'nano-banana');
+  assert.throws(() => run({ imageIds: ['i'], upscaler: 'topaz' }, false), /off on this site/);
   assert.throws(() => run({ imageIds: ['p'] }), /Upscale images only/);
   assert.throws(() => run({ imageIds: ['i'], scale: 3 }), /Invalid upscale size/);
 });

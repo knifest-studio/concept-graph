@@ -899,6 +899,7 @@ export default {
   'Keeps the image as it is, as in Krea · about $0.08 an image': 'Зберігає зображення як є, як у Krea · близько $0.08 за зображення',
   'Restores fine detail · about $0.02 an image': 'Відновлює дрібні деталі · близько $0.02 за зображення',
   'Redraws it at the new size · about $0.05 (2K) or $0.11 (4K)': 'Перемальовує в новому розмірі · близько $0.05 (2K) або $0.11 (4K)',
+  'Topaz and SeedVR2 are off on this site for now. Choose Nano Banana.': 'Topaz і SeedVR2 на цьому сайті поки вимкнені. Виберіть Nano Banana.',
   'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.': 'Topaz і SeedVR2 на цьому сайті ще не налаштовані. Виберіть Nano Banana або попросіть власника сайту додати ключ fal.ai.',
   'Connect an image to upscale.': 'Під’єднайте зображення для апскейлу.',
   'Connect at most 4 images to one upscale node.': 'Під’єднайте до одного вузла апскейлу не більше 4 зображень.',
