@@ -7,7 +7,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe } from '../graph.mjs';
+import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -21,6 +21,7 @@ import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefa
 import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSignature } from './history.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
+import { ZoomableImage } from './ImageZoom.jsx';
 import { nanoState, usesNano } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -80,7 +81,7 @@ function Icon({ name, size = 18 }) {
     mic: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></>,
     group: <><rect x="3" y="3" width="18" height="18" rx="3" strokeDasharray="3 3"/><rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/></>,
     align: <><rect x="2" y="9" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M8 12h4m4-7h-4v14h4"/></>,
-    chevron: <path d="m8 5 7 7-7 7"/>, boards: <><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></>, eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>, slides: <><rect x="6" y="5" width="12" height="14" rx="2"/><path d="M3 8v8m18-8v8"/></>, describe: <><rect x="3" y="4" width="9" height="9" rx="1.5"/><path d="M15 6h6M15 10h6M3 17h18M3 21h12"/></>, ungroup: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><path d="m9 9 6 6m0-6-6 6"/></>,
+    chevron: <path d="m8 5 7 7-7 7"/>, boards: <><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></>, eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>, slides: <><rect x="6" y="5" width="12" height="14" rx="2"/><path d="M3 8v8m18-8v8"/></>, describe: <><rect x="3" y="4" width="9" height="9" rx="1.5"/><path d="M15 6h6M15 10h6M3 17h18M3 21h12"/></>, upscale: <><rect x="3" y="11" width="10" height="10" rx="1.5"/><path d="M14 3h7v7M21 3l-8 8M3 7V5a2 2 0 0 1 2-2h2"/></>, ungroup: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><path d="m9 9 6 6m0-6-6 6"/></>,
     sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></>,
     moon: <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>,
     upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/></>,
@@ -135,7 +136,7 @@ function TextNode(props) {
 
 function FullTextNode(props) {
   const working = useCanvasValue(state => busy(state.latestRun.get(props.id)) || state.starting === props.id);
-  return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
+  return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : props.data.task === upscaleTask ? <UpscaleNode {...props}/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
 }
 
 function ExpandedTextNode({ id, data, selected }) {
@@ -241,7 +242,7 @@ function ExpandedImageNode({ id, data }) {
     {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label={t('Image caption')} title={view.readOnly ? undefined : t('Edit image caption')} readOnly={view.readOnly} maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
     {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || t('Concept image')} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
-    <div className="image-shade"/>
+    <div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
     <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
     {!data.caption?.trim() && !captionFocused && <button className="image-caption-add nodrag" type="button" aria-label={t('Add image caption')} data-tooltip={t('Add image caption')} onClick={event => { event.stopPropagation(); setCaptionFocused(true); }} onDoubleClick={event => event.stopPropagation()}><Icon name="tag" size={15}/></button>}
     <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
@@ -291,6 +292,46 @@ function CollapsedNode({ id, data, kind }) {
 
 // Zoomed-out cards keep their size, colour and connection points but drop controls, menus, badges and effects.
 // A prompt takes the height React Flow knows (measured, or estimated if never drawn), so crossing the zoom threshold moves nothing.
+// An upscale node makes a larger copy of each connected image on the site: Topaz or SeedVR2 through fal.ai, or Nano Banana
+// redrawing it at 2K or 4K. It needs no prompt, only images and the person's place on the site's allowed list.
+const upscaleOptions = [[upscalers.topaz, 'Topaz'], [upscalers.seedvr, 'SeedVR2'], [upscalers.nanoBanana, 'Nano Banana']];
+const upscaleHints = { [upscalers.topaz]: 'Keeps the image as it is, as in Krea · about $0.08 an image', [upscalers.seedvr]: 'Restores fine detail · about $0.02 an image', [upscalers.nanoBanana]: 'Redraws it at the new size · about $0.05 (2K) or $0.11 (4K)' };
+function UpscaleNode({ id, data, selected }) {
+  const canvas = useCanvas();
+  const view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, images: (state.inputs.get(id) || noInputs).images, nanoReady: state.nanoReady, nanoNote: state.nanoNote, falReady: state.falReady, readOnly: state.readOnly, focus: state.focusId === id }), shallowEqual);
+  const pending = view.active || view.starting, canCancel = view.starting || view.byName === view.userName;
+  // A new node has no text to type into, so the focus request just ends.
+  useEffect(() => { if (view.focus) canvas.clearFocus(); }, [view.focus]);
+  const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), redraw = upscaler === upscalers.nanoBanana, unset = !redraw && !view.falReady;
+  const blocked = unset || !view.nanoReady, canRun = view.images > 0 && view.images <= maxUpscaleImages, note = unset ? t('Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.') : view.nanoNote;
+  const sizes = redraw ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']];
+  return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node describe-node upscale-node ${pending ? 'working' : ''}`}>
+    <Handle type="target" position={Position.Left} aria-label={t('Connect images to upscale')}/>
+    <header className="node-drag"><span className="describe-label"><Icon name="upscale" size={14}/>{t('Upscale image')}</span><button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button>
+      <div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${t('Upscaling')}… ${view.timer}` : `${t('Upscaling')}… (${view.byName})`}</span>}
+        <button className={`run-button nano${pending ? ' run-pending' : ''}`} type="button" aria-label={t('Upscale connected images')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun || view.readOnly}
+          data-tooltip={!view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxUpscaleImages }) : blocked ? note : `${t('Upscale connected images')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{t('Upscale')}</span></button></div>
+        {pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <div className="upscale-settings nodrag">
+      <div className="upscale-options" role="radiogroup" aria-label={t('Upscaler')}>{upscaleOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={upscaler === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { upscaler: value })}>{label}</button>)}</div>
+      <div className="upscale-sizes" role="radiogroup" aria-label={t('Size')}>{sizes.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={scale === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { scale: value })}>{label}</button>)}</div>
+      <small>{t(upscaleHints[upscaler])}</small>
+    </div>
+    <div className="node-inputs">{view.images ? plural(view.images, '{count} image to upscale', '{count} images to upscale') : t('Connect images, then click Upscale')}</div>
+    {selected && blocked && !pending && <NanoReadiness note={note}/>}
+    {failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}
+    <Handle type="source" position={Position.Right} aria-label={t('Connect prompt to another node')}/>
+  </article></NodeContextMenu>;
+}
+
+// How large an image is, once known: generated and upscaled images record their pixel size. The badge keeps a readable
+// size on screen when the board is zoomed out; the zoom is read in tenths, so panning never re-renders it.
+const ResolutionBadge = ({ pixels }) => { const label = resolutionLabel(pixels); return label ? <ScaledBadge label={label} title={`${pixels.width} × ${pixels.height}`}/> : null; };
+function ScaledBadge({ label, title }) {
+  const zoom = useStore(state => Math.max(.1, Math.round(state.transform[2] * 10) / 10));
+  return <span className="resolution-badge" title={title} style={{ '--badge-scale': Math.min(3, Math.max(1, 1 / zoom)) }}>{label}</span>;
+}
+
 function LightNode({ id, type, data, selected }) {
   const isImage = type === 'image', canvas = useCanvas();
   const view = useCanvasValue(state => {
@@ -304,11 +345,11 @@ function LightNode({ id, type, data, selected }) {
     {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
-  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><LodHandle type="source"/></article></div>;
+  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
-  const describe = data.task === describeTask;
+  const describe = data.task === describeTask || data.task === upscaleTask;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
-    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
+    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{data.task === upscaleTask ? t('Connect images, then click Upscale') : text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
     {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && (nano ? !view.nanoReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
@@ -976,7 +1017,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   useEffect(() => {
     if (cloudSession) {
       cloudSession.flush = syncCloud;
-      cloudSession.follow = peerId => latest.current.followPeer(peerId);
+      cloudSession.follow = (peerId, called) => latest.current.followPeer(peerId, called);
+      cloudSession.returnTo = previous => latest.current.returnTo(previous);
       cloudSession.leave = callback => {
         if (uploads.current || quitState.current.starting) { notify(t('Wait for the current transfer to finish before leaving this board.')); return; }
         pendingIntent.current = null;
@@ -1207,6 +1249,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       putEdges(current => [...current, ...added]); markDirty();
     } catch (error) { notify(error.message); }
   };
+  // An upscale node fed by the given images, or by the selected ones; Topaz at ×2 to begin with.
+  const upscaleData = { task: upscaleTask, upscaler: upscalers.topaz, scale: 2 };
+  const addUpscale = (sourceIds = pageGraph().nodes.filter(node => node.selected && node.type === 'image').map(node => node.id)) => {
+    if (mcpLocked.current || !loaded || switchingRef.current) return;
+    try {
+      const sources = sourceIds.slice(0, maxUpscaleImages), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, upscaleData);
+      if (!sources.length) return;
+      const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+      putEdges(current => [...current, ...added]); markDirty();
+    } catch (error) { notify(error.message); }
+  };
   const promptFrom = sourceId => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === sourceId)?.type)) return;
@@ -1255,6 +1308,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const at = { x: point.x - 155, y: point.y - 40 };
     if (value?.kind === 'text') addText(at);
     else if (value?.kind === 'describe') addText(at, '', null, { task: describeTask });
+    else if (value?.kind === 'upscale' && cloud) addText(at, '', null, upscaleData);
     else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template); }
     // Images still come from a file; they are placed where the item was dropped.
     else if (value?.kind === 'image') { imageDrop.current = point; fileInput.current.click(); }
@@ -1267,7 +1321,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       try {
         const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
         const start = position || flow.screenToFlowPosition({ x: innerWidth * .5, y: innerHeight * .3 });
-        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, label: file.name || 'Pasted image', createdAt: new Date().toISOString() } }, page);
+        // The pixel size, read from the file's header, gives large images their 2K, 4K or 8K badge.
+        let size;
+        try { size = imageSize(new Uint8Array(await file.arrayBuffer())); } catch {}
+        const shape = size?.width > 0 && size?.height > 0 ? { pixels: { width: size.width, height: size.height }, ...(size.height / size.width >= .1 && size.height / size.width <= 10 ? { aspect: size.height / size.width } : {}) } : {};
+        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape } }, page);
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
     } } finally { uploads.current--; setUploading(uploads.current > 0); }
@@ -1534,6 +1592,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (mcpLocked.current || node?.type !== 'text' || (node.data.variants || 1) === count) return;
     checkpoint();
     putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (count > 1) data.variants = count; else delete data.variants; return { ...item, data }; }));
+    markDirty();
+  };
+  const setUpscale = (nodeId, change) => {
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (mcpLocked.current || node?.data.task !== upscaleTask || Object.entries(change).every(([key, value]) => node.data[key] === value)) return;
+    checkpoint();
+    putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, ...change } } : item));
     markDirty();
   };
   const setGenerator = (nodeId, generator) => {
@@ -2081,13 +2146,19 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (document.activeElement?.matches('.text-node textarea')) document.activeElement.blur();
   };
   // Glides to where a teammate is: their pointer, or the middle of what they see, switching page first if needed.
-  const followPeer = peerId => {
-    const peer = cloudSession.cursorStore.get().find(item => item.id === peerId), spot = peer?.cursor || peer?.view;
-    if (!peer) return;
-    if (!Number.isFinite(spot?.x) || !Number.isFinite(spot?.y)) { notify(t('{name} isn’t looking at the board right now.', { name: peer.user.name })); return; }
-    showPage(peer.page, false);
+  // Moves the canvas to a teammate: where their pointer is, else the middle of what they see, else (for someone who called
+  // and has since gone quiet) where they were when they called. Returns where this person was, for Back.
+  const followPeer = (peerId, called) => {
+    const peer = cloudSession.cursorStore.get().find(item => item.id === peerId), live = peer?.cursor || peer?.view;
+    if (!peer && !called) return null;
+    const known = Number.isFinite(live?.x) && Number.isFinite(live?.y), spot = known ? live : called?.spot, page = known ? peer.page : called?.page;
+    if (!Number.isFinite(spot?.x) || !Number.isFinite(spot?.y)) { notify(t('{name} isn’t looking at the board right now.', { name: peer?.user.name || called.name })); return null; }
+    const previous = { page: activePageRef.current, viewport: flow.getViewport() };
+    showPage(page, false);
     flow.setCenter(spot.x, spot.y, { zoom: flow.getZoom(), duration: 900 });
+    return { previous, spot: { x: spot.x, y: spot.y }, page: resolvePage(pagesRef.current, page) };
   };
+  const returnTo = ({ page, viewport }) => { showPage(page, false); flow.setViewport(viewport, { duration: 700 }); };
   useEffect(() => { if (cloudSession?.connection === 'live') shareView(flow.getViewport()); }, [cloudSession?.connection]);
   const shareView = viewport => {
     const box = canvasElement.current?.getBoundingClientRect();
@@ -2104,16 +2175,16 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
-    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded };
+    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
-  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage }));
+  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
   const flowStore = useStoreApi();
   // Zoom reaches the canvas as a CSS variable (group titles) and a detail bucket (card variants), without rendering anything.
@@ -2154,7 +2225,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       <div className="board-heading"><span className="eyebrow">{t('YOUR BOARDS')}</span><div className="board-picker"><select data-tooltip={t('Switch board')} aria-label={t('Board')} value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip={t('Rename board')} aria-label={t('Rename board')} className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}{canRename && <button data-tooltip={t('Delete board')} aria-label={t('Delete board')} className="icon-button board-delete" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setDeleteName(''); setBoardForm('delete'); }}><Icon name="trash" size={15}/></button>}</div><button className="new-board" data-tooltip={t('Create a new board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> {t('New board')}</button>{!cloud && <div className="board-transfer"><button data-tooltip={t('Save this board with its images')} aria-label={t('Export board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> {t('Export')}</button><button data-tooltip={t('Import a .conceptgraph file as a new board')} aria-label={t('Import board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> {t('Import')}</button></div>}</div>
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
       <div className="sidebar-tabs"><button data-tooltip={t('Show creation tools')} className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>{t('Create')}</button><button data-tooltip={t('View generation history')} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>{t('History')} <small>{runs.length}</small></button></div>
-      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button></div>}<section className="custom-nodes" aria-label={t('Custom nodes')}><div className="custom-nodes-heading"><span className="eyebrow">{t('CUSTOM NODES')}</span>{!readOnly && <button type="button" className="icon-button" aria-label={t('Create custom node')} data-tooltip={t('Create custom node')} disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button>}</div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} {t('Retry')}</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" {...(readOnly ? {} : toolDrag({ kind: 'template', id: template.id }))} onClick={() => readOnly ? setTemplateDetails(template) : addText(undefined, '', template)} data-tooltip={readOnly ? t('View this custom node') : t('Add custom node to board')}><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button>{!readOnly && <button className="icon-button custom-node-edit" type="button" aria-label={t('Edit {name}', { name: template.name })} data-tooltip={t('Edit custom node')} onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button>}</div>)}</div> : <p className="custom-nodes-empty">{readOnly ? t('This board has no custom nodes.') : t('Save instructions and images to use again.')}</p>}</section>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
+      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button>{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Make larger copies of connected or selected images')} aria-label={t('Add upscale image node')} {...toolDrag({ kind: 'upscale' })} onClick={() => addUpscale()}><span className="tool-icon describe upscale"><Icon name="upscale"/></span><span>{t('Upscale image')}</span></button>}</div>}<section className="custom-nodes" aria-label={t('Custom nodes')}><div className="custom-nodes-heading"><span className="eyebrow">{t('CUSTOM NODES')}</span>{!readOnly && <button type="button" className="icon-button" aria-label={t('Create custom node')} data-tooltip={t('Create custom node')} disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button>}</div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} {t('Retry')}</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" {...(readOnly ? {} : toolDrag({ kind: 'template', id: template.id }))} onClick={() => readOnly ? setTemplateDetails(template) : addText(undefined, '', template)} data-tooltip={readOnly ? t('View this custom node') : t('Add custom node to board')}><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button>{!readOnly && <button className="icon-button custom-node-edit" type="button" aria-label={t('Edit {name}', { name: template.name })} data-tooltip={t('Edit custom node')} onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button>}</div>)}</div> : <p className="custom-nodes-empty">{readOnly ? t('This board has no custom nodes.') : t('Save instructions and images to use again.')}</p>}</section>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
       <div className="sidebar-bottom"><span className="legend-text"/> {t('Text')} <span className="legend-image"/> {t('Image')}</div>
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addImages([...event.dataTransfer.files], position); }}>
@@ -2196,7 +2267,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
     {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
       <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
-      <div className="lightbox-image"><img src={assetUrl(viewNode.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || t('Concept image')} onLoad={event => setViewSize({ asset: viewNode.data.asset, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}/></div>
+      <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || t('Concept image')} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>
       <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span>
         {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? t('Generated by') : t('Added by')}</span><AuthorBadge author={viewInfo.author}/></div>}
         {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}

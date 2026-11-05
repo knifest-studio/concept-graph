@@ -29,6 +29,8 @@ test('one lazy context plays an audible launch, a rising chime and a falling fai
   audio.unlockSounds(); audio.unlockSounds();
   assert.equal(audio.contexts.length, 1); assert.equal(audio.gains[0].gain.value, .55);
   assert.equal(audio.compressors.length, 1); assert.equal(audio.gains[0].destination, audio.compressors[0]); assert.equal(audio.compressors[0].ratio.value, 6);
+  // The second output carries only calls, which also play in a background tab.
+  assert.equal(audio.gains[1].gain.value, .55); assert.equal(audio.gains[1].destination, audio.compressors[0]);
   await audio.playSound('start');
   assert.equal(audio.noises.length, 1);
   const sweep = audio.filters[0].frequency.points; assert.ok(sweep[1][0] > sweep[0][0]);
@@ -40,15 +42,18 @@ test('one lazy context plays an audible launch, a rising chime and a falling fai
   await audio.playSound('error');
   const [first, second] = audio.oscillators.slice(6, 8);
   assert.ok(second.frequency.points[0][0] < first.frequency.points[0][0]);
-  for (const gain of audio.gains.slice(1)) {
+  for (const gain of audio.gains.slice(2)) {
     assert.ok(gain.gain.points[0][0] <= .001 && gain.gain.points.at(-1)[0] <= .001);
     assert.ok(gain.gain.points[1][0] <= .35);
   }
   const count = audio.oscillators.length;
   document.hidden = true; audio.listeners.visibilitychange();
   await audio.playSound('arrival'); assert.equal(audio.oscillators.length, count); assert.equal(audio.gains[0].gain.value, 0);
+  await audio.playSound('call', () => true, { background: true });
+  assert.ok(audio.oscillators.length > count); assert.ok(audio.gains.slice(-1)[0].destination === audio.gains[1]);
+  const called = audio.oscillators.length;
   document.hidden = false; audio.listeners.visibilitychange(); assert.equal(audio.gains[0].gain.value, .55);
-  await audio.playSound('start', () => false); assert.equal(audio.oscillators.length, count);
+  await audio.playSound('start', () => false); await audio.playSound('call', () => false, { background: true }); assert.equal(audio.oscillators.length, called);
 });
 
 test('a gesture resume can finish asynchronously without playing after mute or tab hide', async t => {

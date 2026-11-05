@@ -78,11 +78,12 @@ export function base64(bytes) {
 }
 
 // One request per Generate. `references` are { mimeType, data (base64) } in prompt order.
-export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel) {
+// `format` is a response_format, such as the 2K or 4K size an upscale asks for.
+export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel, format) {
   return { url: `${endpoint}/v1beta/interactions`, init: {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, 'Api-Revision': apiRevision },
     // Nothing needs a follow-up turn, so the interaction is not kept in Google's interaction history.
-    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.map(image => ({ type: 'image', mime_type: image.mimeType, data: image.data }))], store: false }),
+    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.map(image => ({ type: 'image', mime_type: image.mimeType, data: image.data }))], ...(format ? { response_format: format } : {}), store: false }),
   } };
 }
 

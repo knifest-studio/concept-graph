@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, imageSize, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, validateGraph } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -111,11 +111,12 @@ function removeNodes(graph, doomed) {
   graph.groups = pruneGroups(graph.groups || [], graph.nodes);
 }
 
-async function imageAspect(env, asset) {
+// The image's shape and pixel size, read from the start of its file.
+async function imageShape(env, asset) {
   const object = await env.FILES.get(`assets/${asset}`, { range: { offset: 0, length: 256 * 1024 } });
   if (!object) fail(`Image not found: ${asset}. Upload it with upload_image first.`);
   const size = imageSize(new Uint8Array(await object.arrayBuffer()));
-  return size?.width && size?.height ? Math.min(10, Math.max(0.1, size.height / size.width)) : undefined;
+  return size?.width && size?.height ? { aspect: Math.min(10, Math.max(0.1, size.height / size.width)), pixels: { width: size.width, height: size.height } } : {};
 }
 async function assetsExist(env, assets = []) {
   for (const asset of assets) if (!await env.FILES.head(`assets/${asset}`)) fail(`Image not found: ${asset}. Upload it with upload_image first.`);
@@ -149,10 +150,20 @@ define('add_text_node', 'Add a prompt. Connect images or other prompts into it w
     setGenerator(data, args.generator); setVariants(data, args.variants);
     return addNode(ctx, 'text', data, targetPage(ctx.graph, args.pageId), args.position, { author: false });
   } });
+define('add_upscale_node', 'Add an upscale node fed by images on the board, then run it with start_run: each image comes back larger, beside the node, labelled with its new size. topaz keeps the image as it is (about $0.08 an image, as in Krea), seedvr restores detail (about $0.02), nano-banana redraws it at 2K or 4K (about $0.05 or $0.11). scale is 2 or 4 (for nano-banana, 2K or 4K). It runs on the team’s keys within the person’s daily images.',
+  { imageIds: array('Images to upscale, on one page', itemId, { minItems: 1, maxItems: maxUpscaleImages, uniqueItems: true }), upscaler: choice('Who upscales', Object.values(upscalers)), scale: integer('2 or 4', { enum: [2, 4], minimum: 2, maximum: 4 }), position: at }, ['imageIds'], { run: ctx => {
+    const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node');
+    if (args.imageIds.some(nodeId => found.get(nodeId).type !== 'image')) fail('Upscale images only.');
+    const page = targetPage(graph, undefined, args.imageIds), source = found.get(args.imageIds[0]);
+    const where = args.position || { x: Math.round(source.position.x + sizeOf(source).width + 90), y: Math.round(source.position.y) };
+    const added = addNode(ctx, 'text', { text: '', task: upscaleTask, upscaler: args.upscaler || upscalers.topaz, scale: args.scale || 2 }, page, where, { author: false });
+    for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
+    return added;
+  } });
 define('add_image_node', 'Put an uploaded image on the board, e.g. as a reference to connect into a prompt.', { asset: assetId, caption: text('Caption shown above the image', { maxLength: 120 }), label: text('What the image is, for prompts it feeds', { maxLength: 100000 }), position: at, pageId }, ['asset'],
-  { prepare: async (args, env) => ({ aspect: await imageAspect(env, args.asset) }), run: ctx => {
-    const { args } = ctx;
-    return addNode(ctx, 'image', { asset: args.asset, label: args.label || 'Reference image', ...(args.caption ? { caption: args.caption } : {}), ...(ctx.prepared.aspect ? { aspect: ctx.prepared.aspect } : {}) }, targetPage(ctx.graph, args.pageId), args.position);
+  { prepare: (args, env) => imageShape(env, args.asset), run: ctx => {
+    const { args } = ctx, { aspect, pixels } = ctx.prepared;
+    return addNode(ctx, 'image', { asset: args.asset, label: args.label || 'Reference image', ...(args.caption ? { caption: args.caption } : {}), ...(aspect ? { aspect } : {}), ...(pixels ? { pixels } : {}) }, targetPage(ctx.graph, args.pageId), args.position);
   } });
 define('add_template_node', 'Add a prompt made from one of the board’s custom nodes, optionally with extra text.', { templateId, text: text('Extra prompt text', { maxLength: 100000 }), position: at, pageId, generator }, ['templateId'], { run: ctx => {
   const { args } = ctx, data = { text: args.text || '', template: templateSnapshot(templateOf(ctx, args.templateId)) };

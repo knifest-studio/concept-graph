@@ -1,11 +1,11 @@
-import { imageNode, descriptionNode, isDescribe, positionRunOutput, groupRunOutputs } from '../graph.mjs';
+import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs } from '../graph.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 export const terminalRun = status => ['completed', 'failed', 'cancelled'].includes(status);
 export const runOutputId = (runId, index) => `${runId}-output-${index}`;
 // What history shows for a run of this prompt: its page, a short label and the custom node it used.
-export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || (isDescribe(target) ? 'Describe image' : 'Generation')).slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
+export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || (isDescribe(target) ? 'Describe image' : isUpscale(target) ? 'Upscale image' : 'Generation')).slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
 
 /**
  * One generated image joins a board the same way for every generator: a node beside its prompt (or below the run's

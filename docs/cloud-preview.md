@@ -129,6 +129,26 @@ Sign in with the test sign-in as `you@example.com` and give access in **Team acc
 
 `NANO_BANANA_ENDPOINT` is honoured only for `localhost`, `127.0.0.1` or `[::1]` addresses, so the key can never be sent to another host by mistake. Keep it out of deployed configuration. The automated tests (`tests/nano-banana.test.mjs`) use a fake fetch and never contact Google.
 
+## Upscaling images
+
+**Upscale image** in the sidebar (or **Upscale image** on an image's right-click menu) adds an upscale node; connect up to four images into it, choose who upscales and how much, and click **Upscale**. Each image comes back as a new image beside the node, connected from it, and every image whose stored size is 2K or more shows a size badge (2K, 3K, 4K, 6K, 8K) in its corner that stays readable when zoomed out; hovering it shows the exact pixels. Generated and upscaled images record their size; images uploaded before this change show no badge.
+
+| Upscaler | What it does | Sizes | Cost (read 2026-11-05) |
+| --- | --- | --- | --- |
+| **Topaz** (default), `fal-ai/topaz/upscale/image`, model *Standard V2* | The same engine as Krea's enhancer; keeps the picture as it is | ×2, ×4 | $0.08 per image up to 24 MP of output, $0.16 up to 48 MP |
+| **SeedVR2**, `fal-ai/seedvr/upscale/image` | Restores fine detail; much cheaper | ×2, ×4 | $0.001 per output megapixel (a 4K image ≈ $0.02) |
+| **Nano Banana** (`gemini-nano-banana-2.1`, `response_format.image_size`) | Redraws the image at the new size, in its own aspect ratio; small details can change | 2K, 4K | about $0.05 (2K) or $0.11 (4K) |
+
+Upscaling runs in the board's Durable Object like Nano Banana and is governed the same way: only people on the **Team access** list can run it, each upscaled image counts as one of the person's daily images, and its cost counts toward the team's monthly budget (reserved at the largest size it could come out, then settled with what it cost). Outputs are capped at 8192 px on their long side; a ×4 that would pass it is reduced, and an image already that large is refused. Topaz and SeedVR2 return JPEG to keep 4K files small. Agents use `add_upscale_node`, then `start_run`.
+
+Topaz and SeedVR2 run on [fal.ai](https://fal.ai)'s queue API with a company key; Nano Banana uses the existing Gemini key. To turn on the first two, create a fal.ai account, add credit (pay as you go, no subscription), create an API key, and store it as a Worker secret (paste the key at the prompt):
+
+```sh
+npx wrangler secret put FAL_KEY -c cloud/wrangler.jsonc
+```
+
+Without it the node offers only Nano Banana and says why. The image is sent to fal.ai as a data URI; the key never leaves the Worker and is sent only to `queue.fal.run`, never to the host that serves the result. For local testing, `FAL_ENDPOINT` may point at a fake server on localhost (and `NANO_BANANA_ENDPOINT` likewise for Gemini).
+
 ## Sharing boards
 
 Sign-in stays open to any verified Google account. Each board has an owner, the person who created it, and one of three general access settings, chosen in the board's **Share** dialog (top bar):
@@ -154,6 +174,16 @@ Custom nodes belong to boards. Each board keeps its templates in its Yjs documen
 Owners, access settings, invitations and visits live in the board-directory Durable Object (the `owner`, `ownerName`, `access` and `linkRole` columns of `boards` and the `board_people` table); board documents hold only display names and colors. Limitation: images and their previews are not tied to boards. They stay behind sign-in under long random names, so anyone signed in who obtains an image's address can load it.
 
 The routes are `GET /api/cloud/boards` (the boards you can open, with your role), `GET /api/cloud/boards/<board>` (open a board: your role and who has access; a 403 names the owner), `GET` and `PATCH /api/cloud/boards/<board>/sharing` (owner only for changes: `{ "access": "private" | "link" | "everyone", "linkRole": "view" | "edit", "member": { "email": "…", "role": "view" | "edit" | null } }`, where a null role removes the invitation) and `PATCH /api/cloud/boards/<board>` (rename, owner only).
+
+## Calling teammates
+
+Choosing a person's avatar in the board's top bar offers **Go to {name}** and **Call {name} here**; the bell beside the avatars (also at the top of the **+N** list) is **Call everyone here**. As in Figma's spotlight, Miro's *Bring everyone to me* and Mural's summon:
+
+- The person called hears a short chime, even in a background tab, whose title blinks until they look, and sees a card naming the caller with **Go now** and **Not now**. **Go now** moves their canvas (and page) to where the caller's pointer is, or the middle of their view, and a ring in the caller's colour marks the spot; **Back to where I was** returns them for 12 seconds afterwards.
+- Everyone called is taken there after a 5-second countdown unless they choose **Not now**. The countdown waits while they type or look at another tab.
+- The caller sees how many people were called, then who is coming and who said not now.
+
+The board's room relays calls (custom messages; nothing is stored): it names the caller from the connection it admitted, so nobody can call in someone else's name, reaches every tab of the person called, accepts one answer per person, and spaces calls out to one every 4 seconds per tab and one to everyone every 15 seconds. Viewers can call too. The chime follows the person's sound setting.
 
 ## Version history, deleted boards and backups
 

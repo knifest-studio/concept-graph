@@ -1,25 +1,31 @@
 import { YServer } from 'y-partyserver';
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
-import { imageTypes } from './assets.mjs';
+import { assetPattern, imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
-import { generators, imageSize, promptVariants } from '../graph.mjs';
+import { generators, imageSize, isUpscale, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
 import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
+import { falInput, falUpscale, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
 
 const chunkSize = 512 * 1024, maxAgentDeletes = 200;
+// One call every 4 seconds per tab, and one to everyone every 15 seconds; answers are accepted for two minutes.
+const callGap = 4000, everyoneGap = 15000, callLife = 2 * 60 * 1000;
+// y-partyserver keeps the presence IDs each connection controls in its state under this key.
+const presenceIds = connection => connection.state?.__ypsAwarenessIds || [];
+const coordinate = value => Number.isFinite(value) && Math.abs(value) <= 1e7;
 const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
   static callbackOptions = { debounceWait: 1000, debounceMaxWait: 5000 };
-  nanoJobs = new Map(); nanoStarting = new Set(); agentAsks = new Map();
+  nanoJobs = new Map(); nanoStarting = new Set(); agentAsks = new Map(); calls = new Map(); callTimes = new Map();
   // Who changed the board since the last save and since the last version, by display name.
   editedBy = { save: new Set(), version: new Set() };
 
@@ -65,6 +71,8 @@ export class BoardRoom extends YServer {
       try { copyLibrary(this.document, await this.directory().libraryFor(this.name), 'library'); }
       catch (cause) { console.error('Could not copy the custom node library:', cause); }
     }
+    const sizing = this.recordSizes();
+    if (sizing) this.ctx.waitUntil(sizing.catch(cause => console.error('Could not read image sizes:', cause)));
   }
 
   // The Worker admitted this person and set their role. A viewer's document updates are ignored; their presence still syncs.
@@ -90,6 +98,39 @@ export class BoardRoom extends YServer {
       if (next) connection.setState(state => ({ ...state, role: next }));
       else connection.close(4403, 'Access removed');
     }
+  }
+
+  // Images placed before sizes were recorded (and uploads from older tabs) learn their pixel size from the start of their
+  // file, so large ones show their 2K, 4K or 8K badge. Files whose size cannot be read are not tried again.
+  // Returns null when every image already has its size, so nothing keeps the room awake.
+  recordSizes() {
+    const kv = this.ctx.storage.kv, skipped = new Set(kv.get('pixels:skipped') || []), nodes = this.document.getMap('nodes'), missing = [];
+    for (const [id, node] of nodes) {
+      const data = node?.get?.('type') === 'image' && node.get('data'), asset = data?.get?.('asset');
+      if (data?.get && !data.get('pixels') && typeof asset === 'string' && assetPattern.test(asset) && !skipped.has(asset)) missing.push([id, asset]);
+    }
+    return missing.length ? this.readSizes(missing, skipped) : null;
+  }
+
+  async readSizes(missing, skipped) {
+    const kv = this.ctx.storage.kv, nodes = this.document.getMap('nodes'), sizes = new Map(), assets = [...new Set(missing.map(([, asset]) => asset))];
+    for (let index = 0; index < assets.length; index += 20) {
+      await Promise.all(assets.slice(index, index + 20).map(async asset => {
+        try {
+          const object = await this.env.FILES.get(`assets/${asset}`, { range: { offset: 0, length: 256 * 1024 } });
+          const size = object && imageSize(new Uint8Array(await object.arrayBuffer()));
+          sizes.set(asset, size?.width > 0 && size?.height > 0 ? { width: size.width, height: size.height } : null);
+        } catch { sizes.set(asset, null); }
+      }));
+    }
+    this.document.transact(() => {
+      for (const [id, asset] of missing) {
+        const data = nodes.get(id)?.get?.('data');
+        if (sizes.get(asset) && data?.get && !data.get('pixels')) data.set('pixels', sizes.get(asset));
+      }
+    }, 'pixels');
+    const failed = assets.filter(asset => !sizes.get(asset));
+    if (failed.length) kv.put('pixels:skipped', [...skipped, ...failed].slice(-2000));
   }
 
   edited(name) { if (typeof name === 'string' && name) { this.editedBy.save.add(name); this.editedBy.version.add(name); } }
@@ -254,30 +295,36 @@ export class BoardRoom extends YServer {
   // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes).
   async startNano({ nodeId, client, clock, requester }) {
     const settings = nanoSettings(this.env);
-    if (!settings.configured) return { error: 'Nano Banana isn’t set up on this site.', status: 503 };
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
+    const graph = readCloudGraph(this.document), node = graph.nodes.find(item => item.id === nodeId);
+    // Topaz and SeedVR2 need the fal.ai key; everything else needs the Gemini key.
+    const fal = isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana;
+    if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : 'Nano Banana isn’t set up on this site.', status: 503 };
     const busy = () => this.nanoStarting.has(nodeId) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run));
     if (busy()) return { error: 'This prompt is already generating.', status: 409 };
-    const graph = readCloudGraph(this.document);
     let request;
-    try { request = nanoPrompt(graph, nodeId); }
+    try { request = isUpscale(node) ? upscaleRequest(graph, nodeId) : nanoPrompt(graph, nodeId); }
     catch (cause) { return { error: cause.message, status: 400 }; }
-    // A describe node gets one written description; it costs the team's budget but no daily images.
-    const describe = !!request.describe, measure = { promptLength: request.prompt.length, references: request.images.length };
-    const estimateUsd = describe ? describeEstimate(measure) : nanoEstimate(measure), variants = describe ? 1 : promptVariants(request.target);
+    // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
+    // image per connected image, each reserved at the largest size it could come out.
+    const describe = !!request.describe, measure = { promptLength: request.prompt?.length || 0, references: request.images.length };
+    const sources = request.upscale ? await this.imageSizes(request.images) : [];
+    const calls = request.upscale ? request.images.length : describe ? 1 : promptVariants(request.target);
+    const estimates = Array.from({ length: calls }, (_, index) => request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : nanoEstimate(measure));
     this.nanoStarting.add(nodeId);
     const reservations = [], release = async () => { for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 }); };
     try {
-      // Each variant is its own call, so each takes its own share of the person's day and the team's month.
-      for (let index = 0; index < variants; index++) {
-        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd, images: describe ? 0 : 1 });
+      // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
+      for (let index = 0; index < calls; index++) {
+        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1 });
         if (reserved.error) {
           await release();
-          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${variants} variants fit; choose fewer.` } : reserved;
+          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} ${request.upscale ? 'images' : 'variants'} fit; ${request.upscale ? 'connect' : 'choose'} fewer.` } : reserved;
         }
         reservations.push(reserved.reservation);
       }
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: generators.nanoBanana, model: describe ? describeModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(variants > 1 ? { variants } : {}), ...(describe ? { task: 'describe' } : {}) };
+      const task = describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: generators.nanoBanana, model: request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale ? { variants: calls } : {}), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {
@@ -285,7 +332,7 @@ export class BoardRoom extends YServer {
         return { error: 'This prompt was deleted.', status: 404 };
       }
       this.document.transact(() => this.document.getMap('runs').set(run.id, run), origin);
-      const job = { run, email: requester.email, reservations, estimateUsd, request, controller: new AbortController(), next: 0 };
+      const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, controller: new AbortController(), next: 0 };
       this.nanoJobs.set(run.id, job);
       this.ctx.waitUntil(this.runNano(job));
       return { run: { id: run.id } };
@@ -329,12 +376,12 @@ export class BoardRoom extends YServer {
     const node = readCloudGraph(this.document).nodes.find(item => item.id === nodeId);
     if (!node) return { error: `Node not found: ${nodeId}` };
     if (node.type !== 'text') return { error: 'Generate from a prompt (a text node).' };
-    if (node.data.generator !== generators.nanoBanana) {
+    if (node.data.generator !== generators.nanoBanana && !isUpscale(node)) {
       const answer = await this.askTabs(user, { type: 'agent-generate', nodeId });
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
     }
-    if (nanoSettings(this.env).configured && !await this.directory().nanoAllowed(user.email)) return { error: 'Nano Banana is not available for this account. Ask a site admin for access.' };
+    if ((nanoSettings(this.env).configured || isUpscale(node)) && !await this.directory().nanoAllowed(user.email)) return { error: `${isUpscale(node) ? 'Upscaling' : 'Nano Banana'} is not available for this account. Ask a site admin for access.` };
     const result = await this.startNano({ nodeId, requester: user });
     return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: generators.nanoBanana, status: 'running' } };
   }
@@ -372,9 +419,42 @@ export class BoardRoom extends YServer {
   onCustomMessage(connection, message) {
     let value;
     try { value = JSON.parse(message); } catch { return; }
+    if (value?.type === 'attention') return this.callAttention(connection, value);
+    if (value?.type === 'attention-reply') return this.answerAttention(connection, value);
     const ask = value?.type === 'agent-answer' && this.agentAsks.get(value.requestId);
     if (!ask || ask.connection !== connection.id) return;
     ask.done(typeof value.error === 'string' ? { error: value.error.slice(0, 500) || 'Generation could not start.' } : { runId: typeof value.runId === 'string' && value.runId.length <= 120 ? value.runId : null });
+  }
+
+  // Someone asks one person (every tab of theirs) or everyone else to come to them. The room names the caller from the
+  // connection it admitted, so nobody can call in someone else's name, and spaces calls out so nobody can flood the board.
+  callAttention(connection, value) {
+    const reply = message => this.sendCustomMessage(connection, JSON.stringify(message));
+    const name = connection.state?.name, own = presenceIds(connection)[0], everyone = value.to === 'all', now = Date.now();
+    if (!name || !Number.isSafeInteger(own) || (!everyone && !Number.isSafeInteger(value.to))) return;
+    const last = this.callTimes.get(connection.id) || { at: 0, everyone: 0 };
+    if (now - last.at < callGap || (everyone && now - last.everyone < everyoneGap)) return reply({ type: 'attention-failed', reason: 'busy' });
+    const others = [...this.getConnections()].filter(item => item.id !== connection.id && item.state?.email !== connection.state?.email);
+    const person = !everyone && others.find(item => presenceIds(item).includes(value.to))?.state?.email;
+    const targets = everyone ? others : person ? others.filter(item => item.state?.email === person) : [];
+    if (!targets.length) return reply({ type: 'attention-failed', reason: everyone ? 'alone' : 'gone' });
+    this.callTimes.set(connection.id, { at: now, everyone: everyone ? now : last.everyone });
+    for (const [key, call] of this.calls) if (now - call.at > callLife) this.calls.delete(key);
+    const id = crypto.randomUUID();
+    this.calls.set(id, { at: now, caller: connection.id, waiting: new Set(targets.map(item => item.state?.email)) });
+    const spot = coordinate(value.spot?.x) && coordinate(value.spot?.y) ? { x: value.spot.x, y: value.spot.y } : null;
+    const page = typeof value.page === 'string' && value.page.length <= 120 ? value.page : null;
+    const message = JSON.stringify({ type: 'attention', id, from: { name, clientId: own }, everyone, page, spot });
+    for (const target of targets) this.sendCustomMessage(target, message);
+    reply({ type: 'attention-sent', id, everyone, people: new Set(targets.map(item => item.state?.email)).size });
+  }
+
+  // Each person called answers once, from any of their tabs; the caller hears who is coming and who is busy.
+  answerAttention(connection, value) {
+    const call = typeof value.id === 'string' && this.calls.get(value.id);
+    if (!call || !['coming', 'later'].includes(value.answer) || !call.waiting.delete(connection.state?.email)) return;
+    const caller = [...this.getConnections()].find(item => item.id === call.caller);
+    if (caller) this.sendCustomMessage(caller, JSON.stringify({ type: 'attention-reply', id: value.id, from: { name: connection.state?.name || 'Teammate' }, answer: value.answer }));
   }
 
   // Worker RPC: only the person who started a run can stop it. The call is aborted; whatever arrived before stays.
@@ -392,11 +472,46 @@ export class BoardRoom extends YServer {
     return { ok: true };
   }
 
-  async references(images) {
+  async references(images, upscale = false) {
     const objects = await Promise.all(images.map(image => this.env.FILES.get(`assets/${image.asset}`)));
-    if (objects.some(object => !object)) throw new NanoError('bad_request', 'A reference image is missing from storage. Reconnect it and try again.');
-    if (objects.reduce((total, object) => total + object.size, 0) > maxReferenceBytes) throw new NanoError('bad_request', 'Reference images are too large for Nano Banana (20 MB in total). Use fewer or smaller images.');
-    return Promise.all(objects.map(async (object, index) => ({ mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(new Uint8Array(await object.arrayBuffer())) })));
+    if (objects.some(object => !object)) throw new NanoError('bad_request', `${upscale ? 'An image' : 'A reference image'} is missing from storage. Reconnect it and try again.`);
+    if (objects.reduce((total, object) => total + object.size, 0) > maxReferenceBytes) throw new NanoError('bad_request', upscale ? 'Images to upscale can be at most 20 MB in total. Connect fewer.' : 'Reference images are too large for Nano Banana (20 MB in total). Use fewer or smaller images.');
+    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes) }; }));
+  }
+
+  // Pixel sizes from the start of each file, enough to price an upscale before it runs; null where the header is unread.
+  async imageSizes(images) {
+    return Promise.all(images.map(async image => {
+      try { const object = await this.env.FILES.get(`assets/${image.asset}`, { range: { offset: 0, length: 256 * 1024 } }); return object ? imageSize(new Uint8Array(await object.arrayBuffer())) || null : null; }
+      catch { return null; }
+    }));
+  }
+
+  // One connected image becomes one larger image, placed beside the upscale node in the order of the connections. Once
+  // Google or fal.ai has taken the call it may be billed even without an answer, so the estimate stands until one arrives.
+  async callUpscale(job, index, reference, result) {
+    const { upscaler, scale } = job.request, source = reference.size, signal = job.controller.signal, queued = () => { result.usd = job.estimates[index]; };
+    if (!source) throw new NanoError('bad_request', 'Could not read the size of an image to upscale.');
+    let image;
+    if (upscaler === upscalers.nanoBanana) {
+      queued();
+      const { url, init } = nanoRequest(nanoUpscalePrompt, [reference], { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, nanoModel, nanoUpscaleFormat(scale, source));
+      const response = await fetch(url, { ...init, signal });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) result.usd = 0;
+      const { images, usage } = nanoResult(response.status, body);
+      if (usage) result.usd = nanoCost(usage, { promptLength: nanoUpscalePrompt.length, references: 1, images: 1 });
+      image = images[0];
+    } else {
+      const settings = upscaleSettings(this.env), input = falInput(upscaler, upscaleFactor(source, scale), `data:${reference.mimeType};base64,${reference.data}`);
+      image = await falUpscale({ key: this.env.FAL_KEY, endpoint: settings.endpoint, model: upscaleModels[upscaler], input, signal, onQueued: queued });
+    }
+    const size = imageSize(image.bytes);
+    if (upscaler !== upscalers.nanoBanana) result.usd = upscaleCost(upscaler, scale, size);
+    if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) return;
+    const asset = `${crypto.randomUUID()}.${image.format}`;
+    await this.env.FILES.put(`assets/${asset}`, image.bytes, { httpMetadata: { contentType: image.contentType } });
+    if (this.placeOutput(job, index, asset, size)) result.placed++;
   }
 
   // The description lands as a text prompt beside the describe node, as with Codex; it holds no images to count.
@@ -447,25 +562,26 @@ export class BoardRoom extends YServer {
   // One request per variant, side by side, never retried automatically: a retry could be billed twice. Images join the run
   // as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
-    const { run, request, controller } = job, fallback = { promptLength: request.prompt.length, references: request.images.length };
+    const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length };
+    const name = request.upscale ? 'The upscale' : 'Nano Banana';
     const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, nanoTimeout);
     const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
     let outcome = { status: 'completed' };
     try {
-      const references = await this.references(request.images);
+      const references = await this.references(request.images, request.upscale);
       if (job.cancelled) return;
-      const calls = await Promise.allSettled(results.map(result => job.request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result)));
+      const calls = await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result)));
       const failures = calls.filter(call => call.status === 'rejected').map(call => call.reason);
       if (failures.length === calls.length) throw failures[0];
-      // Some variants arrived: the run succeeds, and History says what the others ran into.
+      // Some variants (or images) arrived: the run succeeds, and History says what the others ran into.
       if (failures.length) {
-        const reason = failures[0] instanceof NanoError ? failures[0].message : 'Nano Banana generation failed.';
-        outcome = { status: 'completed', error: `${failures.length} of ${calls.length} variants failed: ${reason}` };
+        const reason = failures[0] instanceof NanoError ? failures[0].message : `${name} failed.`;
+        outcome = { status: 'completed', error: `${failures.length} of ${calls.length} ${request.upscale ? 'images' : 'variants'} failed: ${reason}` };
       }
     } catch (cause) {
-      outcome = { status: 'failed', error: job.timedOut ? 'Nano Banana took longer than 5 minutes. Try again.' : cause instanceof NanoError ? cause.message
-        : cause?.name === 'TypeError' ? 'Could not reach Nano Banana. Try again.' : 'Nano Banana generation failed. Try again.' };
-      if (!(cause instanceof NanoError) && !job.cancelled) console.error('Nano Banana generation failed:', cause);
+      outcome = { status: 'failed', error: job.timedOut ? `${name} took longer than 5 minutes. Try again.` : cause instanceof NanoError ? cause.message
+        : cause?.name === 'TypeError' ? `Could not reach ${request.upscale ? 'the upscaler' : 'Nano Banana'}. Try again.` : `${name} failed. Try again.` };
+      if (!(cause instanceof NanoError) && !job.cancelled) console.error(`${name} failed:`, cause);
     } finally {
       clearTimeout(timer);
       this.nanoJobs.delete(run.id);

@@ -50,6 +50,7 @@ export class CloudGeneration {
     const graph = this.read();
     if (graph.runs.some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { prompt, images, target, task } = collectInputs(graph, nodeId);
+    if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
     if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
     const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), ...generationSettings, ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;

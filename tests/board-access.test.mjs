@@ -359,3 +359,49 @@ test('board custom nodes are plain values in the document: create, edit, delete 
     assert.equal(readBoardTemplates(doc).find(item => item.id === library[0].id).name, 'Views');
   } finally { doc.destroy(); other.destroy(); }
 });
+
+test('a call reaches only the person called, in the caller’s own name, at most every few seconds', t => {
+  const boardRoom = room(t);
+  const person = (email, name, ids) => connection({ role: 'edit', email, name, __ypsAwarenessIds: ids });
+  const alice = person('alice@studio.example', 'Alice', [11]), bob = person('bob@studio.example', 'Bob', [21]), bobTablet = person('bob@studio.example', 'Bob', [22]), carol = person('carol@studio.example', 'Carol', [31]);
+  boardRoom.getConnections = () => [alice, bob, bobTablet, carol];
+  const received = item => item.sent.filter(message => message.startsWith('__YPS:')).map(message => JSON.parse(message.slice(6))).filter(message => message.type.startsWith('attention'));
+  const send = (from, value) => boardRoom.onCustomMessage(from, JSON.stringify(value));
+  // The name comes from the connection the room admitted, not from the message; every tab of the person called hears it.
+  send(alice, { type: 'attention', to: 22, from: { name: 'Mallory', clientId: 99 }, page: 'page-2', spot: { x: 10, y: -20 } });
+  const [call] = received(bobTablet);
+  assert.deepEqual({ ...call, id: 0 }, { type: 'attention', id: 0, from: { name: 'Alice', clientId: 11 }, everyone: false, page: 'page-2', spot: { x: 10, y: -20 } });
+  assert.deepEqual(received(bob), [call]);
+  assert.deepEqual(received(carol), []);
+  assert.deepEqual(received(alice), [{ type: 'attention-sent', id: call.id, everyone: false, people: 1 }]);
+  send(alice, { type: 'attention', to: 31 });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'busy' });
+  assert.deepEqual(received(carol), []);
+  // Each person called answers once; nobody else can answer for them.
+  send(carol, { type: 'attention-reply', id: call.id, answer: 'coming' });
+  send(bob, { type: 'attention-reply', id: call.id, answer: 'maybe' });
+  send(bobTablet, { type: 'attention-reply', id: call.id, answer: 'coming' });
+  send(bob, { type: 'attention-reply', id: call.id, answer: 'later' });
+  assert.deepEqual(received(alice).filter(message => message.type === 'attention-reply'), [{ type: 'attention-reply', id: call.id, from: { name: 'Bob' }, answer: 'coming' }]);
+  // Calling everyone reaches everyone else once per tab, and waits longer before the next time.
+  boardRoom.callTimes.clear();
+  send(alice, { type: 'attention', to: 'all', spot: { x: Infinity, y: 0 }, page: 7 });
+  const everyone = received(carol).at(-1);
+  assert.deepEqual({ everyone: everyone.everyone, spot: everyone.spot, page: everyone.page }, { everyone: true, spot: null, page: null });
+  assert.equal(received(bob).at(-1).id, everyone.id); assert.equal(received(bobTablet).at(-1).id, everyone.id);
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-sent', id: everyone.id, everyone: true, people: 2 });
+  boardRoom.callTimes.set(alice.id, { at: 0, everyone: Date.now() });
+  send(alice, { type: 'attention', to: 'all' });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'busy' });
+  send(alice, { type: 'attention', to: 99 });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'gone' });
+  boardRoom.callTimes.clear();
+  boardRoom.getConnections = () => [alice];
+  send(alice, { type: 'attention', to: 'all' });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'alone' });
+  // Someone the room could not name cannot call.
+  const before = received(carol).length;
+  boardRoom.getConnections = () => [alice, carol];
+  send(person('anon@studio.example', null, [41]), { type: 'attention', to: 'all' });
+  assert.equal(received(carol).length, before);
+});

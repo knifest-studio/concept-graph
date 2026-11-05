@@ -21,6 +21,7 @@ import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNam
 import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './board-templates.mjs';
 import { ShareDialog } from './ShareDialog.jsx';
 import { VersionHistory } from './VersionHistory.jsx';
+import { AttentionCard, AttentionPings } from './AttentionCall.jsx';
 import { TeamAccessDialog } from './TeamAccessDialog.jsx';
 import { AccountMenu } from './AccountMenu.jsx';
 import { defaultPages } from './pages.mjs';
@@ -159,9 +160,9 @@ function store(value) {
   return { get: () => value, set: next => { value = next; listeners.forEach(listener => listener()); }, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 
-function Cursors({ cursors, visible }) {
-  const peers = useSyncExternalStore(cursors.subscribe, cursors.get).filter(visible);
-  return <ViewportPortal>{peers.filter(peer => Number.isFinite(peer.cursor?.x) && Number.isFinite(peer.cursor?.y)).map(peer => <div className="cloud-cursor" key={peer.id} style={{ transform: `translate(${peer.cursor.x}px, ${peer.cursor.y}px)`, color: peer.user.color }}>
+function Cursors({ cursors, pings, visible }) {
+  const peers = useSyncExternalStore(cursors.subscribe, cursors.get).filter(visible), spots = useSyncExternalStore(pings.subscribe, pings.get).filter(visible);
+  return <ViewportPortal><AttentionPings pings={spots}/>{peers.filter(peer => Number.isFinite(peer.cursor?.x) && Number.isFinite(peer.cursor?.y)).map(peer => <div className="cloud-cursor" key={peer.id} style={{ transform: `translate(${peer.cursor.x}px, ${peer.cursor.y}px)`, color: peer.user.color }}>
     <svg width="18" height="23" viewBox="0 0 18 23" fill="currentColor" aria-hidden="true"><path d="M1 1 16 13l-7 1-3 7Z" stroke="white" strokeWidth="1.5"/></svg><span style={{ background: peer.user.color }}>{peer.user.name}</span>
   </div>)}</ViewportPortal>;
 }
@@ -175,6 +176,8 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
   const [shareOpen, setShareOpen] = useState(false), shareButton = useRef(null), [teamOpen, setTeamOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false), historyButton = useRef(null);
+  // A teammate's call waiting for this person's answer; a newer call replaces it.
+  const [call, setCall] = useState(null);
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted };
   const [nano, setNano] = useState(undefined), nanoSoon = useRef(() => {});
   useEffect(() => {
@@ -209,9 +212,9 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     provider.awareness.on('update', ownPresence);
     const sharing = new CodexSharing(provider.awareness, undefined, sharingMemory(boardId));
     const undo = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('groups'), doc.getMap('pages'), doc.getMap('sections')], { trackedOrigins: new Set([origin]) });
-    const reader = new CloudGraphReader(doc), cursors = store([]);
+    const reader = new CloudGraphReader(doc), cursors = store([]), pings = store([]);
     const next = {
-      doc, provider, undo, origin, user, paired, openPair, unpair, cursorStore: cursors,
+      doc, provider, undo, origin, user, paired, openPair, unpair, cursorStore: cursors, pingStore: pings,
       read: local => reader.read(local),
       // A viewer's edits are never written; the next read shows the board as it is.
       apply: (graph, before) => { if (editable) applyLocalGraph(doc, graph, before, origin, reader.stampIds()); },
@@ -278,6 +281,36 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       const value = JSON.stringify(selection);
       if (value !== lastSelection) { lastSelection = value; provider.awareness.setLocalStateField('selection', selection); }
     };
+    // Calling a teammate (a presence ID) or everyone ('all') to where this person is looking. The room names the caller and
+    // answers with how many it reached; each person called later says whether they are coming.
+    next.callAttention = (to, name) => {
+      const local = provider.awareness.getLocalState(), spot = local?.cursor || local?.view || null;
+      next.calling = { name, everyone: to === 'all', coming: [], later: [] };
+      provider.sendMessage(JSON.stringify({ type: 'attention', to, page: local?.page ?? null, spot }));
+    };
+    next.answerCall = (id, answer) => provider.sendMessage(JSON.stringify({ type: 'attention-reply', id, answer }));
+    next.ping = spot => {
+      const id = crypto.randomUUID();
+      pings.set([...pings.get(), { ...spot, id }]);
+      setTimeout(() => pings.set(pings.get().filter(item => item.id !== id)), 2600);
+    };
+    const callMessage = value => {
+      const calling = next.calling, names = list => list.join(', ');
+      if (value.type === 'attention') {
+        if (typeof value.id !== 'string' || typeof value.from?.name !== 'string' || !Number.isSafeInteger(value.from?.clientId)) return;
+        setCall({ id: value.id, from: value.from, everyone: value.everyone === true, page: typeof value.page === 'string' ? value.page : null, spot: value.spot || null });
+        const sounds = soundPreferenceKey(`cloud:${user.name}`);
+        if (readSoundPreference(localStorage, sounds)) { unlockSounds(); playSound('call', () => readSoundPreference(localStorage, sounds), { background: true }); }
+      } else if (value.type === 'attention-sent' && calling) {
+        calling.id = value.id;
+        next.notify?.(calling.everyone ? plural(value.people, 'Called {count} person here', 'Called {count} people here') : t('Called {name} here', { name: calling.name }));
+      } else if (value.type === 'attention-reply' && calling?.id === value.id && typeof value.from?.name === 'string') {
+        calling[value.answer === 'coming' ? 'coming' : 'later'].push(value.from.name);
+        next.notify?.([calling.coming.length && t('Coming: {names}', { names: names(calling.coming) }), calling.later.length && t('Not now: {names}', { names: names(calling.later) })].filter(Boolean).join(' · '));
+      } else if (value.type === 'attention-failed') {
+        next.notify?.(value.reason === 'busy' ? t('Wait a few seconds before calling again.') : value.reason === 'alone' ? t('Nobody else is on this board right now.') : t('{name} has left the board.', { name: calling?.name || t('Someone') }));
+      }
+    };
     // The room forgets presence when it hibernates, so greet each newcomer with our state again.
     const greet = ({ added }) => { const local = provider.awareness.getLocalState(); if (local && added.some(id => id !== doc.clientID)) provider.awareness.setLocalState({ ...local }); };
     const presence = () => {
@@ -314,6 +347,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       let value;
       try { value = JSON.parse(message); } catch { return; }
       if (value?.type === 'access') latest.current.onAccess(value.role);
+      if (typeof value?.type === 'string' && value.type.startsWith('attention')) callMessage(value);
       if (['agent-generate', 'agent-cancel'].includes(value?.type) && typeof value.requestId === 'string') agentRequest(value);
       // The owner deleted the board: everyone goes back to their boards; only the others are told why.
       if (value?.type === 'deleted') latest.current.onDeleted(!next.deleting);
@@ -329,7 +363,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     setSession(next);
     return () => {
       next.flush?.(); next.closed = true;
-      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null);
+      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
       document.removeEventListener('visibilitychange', hidden);
       provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
       provider.off('custom-message', accessMessage); provider.off('connection-close', closed);
@@ -347,9 +381,9 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     onAllow: id => { session.sharing.allow(id); session.share(); }, onDecline: id => { session.sharing.decline(id); session.share(); },
   };
   Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
-  session.cursors = visible => <Cursors cursors={session.cursorStore} visible={visible}/>;
+  session.cursors = visible => <Cursors cursors={session.cursorStore} pings={session.pingStore} visible={visible}/>;
   session.toolbar = <>
-    <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)}/>
+    <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
     {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
     <button ref={historyButton} type="button" className="cloud-history-button" aria-haspopup="dialog" aria-label={t('Version history')} data-tooltip={t('Version history')} onClick={() => setHistoryOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span>{t('Versions')}</span></button>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>{t('Share')}</button>
@@ -360,6 +394,9 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     {editable && <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>}
     {pairDialog(editable && !sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
     {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
+    {call && (caller => <AttentionCard key={call.id} call={call} color={caller?.user.color || '#6b6e89'} pageName={presencePages(session.doc).length > 1 ? presencePages(session.doc).find(page => page.id === (caller?.page ?? call.page))?.name : ''}
+      onGo={() => { session.answerCall(call.id, 'coming'); const arrived = session.follow?.(call.from.clientId, { ...call, name: call.from.name }); if (arrived) session.ping({ ...arrived.spot, page: arrived.page, color: caller?.user.color || '#6b6e89' }); return arrived; }}
+      onLater={() => { session.answerCall(call.id, 'later'); setCall(null); }} onBack={previous => session.returnTo?.(previous)} onClose={() => setCall(null)}/>)(peers.find(peer => peer.id === call.from.clientId))}
     {historyOpen && <VersionHistory boardId={boardId} services={services} editable={editable} ago={value => relativeTime(value, Date.now(), timeWords)} onRestored={() => { setHistoryOpen(false); historyButton.current?.focus(); }} onClose={() => { setHistoryOpen(false); historyButton.current?.focus(); }}/>}
     {shareOpen && <ShareDialog boardId={boardId} name={boardName} sharing={sharing} services={services} onChange={onSharing} onClose={() => { setShareOpen(false); shareButton.current?.focus(); }}/>}
   </>;

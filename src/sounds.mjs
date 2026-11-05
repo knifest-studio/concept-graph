@@ -12,7 +12,7 @@ export function eventOnce(seen, id) {
 
 export const pitchVariation = (random = Math.random) => .96 + Math.max(0, Math.min(1, random())) * .08;
 
-let context, master, resuming;
+let context, master, alert, resuming;
 const volume = .55;
 // [frequency from, to, delay s, length s, wave, peak gain]; each note decays exponentially like a soft mallet.
 const sounds = {
@@ -28,6 +28,8 @@ const sounds = {
   'tick-up': [[780, 1000, 0, .065, 'sine', .08]],
   'tick-down': [[650, 460, 0, .065, 'sine', .07]],
   connect: [[900, 1250, 0, .05, 'triangle', .18], [1800, 1800, .01, .06, 'sine', .06]],
+  // A teammate calling: a two-note door chime, played twice.
+  call: [[1318.5, 1318.5, 0, .5, 'sine', .3], [1046.5, 1046.5, .22, .7, 'sine', .3], [1318.5, 1318.5, .9, .5, 'sine', .22], [1046.5, 1046.5, 1.12, .8, 'sine', .22], [659.25, 659.25, 0, .6, 'triangle', .06]],
 };
 export function unlockSounds() {
   try {
@@ -39,15 +41,18 @@ export function unlockSounds() {
       const compressor = context.createDynamicsCompressor();
       compressor.threshold.value = -12; compressor.knee.value = 16; compressor.ratio.value = 6; compressor.attack.value = .003; compressor.release.value = .2;
       master.gain.value = volume; master.connect(compressor); compressor.connect(context.destination);
+      // A call is the one sound that also plays in a background tab, where it is most needed.
+      alert = context.createGain(); alert.gain.value = volume; alert.connect(compressor);
       document.addEventListener('visibilitychange', () => { master.gain.value = document.hidden ? 0 : volume; });
     }
     if (context.state === 'suspended') { resuming = context.resume(); resuming.catch(() => {}); }
   } catch {}
 }
-export async function playSound(kind, allowed = () => true, { index = 0 } = {}) {
+export async function playSound(kind, allowed = () => true, { index = 0, background = false } = {}) {
   try {
     if (resuming) await resuming;
-    if (!allowed() || document.hidden || context?.state !== 'running') return;
+    if (!allowed() || (document.hidden && !background) || context?.state !== 'running') return;
+    const output = background ? alert : master;
     const pitch = pitchVariation() * (kind === 'arrival' ? [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3][Math.floor(Math.random() * 5)] : kind === 'step' ? 2 ** (Math.max(0, Math.min(3, index)) / 12 * 2) : 1);
     const jitter = Math.random() * .008;
     if (kind === 'start' || kind === 'remove') {
@@ -65,7 +70,7 @@ export async function playSound(kind, allowed = () => true, { index = 0 } = {}) 
       const oscillator = context.createOscillator(), gain = context.createGain(), start = context.currentTime + delay + jitter;
       oscillator.type = type; oscillator.frequency.setValueAtTime(from * pitch, start); oscillator.frequency.exponentialRampToValueAtTime(to * pitch, start + duration * .6);
       gain.gain.setValueAtTime(.0001, start); gain.gain.exponentialRampToValueAtTime(peak, start + .006); gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
-      oscillator.connect(gain); gain.connect(master); oscillator.start(start); oscillator.stop(start + duration);
+      oscillator.connect(gain); gain.connect(output); oscillator.start(start); oscillator.stop(start + duration);
       oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
     }
   } catch {}

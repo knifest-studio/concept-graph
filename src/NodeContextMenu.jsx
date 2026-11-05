@@ -74,6 +74,7 @@ export function NodeContextMenu({ children, id, type, actions, slideshow }) {
     {position && createPortal(<div ref={menu} className="node-context-menu" role="menu" aria-label={Object.hasOwn(menuNames, type) ? t(menuNames[type]) : t('{name} options', { name: type })} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>{t('Copy image')}</span><kbd>{shortcut}</kbd></button>}
       {!readOnly && <>{type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.describeImage)}>{t('Describe image')}</button>}
+      {type === 'image' && actions.upscale && <button type="button" role="menuitem" onClick={() => choose(actions.upscaleImage)}>{t('Upscale image')}</button>}
       {type === 'text' && <button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>{t('Save as custom node')}</button>}
       {type === 'group' && <button type="button" role="menuitem" onClick={() => choose(actions.renameGroup)}>{t('Rename')}</button>}
       {type === 'group' && slideshow !== undefined && <button type="button" role="menuitem" onClick={() => choose(actions.toggleSlideshow)}>{slideshow ? t('Show as group') : t('Show as slideshow')}</button>}

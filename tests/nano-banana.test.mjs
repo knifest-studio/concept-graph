@@ -124,12 +124,14 @@ test('prompts may choose Nano Banana; any other generator value is rejected', ()
 });
 
 test('the generator menu says what Nano Banana can do for this person', () => {
-  assert.deepEqual(nanoState(undefined), { selectable: true, ready: true, note: 'Uses the site’s Gemini key', budget: '' });
-  assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, note: 'Nano Banana isn’t set up on this site', budget: '' });
-  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, note: 'Not available for your account. Ask a site admin for access.', budget: '' });
+  assert.deepEqual(nanoState(undefined), { selectable: true, ready: true, note: 'Uses the site’s Gemini key', budget: '', fal: true });
+  assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, note: 'Nano Banana isn’t set up on this site', budget: '', fal: true });
+  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, note: 'Not available for your account. Ask a site admin for access.', budget: '', fal: true });
   const status = { configured: true, allowed: true, dailyImages: 50, usedToday: 12, monthlyUsd: 50, teamSpentUsd: 3.2 };
-  assert.deepEqual(nanoState(status), { selectable: true, ready: true, note: '38 of 50 left today', budget: 'Team: $3.20 of $50 this month' });
-  assert.deepEqual(nanoState({ ...status, usedToday: 51 }), { selectable: true, ready: false, note: 'Daily limit reached (50/50)', budget: 'Team: $3.20 of $50 this month' });
+  assert.deepEqual(nanoState(status), { selectable: true, ready: true, note: '38 of 50 left today', budget: 'Team: $3.20 of $50 this month', fal: true });
+  // Topaz and SeedVR2 need the site's fal.ai key; the status says when it is missing.
+  assert.equal(nanoState({ ...status, fal: false }).fal, false);
+  assert.deepEqual(nanoState({ ...status, usedToday: 51 }), { selectable: true, ready: false, note: 'Daily limit reached (50/50)', budget: 'Team: $3.20 of $50 this month', fal: true });
   assert.equal(nanoState({ ...status, teamSpentUsd: 50 }).note, 'Team budget for this month is used up');
   assert.equal(nanoState({ ...status, teamSpentUsd: 50 }).ready, false);
 });
@@ -264,8 +266,8 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   const lead = await cookie('lead@studio.example'), outsider = await cookie('guest@gmail.example', 'Guest'), path = `/api/boards/${board.id}/nano`;
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0 });
-  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, fal: false });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);
@@ -289,7 +291,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal(budget.status, 429); assert.deepEqual(await budget.json(), { error: 'Team budget for this month is used up.' });
   delete env.GEMINI_API_KEY;
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 503);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true, fal: false });
   assert.equal(directory.nanoUsage('solo@mail.example').usedToday, 0);
 });
 
@@ -336,7 +338,8 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
 runtimeTest('refusals and failures end the run with a clear message, refunding calls Google answered without billing', async t => {
   const { request, cookie, board, boardRoom, settle, files, directory } = cloudSetup(t);
   const lead = await cookie('lead@studio.example'), runs = () => readCloudGraph(boardRoom.document).runs;
-  const start = async () => { const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: lead, data: { nodeId: 'p' } }); assert.equal(response.status, 202); await settle(); return runs().at(-1); };
+  // Runs started within the same millisecond sort either way, so each is found by its ID.
+  const start = async () => { const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: lead, data: { nodeId: 'p' } }); assert.equal(response.status, 202); const { run } = await response.json(); await settle(); return runs().find(item => item.id === run.id); };
   const spentBefore = () => directory.nanoUsage('lead@studio.example').teamSpentUsd;
   let answer;
   const calls = fakeGemini(t, () => answer());
@@ -413,7 +416,11 @@ runtimeTest('a Nano Banana run cut off by a room restart fails on load and is ne
   assert.equal(runs.get('nano').status, 'failed'); assert.equal(runs.get('nano').error, 'Generation was interrupted. Run the prompt again.');
   assert.equal(runs.get('nano').count, 1); assert.ok(runs.get('nano').finishedAt);
   assert.equal(runs.get('codex').status, 'running'); assert.equal(runs.get('done').status, 'completed');
-  assert.equal(calls.length, 0); assert.equal(waits.length, 0);
+  // The only background work is reading the size of the image placed before sizes were recorded; nothing is sent again.
+  assert.equal(waits.length, 1); await Promise.all(waits.splice(0));
+  assert.equal(calls.length, 0);
+  assert.deepEqual(restarted.document.getMap('nodes').get('i').get('data').get('pixels'), { width: 640, height: 480 });
+  assert.equal(restarted.recordSizes(), null);
   // A running room keeps its own job.
   await boardRoom.setName(board.id);
   const result = await boardRoom.startNano({ nodeId: 'p', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
@@ -503,4 +510,116 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
   const usage = directory.nanoUsage('lead@studio.example');
   assert.equal(usage.usedToday, 1); assert.equal(Math.round(usage.teamSpentUsd * 1e6), 30000 + Math.round((2000 * .3 + 1000 * 2.5)));
   validateGraph(graph);
+});
+
+test('upscale nodes take one to four connected images, and sizes, prices and labels follow the chosen upscaler', async () => {
+  const { upscaleFactor, upscaleCost, upscaleEstimate, nanoAspect, falInput, nanoUpscaleFormat } = await import('../cloud/upscale.mjs');
+  const { resolutionLabel, runInputs } = await import('../graph.mjs');
+  assert.equal(upscaleFactor({ width: 1024, height: 768 }, 4), 4);
+  assert.equal(upscaleFactor({ width: 4096, height: 2048 }, 4), 2);
+  assert.throws(() => upscaleFactor({ width: 7000, height: 100 }, 2), /already as large/);
+  assert.equal(upscaleCost('topaz', 4, { width: 4096, height: 4096 }), .08);
+  assert.equal(upscaleCost('topaz', 4, { width: 8192, height: 4096 }), .16);
+  assert.ok(Math.abs(upscaleCost('seedvr', 2, { width: 2000, height: 1500 }) - .003) < 1e-9);
+  assert.ok(Math.abs(upscaleCost('nano-banana', 4) - (1120 * 1.5 + 3780 * 30 + 2000 * 7.5) / 1e6) < 1e-9);
+  // Before the call the price assumes the largest output, capped at 8K.
+  assert.equal(upscaleEstimate('topaz', 4, { width: 4096, height: 4096 }), .32);
+  assert.deepEqual([nanoAspect({ width: 640, height: 480 }), nanoAspect({ width: 1080, height: 1920 }), nanoAspect({ width: 1000, height: 1010 })], ['4:3', '9:16', '1:1']);
+  assert.deepEqual(nanoUpscaleFormat(4, { width: 640, height: 480 }), { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
+  assert.deepEqual(falInput('seedvr', 2, 'data:x'), { image_url: 'data:x', upscale_mode: 'factor', upscale_factor: 2, output_format: 'jpg' });
+  assert.deepEqual([resolutionLabel({ width: 1024, height: 1024 }), resolutionLabel({ width: 2048, height: 1536 }), resolutionLabel({ width: 2160, height: 3840 }), resolutionLabel({ width: 8192, height: 4096 }), resolutionLabel(undefined)], ['', '2K', '4K', '8K', '']);
+  const image = id => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: reference } });
+  const graph = count => ({ nodes: [{ id: 'u', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'upscale', upscaler: 'seedvr', scale: 4 } }, ...Array.from({ length: count }, (_, index) => image(`i${index}`))],
+    edges: Array.from({ length: count }, (_, index) => ({ id: `e${index}`, source: `i${index}`, target: 'u' })), groups: [], runs: [] });
+  assert.equal(runInputs(graph(2), 'u').images.length, 2);
+  assert.throws(() => runInputs(graph(0), 'u'), /Connect an image to upscale/);
+  assert.throws(() => runInputs(graph(5), 'u'), /at most 4 images/);
+  const invalid = changes => { const value = graph(1); Object.assign(value.nodes[0].data, changes); return () => validateGraph(value); };
+  assert.throws(invalid({ upscaler: 'magnific' }), /Invalid upscaler/); assert.throws(invalid({ scale: 3 }), /Invalid upscale size/); assert.throws(invalid({ task: 'redraw' }), /Invalid node task/);
+  const sized = graph(1); sized.nodes[1].data.pixels = { width: 0, height: 10 };
+  assert.throws(() => validateGraph(sized), /Invalid image size/);
+});
+
+// The upscale node `u`, fed by the 640×480 reference image.
+const upscaleBoard = data => ({ nodes: [{ id: 'u', type: 'text', position: { x: 0, y: 400 }, data: { text: '', task: 'upscale', ...data } }], edges: [{ id: 'iu', source: 'i', target: 'u' }], groups: [], runs: [] });
+function addUpscale(boardRoom, data) {
+  const before = readCloudGraph(boardRoom.document), extra = upscaleBoard(data);
+  applyLocalGraph(boardRoom.document, { ...before, nodes: [...before.nodes, ...extra.nodes], edges: [...before.edges, ...extra.edges] }, before, 'seed');
+}
+
+runtimeTest('Topaz upscales through fal.ai’s queue with the site key, and the larger image joins the board with its size', async t => {
+  const { boardRoom, board, directory, files, settle } = cloudSetup(t, { FAL_KEY: 'fal-test-key' });
+  await boardRoom.setName(board.id);
+  addUpscale(boardRoom, { upscaler: 'topaz', scale: 4 });
+  const queue = 'https://queue.fal.run/fal-ai/topaz/requests/job-1', calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET', auth: init.headers?.Authorization, body: init.body && JSON.parse(init.body) });
+    if (String(url) === 'https://queue.fal.run/fal-ai/topaz/upscale/image') return Response.json({ request_id: 'job-1', status_url: `${queue}/status`, response_url: queue, cancel_url: `${queue}/cancel` });
+    if (String(url) === `${queue}/status`) return Response.json({ status: 'COMPLETED' });
+    if (String(url) === queue) return Response.json({ image: { url: 'https://v3.fal.media/files/out.png', content_type: 'image/png' } });
+    if (String(url) === 'https://v3.fal.media/files/out.png') return new Response(png(2560, 1920));
+    return new Response('unexpected', { status: 500 });
+  });
+  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  assert.ok(result.run.id);
+  await settle();
+  const [submit] = calls;
+  assert.equal(submit.method, 'POST'); assert.equal(submit.auth, 'Key fal-test-key');
+  assert.deepEqual({ ...submit.body, image_url: submit.body.image_url.slice(0, 22) }, { image_url: 'data:image/png;base64,', model: 'Standard V2', upscale_factor: 4, output_format: 'jpeg' });
+  // The key goes only to fal.ai's queue, never to the image host.
+  assert.deepEqual(calls.map(call => [call.url.split('/')[2], call.auth]), [['queue.fal.run', 'Key fal-test-key'], ['queue.fal.run', 'Key fal-test-key'], ['queue.fal.run', 'Key fal-test-key'], ['v3.fal.media', undefined]]);
+  const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === result.run.id), output = graph.nodes.find(node => node.data.runId === result.run.id);
+  assert.deepEqual({ status: run.status, model: run.model, task: run.task, scale: run.scale, label: run.label }, { status: 'completed', model: 'fal-ai/topaz/upscale/image', task: 'upscale', scale: 4, label: 'Upscale image' });
+  assert.deepEqual(output.data.pixels, { width: 2560, height: 1920 });
+  assert.ok(files.has(`assets/${output.data.asset}`));
+  assert.ok(graph.edges.some(edge => edge.source === 'u' && edge.target === output.id));
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 1, teamSpentUsd: .08 });
+});
+
+runtimeTest('a fal.ai answer pointing elsewhere is refused, and Topaz without the fal.ai key is not offered', async t => {
+  const { boardRoom, board, settle, directory } = cloudSetup(t, { FAL_KEY: 'fal-test-key' });
+  await boardRoom.setName(board.id);
+  addUpscale(boardRoom, { upscaler: 'seedvr', scale: 2 });
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    calls.push(String(url));
+    return Response.json({ request_id: 'x', status_url: 'https://attacker.example/status', response_url: 'https://attacker.example/result' });
+  });
+  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  assert.deepEqual(calls, ['https://queue.fal.run/fal-ai/seedvr/upscale/image']);
+  const run = boardRoom.document.getMap('runs').get(result.run.id);
+  assert.deepEqual([run.status, run.error], ['failed', 'The upscaler returned an unreadable response. Try again.']);
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 0, teamSpentUsd: 0 });
+  delete boardRoom.env.FAL_KEY;
+  assert.deepEqual(await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } }), { error: 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.', status: 503 });
+});
+
+runtimeTest('Nano Banana upscales by redrawing the image at 2K or 4K in its own aspect ratio', async t => {
+  const { boardRoom, board, settle } = cloudSetup(t);
+  await boardRoom.setName(board.id);
+  addUpscale(boardRoom, { upscaler: 'nano-banana', scale: 4 });
+  const calls = fakeGemini(t, () => Response.json(interaction([png(4096, 3072)])));
+  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  assert.equal(calls.length, 1);
+  const { body } = calls[0];
+  assert.deepEqual(body.response_format, { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
+  assert.match(body.input[0].text, /^Upscale this image/); assert.equal(body.input.length, 2); assert.equal(body.model, 'gemini-nano-banana-2.1');
+  const graph = readCloudGraph(boardRoom.document), output = graph.nodes.find(node => node.data.runId === result.run.id);
+  assert.deepEqual(output.data.pixels, { width: 4096, height: 3072 });
+  assert.equal(graph.runs.find(run => run.id === result.run.id).status, 'completed');
+});
+
+test('agents add an upscale node fed by images on one page', async () => {
+  const { toolByName, runBoardTool } = await import('../cloud/mcp-tools.mjs');
+  const graph = { nodes: [{ id: 'i', type: 'image', position: { x: 0, y: 0 }, data: { asset: reference } }, { id: 'p', type: 'text', position: { x: 0, y: 400 }, data: { text: 'A robot' } }], edges: [], groups: [], runs: [] };
+  const run = args => runBoardTool(toolByName.get('add_upscale_node'), { graph, args, user: { name: 'Lead', email: 'lead@studio.example' }, prepared: {}, templates: [] });
+  const { result, graph: next } = run({ imageIds: ['i'], upscaler: 'seedvr', scale: 4 });
+  const added = next.nodes.find(node => node.id === result.nodeId);
+  assert.deepEqual({ ...added.data, createdAt: 0 }, { text: '', task: 'upscale', upscaler: 'seedvr', scale: 4, createdAt: 0 });
+  assert.deepEqual(next.edges.map(edge => [edge.source, edge.target]), [['i', result.nodeId]]);
+  assert.equal(run({ imageIds: ['i'] }).graph.nodes.at(-1).data.upscaler, 'topaz');
+  assert.throws(() => run({ imageIds: ['p'] }), /Upscale images only/);
+  assert.throws(() => run({ imageIds: ['i'], scale: 3 }), /Invalid upscale size/);
 });

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, describeTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor } from './graph.mjs';
+import { collectInputs, describeTask, upscaleTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor } from './graph.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
@@ -514,6 +514,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const inputs = collectInputs(graph, nodeId);
+  if (inputs.task === upscaleTask) throw Object.assign(new Error('Upscaling runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   for (const asset of inputs.images) await stat(path.join(assetsDir, asset));
   ensureConnected();
   if (revision !== graph.revision) throw conflict(graph);

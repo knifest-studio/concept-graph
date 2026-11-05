@@ -10,6 +10,19 @@ export const generators = Object.freeze({ nanoBanana: 'nano-banana' });
 // A describe node is a text node whose run writes a description of its connected images into a new text node.
 export const describeTask = 'describe';
 export const isDescribe = node => node?.type === 'text' && node.data?.task === describeTask;
+// An upscale node is a text node whose run makes a larger copy of each connected image, on the site (never in Codex):
+// Topaz or SeedVR2 through fal.ai, or Nano Banana redrawing it at 2K or 4K.
+export const upscaleTask = 'upscale';
+export const isUpscale = node => node?.type === 'text' && node.data?.task === upscaleTask;
+export const upscalers = Object.freeze({ topaz: 'topaz', seedvr: 'seedvr', nanoBanana: 'nano-banana' });
+export const upscalerOf = node => Object.values(upscalers).includes(node?.data?.upscaler) ? node.data.upscaler : upscalers.topaz;
+export const upscaleScale = node => node?.data?.scale === 4 ? 4 : 2;
+export const maxUpscaleImages = 4;
+// The pixel size a generated or upscaled image was stored at, shown as 2K, 4K and up on the board.
+export function resolutionLabel(pixels) {
+  const side = Math.max(pixels?.width || 0, pixels?.height || 0);
+  return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2700, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
+}
 export const maxDescription = 20000;
 // A Nano Banana prompt can ask for up to this many variants: separate images generated side by side.
 export const maxVariants = 4;
@@ -17,7 +30,8 @@ export const promptVariants = node => Number.isInteger(node?.data?.variants) && 
 export const nanoModel = 'gemini-nano-banana-2.1';
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [describeModel]: 'Gemini 3.5 Flash-Lite' });
+export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -72,12 +86,15 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.template !== undefined) validateTemplate(node.data.template);
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && node.data.generator !== generators.nanoBanana) throw new Error('Invalid image generator.');
-    if (node.type === 'text' && node.data.task !== undefined && node.data.task !== describeTask) throw new Error('Invalid node task.');
+    if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask].includes(node.data.task)) throw new Error('Invalid node task.');
+    if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
+    if (node.type === 'text' && node.data.scale !== undefined && ![2, 4].includes(node.data.scale)) throw new Error('Invalid upscale size.');
     if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
     if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
     if (node.type === 'image' && !assetPattern.test(node.data?.asset || '')) throw new Error('Invalid image asset.');
     if (node.type === 'image' && node.data.caption !== undefined && (typeof node.data.caption !== 'string' || node.data.caption.length > 120)) throw new Error('Invalid image caption.');
     if (node.type === 'image' && node.data.aspect !== undefined && (!Number.isFinite(node.data.aspect) || node.data.aspect < 0.1 || node.data.aspect > 10)) throw new Error('Invalid image aspect.');
+    if (node.type === 'image' && node.data.pixels !== undefined && !['width', 'height'].every(side => Number.isInteger(node.data.pixels?.[side]) && node.data.pixels[side] > 0 && node.data.pixels[side] <= 100000)) throw new Error('Invalid image size.');
   }
   const edgeIds = new Set(), byId = new Map(value.nodes.map(node => [node.id, node]));
   for (const node of value.nodes) {
@@ -166,10 +183,16 @@ export function runInputs(graph, nodeId) {
   validateGraph(graph);
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const target = nodes.get(nodeId);
-  if (target?.type !== 'text' || (!isDescribe(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
+  if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
   const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: node.data.caption || node.data.label || 'Reference image' }]
     : (node.data.template?.assets || []).map(asset => ({ asset, label: `${node.data.template.name} reference` })));
+  if (isUpscale(target)) {
+    const pictures = ordered.filter(node => node.type === 'image').map(node => ({ asset: node.data.asset, label: node.data.caption || node.data.label || 'Image' }));
+    if (!pictures.length) throw new Error('Connect an image to upscale.');
+    if (pictures.length > maxUpscaleImages) throw new Error(`Connect at most ${maxUpscaleImages} images to one upscale node.`);
+    return { target, ordered, images: pictures, context: [] };
+  }
   if (images.length > 10) throw new Error('Use at most 10 connected reference images per run.');
   if (isDescribe(target) && !images.length) throw new Error('Connect an image to describe.');
   // A describe node's text only steers its own description; the prompts it feeds never see it.
@@ -181,6 +204,8 @@ export const promptText = node => [node.data.template?.instructions.trim() ? `Cu
 
 export function collectInputs(graph, nodeId) {
   const { target, ordered, images, context } = runInputs(graph, nodeId);
+  // An upscale has no prompt; this shape only lets the editor notice changed inputs. Codex never runs it.
+  if (isUpscale(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: upscaleTask };
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
@@ -219,7 +244,8 @@ export function imageNode(run, asset, index, dimensions) {
   return {
     id: crypto.randomUUID(), type: 'image',
     position: { x: run.target.position.x + 390, y: run.target.position.y + index * 340 },
-    data: { asset, label: `Result ${index + 1}`, runId: run.id, createdAt: new Date().toISOString(), ...(author ? { author } : {}), ...(aspect >= 0.1 && aspect <= 10 ? { aspect } : {}) },
+    data: { asset, label: `Result ${index + 1}`, runId: run.id, createdAt: new Date().toISOString(), ...(author ? { author } : {}), ...(aspect >= 0.1 && aspect <= 10 ? { aspect } : {}),
+      ...(Number.isInteger(dimensions?.width) && Number.isInteger(dimensions?.height) && dimensions.width > 0 && dimensions.height > 0 ? { pixels: { width: dimensions.width, height: dimensions.height } } : {}) },
   };
 }
 
