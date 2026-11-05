@@ -66,6 +66,8 @@ const deselected = item => item.selected ? { ...item, selected: false } : item;
 // A card that folds or unfolds changes size; its old measurement would misplace its connections until React Flow re-measures.
 const refolded = (node, collapsed) => { const { measured, ...rest } = node; return { ...rest, data: { ...node.data, collapsed } }; };
 const busy = run => ['running', 'queued'].includes(run?.status);
+// Deleting this many nodes and sections at once asks first.
+const bulkDeleteCount = 20;
 const generateShortcut = () => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘ Enter' : 'Ctrl+Enter';
 // Only an explicit selection is aligned, so drawings and stamps around other nodes never shift by accident.
 const alignIds = scoped => new Set([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).flatMap(group => group.nodeIds)]);
@@ -627,7 +629,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   pagePreference.current ||= readPagePreference(localStorage, pagePreferenceKey);
   const [pageChoice, setPageChoice] = useState(() => pagePreference.current.page);
   const activePage = resolvePage(pages, pageChoice), activePageRef = useRef(activePage); activePageRef.current = activePage;
-  const [pageDelete, setPageDelete] = useState(null);
+  const [pageDelete, setPageDelete] = useState(null), [bulkDelete, setBulkDelete] = useState(null);
   const [status, setStatus] = useState({}), [saved, setSaved] = useState('Loading…'), [loaded, setLoaded] = useState(false);
   const [limitsVersion, setLimitsVersion] = useState(0);
   const [toast, setToast] = useState(''), [viewId, setViewId] = useState(null), [viewSize, setViewSize] = useState(null), [starting, setStarting] = useState(null);
@@ -1288,23 +1290,33 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const prompt = copied.nodes.find(node => node.type === 'text');
     if (prompt) { focusNode(prompt.id, 'text', true); guide.report({ type: 'prompt' }); }
   };
-  const removeNodes = (ids, selectedEdges = false) => {
-    if (mcpLocked.current) return;
-    checkpoint();
-    // Deleting a section deletes what it holds, as in FigJam; Remove section keeps it.
+  // Deleting a section deletes what it holds, as in FigJam; Remove section keeps it. Stamps go with their nodes.
+  const removal = ids => {
     const known = new Set(sectionRef.current.map(section => section.id)), sectionIds = new Set(ids.filter(id => known.has(id)));
     const held = sectionIds.size ? sectionContents(pageGraph(), sectionIds, measureView(viewCache.current)) : null;
     const removed = new Set([...ids, ...(held ? [...held.nodeIds, ...held.sectionIds] : [])]);
     const next = detachArrows(nodeRef.current, reconcileStampAttachments(nodeRef.current, nodeRef.current.filter(node => !removed.has(node.id))), measureView(viewCache.current));
     const retained = new Set(next.map(node => node.id));
     for (const node of nodeRef.current) if (!retained.has(node.id)) removed.add(node.id);
+    return { removed, next, held };
+  };
+  const removeNodes = (ids, selectedEdges = false) => {
+    if (mcpLocked.current) return;
+    checkpoint();
+    const { removed, next, held } = removal(ids);
     effects.remove([...removed]); putNodes(next);
     putEdges(current => current.filter(e => !(selectedEdges && e.selected) && !removed.has(e.source) && !removed.has(e.target)));
     putGroups(pruneGroups(groupRef.current.filter(group => !removed.has(group.id)), nodeRef.current));
     if (held) putSections(current => current.filter(section => !removed.has(section.id)));
     markDirty();
   };
-  const removeSelected = () => { const scoped = pageGraph(); removeNodes([...scoped.nodes, ...scoped.groups, ...scoped.sections].filter(item => item.selected).map(item => item.id), true); };
+  // Deleting many things at once asks first, so a stray Delete after Select all cannot empty the board.
+  const removeSelected = () => {
+    const scoped = pageGraph(), ids = [...scoped.nodes, ...scoped.groups, ...scoped.sections].filter(item => item.selected).map(item => item.id);
+    const count = ids.length ? removal(ids).removed.size : 0;
+    if (count >= bulkDeleteCount) setBulkDelete({ ids, count, returnFocus: document.activeElement });
+    else removeNodes(ids, true);
+  };
   const undo = (redo = false) => {
     effects.forgetPending();
     if (cloudSession) {
@@ -2162,10 +2174,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     </main><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addImages([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>
     {!cloud && <input ref={boardFileInput} type="file" accept=".conceptgraph,.zip" aria-label={t('Board archive file')} hidden onChange={event => { const file = event.target.files[0]; event.target.value = ''; importBoard(file); }}/>}
     {boardForm === 'delete' && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-delete-title"><form onSubmit={deleteBoard}><h2 id="board-delete-title">{t('Delete “{name}”?', { name: currentBoard?.name ?? '' })}</h2>
-      <p className="board-delete-warning">{cloud ? t('The board, its pages and its history are removed for everyone who has access. This can’t be undone.') : t('The board, its pages and its history are removed from this computer. This can’t be undone; export it first to keep a copy.')}</p>
+      <p className="board-delete-warning">{cloud ? t('Nobody can open the board after this. It waits in Recently deleted on your boards page for 30 days, where you can restore it, and is then erased for good.') : t('The board, its pages and its history are removed from this computer. This can’t be undone; export it first to keep a copy.')}</p>
       <label htmlFor="board-delete-name">{t('Type the board name to confirm')}</label><input id="board-delete-name" autoFocus autoComplete="off" maxLength={80} value={deleteName} onChange={event => setDeleteName(event.target.value)} placeholder={currentBoard?.name} disabled={switching}/>
       <div><button type="button" onClick={() => setBoardForm(null)} disabled={switching}>{t('Cancel')}</button><button className="danger-button" type="submit" disabled={switching || deleteName !== currentBoard?.name}>{switching ? t('Deleting…') : t('Delete board')}</button></div></form></div>}
     {boardForm && boardForm !== 'delete' && <div className="board-modal" role="dialog" aria-modal="true" aria-label={boardForm === 'create' ? t('Create board') : t('Rename board')}><form onSubmit={submitBoard}><h2>{boardForm === 'create' ? t('New board') : t('Rename board')}</h2><label htmlFor="board-name">{t('Board name')}</label><input id="board-name" aria-label={t('Board name')} autoFocus maxLength={80} value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder={t('A new direction')} disabled={switching}/><div><button data-tooltip={t('Cancel')} type="button" onClick={() => setBoardForm(null)} disabled={switching}>{t('Cancel')}</button><button className="primary-button" data-tooltip={boardForm === 'create' ? t('Create board') : t('Save board name')} type="submit" disabled={switching || !nameDraft.trim()}>{boardForm === 'create' ? t('Create board') : t('Save name')}</button></div></form></div>}
+    {bulkDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setBulkDelete(null); restoreDialogFocus(bulkDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="bulk-delete-title">{plural(bulkDelete.count, 'Delete {count} item?', 'Delete {count} items?')}</h2><p>{cloud ? t('You can undo this. The board’s version history also keeps a copy from just before.') : t('You can undo this.')}</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { ids } = bulkDelete; setBulkDelete(null); removeNodes(ids, true); }}>{t('Delete')}</button><button type="button" onClick={() => { setBulkDelete(null); restoreDialogFocus(bulkDelete.returnFocus); }}>{t('Cancel')}</button></div></div>}
     {pageDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="page-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="page-delete-title">{t('Delete “{name}”?', { name: pageDelete.name })}</h2><p>{pageDelete.count ? plural(pageDelete.count, 'Its {count} node will be deleted with it.', 'Its {count} nodes will be deleted with it.') : t('This page is empty.')} {t('Generation history and image files stay. You can undo this.')}</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { id: pageId } = pageDelete; setPageDelete(null); deletePage(pageId); }}>{t('Delete page')}</button><button type="button" onClick={() => { setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); }}>{t('Cancel')}</button></div></div>}
     {diagnosticsId && runs.find(run => run.id === diagnosticsId) && <RunDiagnostics run={runs.find(run => run.id === diagnosticsId)} loadRun={loadDiagnosticRun} returnFocus={diagnosticsReturnFocus} onClose={() => setDiagnosticsId(null)}/>}
     {templateForm && <TemplateEditor templates={templates} template={templateForm.template} initial={templateForm.initial || templateForm.template} onClose={() => setTemplateForm(null)} onSave={saveTemplate} onDelete={deleteTemplate} onBusyChange={setTemplateBusy}/>}

@@ -52,10 +52,10 @@ const account = {
     const board = await boardAccess(env, user, args.boardId);
     if (board.role !== 'owner') fail('Only the board’s owner can delete it.');
     if (args.confirmName !== board.name) fail('confirmName must be the board’s exact current name.');
-    await directory(env).deleteBoard(board.id);
-    try { await (await getServerByName(env.BoardRoom, board.id)).destroy(); }
-    catch (cause) { console.error('Could not erase the deleted board:', cause); }
-    return { deleted: board.id };
+    await directory(env).trashBoard(board.id, user.email);
+    try { await (await getServerByName(env.BoardRoom, board.id)).trash(); }
+    catch (cause) { console.error('Could not close the deleted board:', cause); }
+    return { deleted: board.id, restorableUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() };
   },
   upload_image: async (env, user, args) => {
     const bytes = decode(args.data);

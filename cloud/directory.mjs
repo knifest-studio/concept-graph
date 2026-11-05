@@ -4,7 +4,7 @@ import { accessModes, boardRole, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000;
+const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role });
@@ -25,7 +25,7 @@ export class Directory extends DurableObject {
     // Boards made before sharing have no owner and stay open to everyone who signs in, with editing, until their owner
     // changes that; they also copy the old team library of custom nodes once (sharedLibrary). New boards set all of these.
     for (const [column, type] of [['updatedAt', 'TEXT'], ['imageCount', 'INTEGER'], ['covers', "TEXT NOT NULL DEFAULT '[]'"], ['owner', 'TEXT'], ['ownerName', 'TEXT'],
-      ['access', "TEXT NOT NULL DEFAULT 'everyone'"], ['linkRole', "TEXT NOT NULL DEFAULT 'edit'"], ['sharedLibrary', 'INTEGER NOT NULL DEFAULT 1']]) {
+      ['access', "TEXT NOT NULL DEFAULT 'everyone'"], ['linkRole', "TEXT NOT NULL DEFAULT 'edit'"], ['sharedLibrary', 'INTEGER NOT NULL DEFAULT 1'], ['deletedAt', 'TEXT'], ['deletedBy', 'TEXT']]) {
       if (!columns.has(column)) ctx.storage.sql.exec(`ALTER TABLE boards ADD COLUMN ${column} ${type}`);
     }
     // One row per person and board: an invitation (role) and the last visit (openedAt), so a board opened from its link stays in their list.
@@ -43,6 +43,12 @@ export class Directory extends DurableObject {
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_admins (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    // Anyone with a Google account can sign in, so the boards made before sharing, open to everyone who signs in, move once
+    // to "anyone with the link": people who opened them keep them, editing included, and strangers no longer see them.
+    if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'legacyLinkAccess'").toArray().length) {
+      const moved = ctx.storage.sql.exec("UPDATE boards SET access = 'link' WHERE access = 'everyone' AND sharedLibrary = 1 RETURNING id").toArray().length;
+      ctx.storage.sql.exec("INSERT INTO site_settings (key, value) VALUES ('legacyLinkAccess', ?)", JSON.stringify({ at: new Date().toISOString(), boards: moved }));
+    }
     if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'nanoImported'").toArray().length) {
       const now = new Date().toISOString(), entries = String(env?.NANO_BANANA_ALLOWED || '').split(/[\s,;]+/).map(accessEntry).filter(Boolean);
       for (const entry of entries) ctx.storage.sql.exec('INSERT OR IGNORE INTO nano_access (entry, addedBy, addedAt) VALUES (?, NULL, ?)', entry, now);
@@ -119,24 +125,24 @@ export class Directory extends DurableObject {
   }
 
   listBoards() {
-    return this.ctx.storage.sql.exec('SELECT id, name, createdAt, COALESCE(updatedAt, createdAt) AS updatedAt, imageCount, covers FROM boards ORDER BY COALESCE(updatedAt, createdAt) DESC, rowid DESC').toArray().map(board => ({ ...board, covers: JSON.parse(board.covers) }));
+    return this.ctx.storage.sql.exec('SELECT id, name, createdAt, COALESCE(updatedAt, createdAt) AS updatedAt, imageCount, covers FROM boards WHERE deletedAt IS NULL ORDER BY COALESCE(updatedAt, createdAt) DESC, rowid DESC').toArray().map(board => ({ ...board, covers: JSON.parse(board.covers) }));
   }
 
   getBoard(id) {
-    const board = this.ctx.storage.sql.exec('SELECT id, name, createdAt, COALESCE(updatedAt, createdAt) AS updatedAt, imageCount, covers FROM boards WHERE id = ?', id).toArray()[0];
+    const board = this.ctx.storage.sql.exec('SELECT id, name, createdAt, COALESCE(updatedAt, createdAt) AS updatedAt, imageCount, covers FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     return board ? { ...board, covers: JSON.parse(board.covers) } : null;
   }
 
   // The boards a person can open, newest first: their own, those they were invited to, those open to everyone, and link boards they opened.
   boardsFor(person) {
     return this.ctx.storage.sql.exec(`SELECT ${boardFields}, p.role AS invited FROM boards b LEFT JOIN board_people p ON p.board = b.id AND p.email = ?
-      WHERE b.owner = ? OR p.role IS NOT NULL OR b.access = 'everyone' OR (b.access = 'link' AND p.openedAt IS NOT NULL)
+      WHERE b.deletedAt IS NULL AND (b.owner = ? OR p.role IS NOT NULL OR b.access = 'everyone' OR (b.access = 'link' AND p.openedAt IS NOT NULL))
       ORDER BY COALESCE(b.updatedAt, b.createdAt) DESC, b.rowid DESC`, person, person).toArray().map(row => shown(row, boardRole(row, person, row.invited))).filter(board => board.role);
   }
 
   // One board with this person's role (null when they may not open it); null when there is no such board.
   boardFor(id, person) {
-    const row = this.ctx.storage.sql.exec(`SELECT ${boardFields}, p.role AS invited FROM boards b LEFT JOIN board_people p ON p.board = b.id AND p.email = ? WHERE b.id = ?`, person ?? null, id).toArray()[0];
+    const row = this.ctx.storage.sql.exec(`SELECT ${boardFields}, p.role AS invited FROM boards b LEFT JOIN board_people p ON p.board = b.id AND p.email = ? WHERE b.id = ? AND b.deletedAt IS NULL`, person ?? null, id).toArray()[0];
     return row ? shown(row, boardRole(row, person, row.invited)) : null;
   }
 
@@ -161,7 +167,7 @@ export class Directory extends DurableObject {
 
   // Who has access, as this person may see it: the owner sees invited people's emails; others see the names of those who opened the board.
   sharing(id, person) {
-    const board = this.ctx.storage.sql.exec('SELECT owner, ownerName, access, linkRole FROM boards WHERE id = ?', id).toArray()[0];
+    const board = this.ctx.storage.sql.exec('SELECT owner, ownerName, access, linkRole FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     if (!board) return null;
     const people = this.ctx.storage.sql.exec('SELECT email, role, name FROM board_people WHERE board = ? AND role IS NOT NULL ORDER BY rowid', id).toArray();
     const role = boardRole(board, person, people.find(item => item.email === person)?.role), owner = role === 'owner';
@@ -172,7 +178,7 @@ export class Directory extends DurableObject {
 
   // Owner only. `member` invites someone or changes their role; a null role removes the invitation (a visit from the link stays).
   changeSharing(id, person, { access, linkRole, member } = {}) {
-    const board = this.ctx.storage.sql.exec('SELECT owner FROM boards WHERE id = ?', id).toArray()[0];
+    const board = this.ctx.storage.sql.exec('SELECT owner FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     if (!board) return { error: 'Board not found.', status: 404 };
     if (!board.owner || board.owner !== person) return { error: board.owner ? 'Only the board’s owner can change who has access.' : 'This board has no owner, so nobody can change who has access.', status: 403 };
     if (access !== undefined && !accessModes.includes(access)) return { error: 'Choose who can open this board.', status: 400 };
@@ -194,7 +200,7 @@ export class Directory extends DurableObject {
 
   // For the board's room, which re-checks everyone connected after a sharing change.
   roomAccess(id) {
-    const board = this.ctx.storage.sql.exec('SELECT owner, access, linkRole FROM boards WHERE id = ?', id).toArray()[0];
+    const board = this.ctx.storage.sql.exec('SELECT owner, access, linkRole FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     return board ? { ...board, members: this.ctx.storage.sql.exec('SELECT email, role FROM board_people WHERE board = ? AND role IS NOT NULL', id).toArray().map(item => [item.email, item.role]) } : null;
   }
 
@@ -207,8 +213,34 @@ export class Directory extends DurableObject {
     this.ctx.storage.sql.exec('UPDATE boards SET name = ? WHERE id = ?', name, id);
     return this.getBoard(id);
   }
-  // The board leaves every list and stops admitting anyone; its room wipes the content. Images stay, as other boards may use them.
-  deleteBoard(id) {
+  // Deleting moves a board to the trash: it leaves every list and admits nobody, and for 30 days its owner or a site
+  // admin can bring it back as it was, sharing included.
+  trashBoard(id, person) {
+    this.ctx.storage.sql.exec('UPDATE boards SET deletedAt = ?, deletedBy = ? WHERE id = ? AND deletedAt IS NULL', new Date().toISOString(), email(person), id);
+  }
+
+  // The trash as this person may restore it: their own boards, or every board for a site admin.
+  trashFor(person, now = Date.now()) {
+    const admin = this.siteRole(person) ? 1 : 0, cutoff = new Date(now - trashDays * dayMs).toISOString();
+    return this.ctx.storage.sql.exec('SELECT id, name, deletedAt, imageCount, covers, owner, ownerName FROM boards WHERE deletedAt IS NOT NULL AND deletedAt > ? AND (owner = ? OR ?) ORDER BY deletedAt DESC', cutoff, person, admin)
+      .toArray().map(({ owner, covers, ...board }) => ({ ...board, covers: JSON.parse(covers), own: owner === person, erasesAt: new Date(Date.parse(board.deletedAt) + trashDays * dayMs).toISOString() }));
+  }
+
+  restoreBoard(id, person, now = Date.now()) {
+    const row = this.ctx.storage.sql.exec('SELECT owner, deletedAt FROM boards WHERE id = ?', id).toArray()[0];
+    if (!row?.deletedAt || Date.parse(row.deletedAt) <= now - trashDays * dayMs) return { error: 'This board is no longer in Recently deleted.', status: 404 };
+    if (row.owner !== person && !this.siteRole(person)) return { error: 'Only the board’s owner or a site admin can restore it.', status: 403 };
+    this.ctx.storage.sql.exec('UPDATE boards SET deletedAt = NULL, deletedBy = NULL WHERE id = ?', id);
+    return { board: this.boardFor(id, person) };
+  }
+
+  // Boards whose 30 days in the trash are over. The Worker erases each room, then the board is forgotten here.
+  expiredBoards(now = Date.now()) {
+    return this.ctx.storage.sql.exec('SELECT id FROM boards WHERE deletedAt IS NOT NULL AND deletedAt <= ?', new Date(now - trashDays * dayMs).toISOString()).toArray().map(row => row.id);
+  }
+
+  // Images stay, as other boards may use them.
+  forgetBoard(id) {
     this.ctx.storage.sql.exec('DELETE FROM boards WHERE id = ?', id);
     this.ctx.storage.sql.exec('DELETE FROM board_people WHERE board = ?', id);
   }

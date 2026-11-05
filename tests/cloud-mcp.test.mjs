@@ -63,7 +63,7 @@ function setup(t) {
   };
   const room = name => {
     const values = new Map(), storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) }, transactionSync: callback => callback(),
-      get: async key => values.get(key), put: async (key, value) => { values.set(key, value); }, deleteAll: async () => values.clear() };
+      get: async key => values.get(key), put: async (key, value) => { values.set(key, value); }, deleteAll: async () => values.clear(), getAlarm: async () => null, setAlarm: async () => {} };
     const created = new BoardRoom({ storage, id: { name }, waitUntil: promise => waits.push(promise), blockConcurrencyWhile: callback => callback(), getWebSockets: () => [] }, env);
     created.onSave = async () => {};
     rooms.set(name, created); t.after(() => created.document.destroy());
@@ -270,7 +270,9 @@ runtimeTest('an agent sees and edits a board live, within the person’s role', 
   assert.match((await stranger.tool('get_board', { boardId })).error, /access/);
 
   assert.match((await lead.tool('delete_board', { boardId, confirmName: 'robots' })).error, /exact current name/);
-  assert.deepEqual(await lead.tool('delete_board', { boardId, confirmName: 'Robots' }), { deleted: boardId });
+  const deleted = await lead.tool('delete_board', { boardId, confirmName: 'Robots' });
+  assert.equal(deleted.deleted, boardId); assert.ok(Date.parse(deleted.restorableUntil) > Date.now() + 29 * 24 * 60 * 60 * 1000);
+  assert.deepEqual(directory.trashFor('lead@studio.example').map(board => board.id), [boardId]);
   assert.deepEqual((await lead.tool('list_boards')).boards, []);
   assert.ok(files.size >= 1);
 });

@@ -385,8 +385,8 @@ runtimeTest('board saves publish stats through the worker, deduplicate snapshots
   const { env, directory, request } = setup(t), board = directory.createBoard('Images');
   const values = new Map(), calls = [];
   let fail = false;
-  const storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, structuredClone(value)), delete: key => values.delete(key) }, transactionSync: callback => callback() };
-  const roomEnv = { Directory: { idFromName: name => name, get: () => ({ updateBoardStats(id, stats) { calls.push({ id, ...stats }); if (fail) throw new Error('Directory unavailable'); directory.updateBoardStats(id, stats); } }) } };
+  const storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, structuredClone(value)), delete: key => values.delete(key) }, transactionSync: callback => callback(), getAlarm: async () => null, setAlarm: async () => {} };
+  const roomEnv = { FILES: { objects: new Map(), async put(key, body, options = {}) { this.objects.set(key, { key, body, customMetadata: options.customMetadata }); }, async get(key) { return this.objects.get(key) || null; }, async list({ prefix }) { return { objects: [...this.objects.values()].filter(object => object.key.startsWith(prefix)), truncated: false }; }, async delete(keys) { for (const key of [keys].flat()) this.objects.delete(key); } }, Directory: { idFromName: name => name, get: () => ({ updateBoardStats(id, stats) { calls.push({ id, ...stats }); if (fail) throw new Error('Directory unavailable'); directory.updateBoardStats(id, stats); } }) } };
   const room = new BoardRoom({ storage, id: { name: board.id } }, roomEnv);
   t.after(() => room.document.destroy());
   const { applyLocalGraph } = await import('../src/cloud-sync.mjs');
@@ -683,9 +683,11 @@ runtimeTest('Yjs snapshots chunk, reload, roll back failed writes and remove sta
       const previous = new Map(values);
       try { return callback(); }
       catch (error) { values.clear(); for (const [key, value] of previous) values.set(key, value); throw error; }
-    }
+    },
+    getAlarm: async () => null, setAlarm: async () => {}
   };
-  const makeRoom = () => { const room = new BoardRoom({ storage, id: { name: 'snapshot-test' } }, { Directory: { idFromName: name => name, get: () => ({ updateBoardStats() {} }) } }); t.after(() => room.document.destroy()); return room; };
+  const files = { objects: new Map(), async put(key, body, options = {}) { this.objects.set(key, { key, body, customMetadata: options.customMetadata }); }, async get(key) { return this.objects.get(key) || null; }, async list({ prefix }) { return { objects: [...this.objects.values()].filter(object => object.key.startsWith(prefix)), truncated: false }; }, async delete(keys) { for (const key of [keys].flat()) this.objects.delete(key); } };
+  const makeRoom = () => { const room = new BoardRoom({ storage, id: { name: 'snapshot-test' } }, { FILES: files, Directory: { idFromName: name => name, get: () => ({ updateBoardStats() {} }) } }); t.after(() => room.document.destroy()); return room; };
   const room = makeRoom();
   await room.onLoad();
   room.document.getMap('nodes').set('large', 'x'.repeat(1200000));

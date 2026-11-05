@@ -55,7 +55,7 @@ For local browser verification without Google credentials, add `DEV_LOGIN="1"` t
 
 1. Create a free Cloudflare account and enable R2 in the dashboard (it asks for a payment method; 10 GB/month is free).
 2. `npx wrangler login`
-3. `npx wrangler r2 bucket create concept-graph-files`
+3. `npx wrangler r2 bucket create concept-graph-files`, then add its backup lock and lifecycle rules (see [Version history, deleted boards and backups](#version-history-deleted-boards-and-backups)).
 4. `npm run cloud:deploy` — prints the site URL. To include helper downloads on the site, deploy again with `CONCEPT_GRAPH_NODE_ARCHIVES` (folder with the Node.js archives listed in `scripts/helper-build.mjs`) and `CONCEPT_GRAPH_HELPER_SITE=<site URL>`; the launchers then point at your site.
 5. Configure the secrets, then verify **Sign in with Google** at the deployed URL. `SITE_OWNER_EMAIL` is your own Google email: you become the owner of the boards created before sharing (see [Sharing boards](#sharing-boards)).
 
@@ -141,19 +141,41 @@ The owner chooses **Can edit** or **Can view** for each invited person and for t
 
 Viewers see changes and cursors live and can select, copy, zoom, pan, switch pages and open images fullscreen, but cannot change anything; the editor shows **View only**. The server enforces this: the Worker admits a board connection only for someone with a role and passes that role to the board's Durable Object in a header it sets itself (any copy the client sent is dropped), and the room ignores document updates from view-only connections while their presence still syncs. Renaming and sharing changes need the owner, and Nano Banana needs edit access. When the owner changes access, people already on the board get their new role at once (their board reloads), and anyone who lost access is disconnected.
 
-Boards created before sharing have no recorded owner. They stay open to everyone who signs in, with editing, and belong to the site owner, who can change each one in its Share dialog. The site owner's Google email is a Worker secret, never stored in the repository:
+Boards created before sharing have no recorded owner and belong to the site owner, who can change each one in its Share dialog. Because any Google account can sign in, they were moved once (the first time the version with board history ran) from **Everyone who signs in** to **Anyone with the link**, editing kept: people who had opened them keep them in their list, and nobody else sees them listed. A board its owner opens to everyone again stays that way. The site owner's Google email is a Worker secret, never stored in the repository:
 
 ```sh
 npx wrangler secret put SITE_OWNER_EMAIL -c cloud/wrangler.jsonc
 ```
 
-Without it, those boards stay open to everyone and nobody can change their sharing; their Share dialog says so. For local development, add `SITE_OWNER_EMAIL="you@example.com"` to `cloud/.dev.vars`.
+Without it, those boards keep their link access and nobody can change their sharing; their Share dialog says so. For local development, add `SITE_OWNER_EMAIL="you@example.com"` to `cloud/.dev.vars`.
 
 Custom nodes belong to boards. Each board keeps its templates in its Yjs document, so they sync live: everyone who can open the board can use them, and people who can edit it can change them (the last edit wins). A board created before this change copies the old site-wide library into its document the first time it opens; new boards start with none. The old library stays untouched in the board directory, and `/api/templates` still serves it to tabs left open from older versions. The desktop app keeps its own library.
 
 Owners, access settings, invitations and visits live in the board-directory Durable Object (the `owner`, `ownerName`, `access` and `linkRole` columns of `boards` and the `board_people` table); board documents hold only display names and colors. Limitation: images and their previews are not tied to boards. They stay behind sign-in under long random names, so anyone signed in who obtains an image's address can load it.
 
 The routes are `GET /api/cloud/boards` (the boards you can open, with your role), `GET /api/cloud/boards/<board>` (open a board: your role and who has access; a 403 names the owner), `GET` and `PATCH /api/cloud/boards/<board>/sharing` (owner only for changes: `{ "access": "private" | "link" | "everyone", "linkRole": "view" | "edit", "member": { "email": "…", "role": "view" | "edit" | null } }`, where a null role removes the invitation) and `PATCH /api/cloud/boards/<board>` (rename, owner only).
+
+## Version history, deleted boards and backups
+
+Anyone who can edit a board can also wipe it, by accident or on purpose, so every board keeps its history on the server:
+
+- **Versions.** While a board changes, its room copies the whole document (Yjs state, gzipped) to R2 at most every 10 minutes, under `versions/<board>/<time>-auto`. An alarm takes the last copy once edits stop. A copy is also made at once **before a large deletion** (20 or more nodes, or at least half of a board with six or more, gone in one save; `versions/<board>/<time>-before-delete`, recording who deleted) and **before every restore**. Each copy records its time, node and image counts, four cover images and the display names of the people who edited since the previous one, never emails. The room keeps every copy from the last 24 hours, then the latest of each hour for 14 days and of each day for 90 days; copies made before a deletion or restore stay 30 days.
+- **Restoring.** **Versions** in the board's top bar lists them for everyone with access; people who can edit can choose **Restore → Restore for everyone**. The board as it is now is copied first, so a restore can be undone the same way. A restore changes only what differs, in one edit that reaches everyone connected, who see who restored it and to when. Generation history only grows: runs missing from the board come back and none are removed. Routes: `GET /api/cloud/boards/<board>/versions` and `POST /api/cloud/boards/<board>/versions/<version>/restore`.
+- **Deleted boards.** Deleting a board (owner only, typing its name) moves it to **Recently deleted** on the boards page: nobody can open it, and its owner or a site admin can restore it, with its sharing, for 30 days. A daily cron trigger (`23 3 * * *` UTC, in `cloud/wrangler.jsonc`) then erases its room storage and versions. Routes: `GET /api/cloud/trash` and `POST /api/cloud/trash/<board>/restore`.
+- **Daily backups.** The first copy each UTC day is also written to `backups/<board>/<date>`. Protect that prefix once with an R2 bucket lock, so nothing (the app, a bug, a leaked key or the dashboard) can delete or overwrite those copies for 30 days, and let a lifecycle rule remove them a day later. When a daily backup's original version has been thinned out, the backup shows in the list as **Daily backup**.
+
+  ```sh
+  npx wrangler r2 bucket lock add concept-graph-files backups-30-days backups/ --retention-days 30
+  npx wrangler r2 bucket lifecycle add concept-graph-files backups-expire backups/ --expire-days 31
+  npx wrangler r2 bucket lifecycle add concept-graph-files versions-expire versions/ --expire-days 92
+  ```
+
+  The second lifecycle rule is only a backstop: the rooms already remove versions older than 90 days.
+- **Last resort.** Durable Objects with SQLite storage can be rolled back to any minute of the last 30 days with [point-in-time recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/) (`getBookmarkForTime` and `onNextSessionRestoreBookmark`), which covers both board rooms and the board directory. It works only in production and is not wired to any page yet. D1 keeps its own Time Travel.
+
+Agents over MCP use the same history: `list_versions` and `restore_version`, and `delete_board` moves a board to Recently deleted. One agent call can delete at most 200 nodes.
+
+Storage: a copy is the board's document only (images live once in `assets/`), usually well under 1 MB gzipped, so even a busy board keeps a few hundred copies within R2's free 10 GB.
 
 ## Agents over MCP
 
@@ -168,7 +190,8 @@ In Claude Desktop or claude.ai, add a custom connector with the same address. Th
 
 An agent acts as the person who connected it, with that person's role on each board: viewers can read, editors can change and generate, and only owners can rename or delete a board. Its edits run inside the board's Durable Object, so everyone on the board sees them at once, and generations and stickies it adds carry that person's name. The tools cover:
 
-- boards: list, create, rename, delete (with the exact name), and who the agent is signed in as with the Nano Banana allowance left today;
+- boards: list, create, rename, delete (with the exact name; the board goes to its owner's Recently deleted for 30 days), and who the agent is signed in as with the Nano Banana allowance left today;
+- version history: `list_versions` and `restore_version` (see [Version history, deleted boards and backups](#version-history-deleted-boards-and-backups)); one call can delete at most 200 nodes;
 - seeing a board: `get_board` (pages, nodes with their estimated size, connections, groups, sections, custom nodes, recent generations) and `get_image`, which returns images as image content, using the shared preview when one exists;
 - prompts, describe nodes, reference images (uploaded as base64), custom-node prompts, stickies, shapes, arrows (ends can hold on to nodes), stamps and drawings;
 - moving, editing, restacking, folding, copying, connecting and deleting nodes; groups and slideshows; pages; sections (moving one carries what lies inside it); auto-align; and `apply_graph`, which replaces a board's graph in one step and refuses if the board changed since the agent read it;

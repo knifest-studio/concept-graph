@@ -34,23 +34,23 @@ function storage(t) {
 }
 
 function setup(t, extra = {}) {
-  const { sql } = storage(t), directory = new Directory({ storage: { sql } }, extra), routed = [], refreshed = [], served = [], destroyed = [];
+  const { sql } = storage(t), directory = new Directory({ storage: { sql } }, extra), routed = [], refreshed = [], served = [], trashed = [];
   const env = {
     SESSION_SECRET: 'session-test', ...extra,
     Directory: { idFromName: name => name, get: () => directory },
-    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); }, destroy: async () => { destroyed.push(name); } }) },
+    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); }, trash: async () => { trashed.push(name); } }) },
     FILES: { async head() { return null; }, async get() { return null; }, async put() {} },
     ASSETS: { fetch: async request => { served.push(new URL(request.url).pathname); return new Response('app'); } },
   };
   const request = (path, { method = 'GET', cookie, data, headers = {} } = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, {
     method, headers: { ...(cookie ? { Cookie: cookie } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }), env);
   const person = async (email, name) => ({ email, name, cookie: `cg_session=${await signSession({ name, email }, env.SESSION_SECRET)}` });
-  return { env, directory, routed, refreshed, served, destroyed, request, person };
+  return { env, directory, routed, refreshed, served, trashed, request, person };
 }
 
 function room(t, directory = {}, values = new Map()) {
   const kv = { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) };
-  const created = new BoardRoom({ storage: { kv, transactionSync: callback => callback(), get: async key => values.get(key), put: async (key, value) => { values.set(key, value); } },
+  const created = new BoardRoom({ storage: { kv, transactionSync: callback => callback(), get: async key => values.get(key), put: async (key, value) => { values.set(key, value); }, getAlarm: async () => null, setAlarm: async () => {} },
     id: { name: 'board-1' }, waitUntil() {}, blockConcurrencyWhile: callback => callback(), getWebSockets: () => [] }, { Directory: { idFromName: name => name, get: () => directory } });
   created.onSave = async () => {};
   t.after(() => created.document.destroy());
@@ -84,13 +84,15 @@ test('the strongest applicable role wins: owner, then the invitation or the link
   assert.deepEqual(['owner', 'edit', 'view', null].map(canEdit), [true, true, false, false]);
 });
 
-runtimeTest('boards made before sharing open to everyone, go to the site owner and copy the old library once', t => {
+runtimeTest('boards made before sharing move once to link access, go to the site owner and copy the old library once', t => {
   const { database, sql } = storage(t);
   database.exec("CREATE TABLE boards (id TEXT PRIMARY KEY, name TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT, imageCount INTEGER, covers TEXT NOT NULL DEFAULT '[]'); CREATE TABLE templates (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
   database.prepare('INSERT INTO boards (id, name, createdAt) VALUES (?, ?, ?)').run('old', 'Old board', '2026-01-01T00:00:00.000Z');
   database.prepare('INSERT INTO templates VALUES (?, ?)').run(library[0].id, JSON.stringify(library[0]));
   const ownerless = new Directory({ storage: { sql } }, {});
-  assert.deepEqual(ownerless.boardFor('old', 'anyone@mail.example'), { id: 'old', name: 'Old board', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', imageCount: null, covers: [], ownerName: null, access: 'everyone', linkRole: 'edit', role: 'edit' });
+  // Anyone can sign in with Google, so a board open to everyone who signs in now needs its link; editing stays.
+  assert.deepEqual(ownerless.boardFor('old', 'anyone@mail.example'), { id: 'old', name: 'Old board', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', imageCount: null, covers: [], ownerName: null, access: 'link', linkRole: 'edit', role: 'edit' });
+  assert.deepEqual(ownerless.boardsFor('anyone@mail.example'), []);
   assert.deepEqual(ownerless.changeSharing('old', 'anyone@mail.example', { access: 'private' }), { error: 'This board has no owner, so nobody can change who has access.', status: 403 });
   assert.equal(ownerless.sharing('old', 'anyone@mail.example').canManage, false);
   assert.deepEqual(ownerless.libraryFor('old'), library);
@@ -104,6 +106,11 @@ runtimeTest('boards made before sharing open to everyone, go to the site owner a
   assert.equal(owned.boardFor(fresh.id, 'owner@studio.example').role, null);
   assert.deepEqual(owned.libraryFor(fresh.id), []);
   assert.equal(owned.boardFor(crypto.randomUUID(), 'maker@studio.example'), null);
+  // The move happens once: a board its owner opens to everyone again stays that way.
+  const everyone = owned.createBoard('Open board', { email: 'maker@studio.example', name: 'Maker' });
+  owned.changeSharing(everyone.id, 'maker@studio.example', { access: 'everyone' });
+  owned.changeSharing('old', 'owner@studio.example', { access: 'everyone' });
+  assert.deepEqual(new Directory({ storage: { sql } }, {}).boardsFor('anyone@mail.example').map(board => [board.name, board.access]), [['Open board', 'everyone'], ['Old board', 'everyone']]);
   // Another site owner later takes over only boards that still have none.
   assert.equal(new Directory({ storage: { sql } }, { SITE_OWNER_EMAIL: 'next@studio.example' }).boardFor('old', 'owner@studio.example').role, 'owner');
   assert.equal(new Directory({ storage: { sql } }, { SITE_OWNER_EMAIL: 'not an email' }).boardFor('old', 'owner@studio.example').role, 'owner');
@@ -160,7 +167,7 @@ runtimeTest('invitations, roles, link visits and the board list follow the owner
 });
 
 runtimeTest('board routes give each person their role and let only the owner rename or share', async t => {
-  const { request, person, refreshed, directory, destroyed } = setup(t);
+  const { request, person, refreshed, directory, trashed } = setup(t);
   const owner = await person('owner@studio.example', 'Owner'), guest = await person('guest@mail.example', 'Guest'), headers = { Origin: 'http://localhost:8787' };
   const created = await request('/api/cloud/boards', { method: 'POST', cookie: owner.cookie, data: { name: ' Robots ' } });
   assert.equal(created.status, 201);
@@ -205,9 +212,22 @@ runtimeTest('board routes give each person their role and let only the owner ren
   assert.equal((await nano(guest.cookie)).status, 503);
   assert.deepEqual(await (await remove(guest.cookie, 'Robots v2')).json(), { error: 'Only the board’s owner can delete it.' });
   assert.deepEqual(await (await remove(owner.cookie, 'Robots v2')).json(), { deleted: board.id });
-  assert.deepEqual(destroyed, [board.id]);
+  assert.deepEqual(trashed, [board.id]);
   assert.equal((await request(path, { cookie: owner.cookie })).status, 404);
+  assert.equal((await request(`${path}/sharing`, { cookie: owner.cookie })).status, 404);
+  assert.equal((await request(`${path}/versions`, { cookie: guest.cookie })).status, 404);
   assert.deepEqual((await (await request('/api/cloud/boards', { cookie: guest.cookie })).json()).boards, []);
+  // The board waits in its owner's Recently deleted; only the owner (or a site admin) brings it back, sharing included.
+  const trash = async cookie => (await (await request('/api/cloud/trash', { cookie })).json()).boards;
+  assert.deepEqual((await trash(owner.cookie)).map(item => [item.id, item.name, item.own]), [[board.id, 'Robots v2', true]]);
+  assert.deepEqual(await trash(guest.cookie), []);
+  const restore = (cookie, extra = {}) => request(`/api/cloud/trash/${board.id}/restore`, { method: 'POST', cookie, headers, ...extra });
+  assert.deepEqual(await (await restore(guest.cookie)).json(), { error: 'Only the board’s owner or a site admin can restore it.' });
+  assert.equal((await restore(owner.cookie, { headers: { Origin: 'https://other.example' } })).status, 403);
+  assert.equal((await restore(owner.cookie)).status, 200);
+  assert.deepEqual(await trash(owner.cookie), []);
+  assert.deepEqual((await (await request('/api/cloud/boards', { cookie: guest.cookie })).json()).boards.map(item => [item.id, item.role]), [[board.id, 'edit']]);
+  assert.equal((await restore(owner.cookie)).status, 404);
 });
 
 runtimeTest('board links serve the app, and Google sign-in returns to the board it started from', async t => {
@@ -262,7 +282,7 @@ runtimeTest('the room ignores a viewer’s document updates but keeps their pres
     return socket;
   };
   const viewer = connect('view', 'viewer@mail.example'), unknown = connect('admin', 'odd@mail.example'), missing = connect();
-  assert.deepEqual([viewer.state, unknown.state, missing.state], [{ role: 'view', email: 'viewer@mail.example' }, { role: 'view', email: 'odd@mail.example' }, { role: 'view', email: null }]);
+  assert.deepEqual([viewer.state, unknown.state, missing.state], [{ role: 'view', email: 'viewer@mail.example', name: null }, { role: 'view', email: 'odd@mail.example', name: null }, { role: 'view', email: null, name: null }]);
   assert.equal(viewer.sent.at(-1), access('view'));
   for (const socket of [viewer, unknown, missing]) { boardRoom.handleMessage(socket, update); boardRoom.handleMessage(socket, step2); }
   assert.equal(boardRoom.document.getMap('nodes').size, 0);

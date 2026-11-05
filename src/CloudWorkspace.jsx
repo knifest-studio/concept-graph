@@ -20,6 +20,7 @@ import { keepDialogFocus } from './dialog-focus.mjs';
 import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNames } from './cloud-boards.mjs';
 import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './board-templates.mjs';
 import { ShareDialog } from './ShareDialog.jsx';
+import { VersionHistory } from './VersionHistory.jsx';
 import { TeamAccessDialog } from './TeamAccessDialog.jsx';
 import { AccountMenu } from './AccountMenu.jsx';
 import { defaultPages } from './pages.mjs';
@@ -57,6 +58,7 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
   const [loading, setLoading] = useState(true), [loaded, setLoaded] = useState(false), [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState(false), [name, setName] = useState(''), [busy, setBusy] = useState(false), [createError, setCreateError] = useState('');
   const [now, setNow] = useState(Date.now);
+  const [trash, setTrash] = useState([]), [restoring, setRestoring] = useState(null), [trashError, setTrashError] = useState('');
   const input = useRef(null), trigger = useRef(null), createButton = useRef(null), creating = useRef(false), refresh = useRef(null), alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -67,8 +69,8 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
       setNow(Date.now());
       pending = true;
       try {
-        const result = await services.api('/api/cloud/boards');
-        if (active) { if (!creating.current) setBoards(result.boards); setLoaded(true); setLoadError(''); }
+        const [result, deleted] = await Promise.all([services.api('/api/cloud/boards'), services.api('/api/cloud/trash').catch(() => null)]);
+        if (active) { if (!creating.current) setBoards(result.boards); if (deleted) setTrash(deleted.boards); setLoaded(true); setLoadError(''); }
       } catch (failure) { if (active) setLoadError(failure.message); }
       finally { pending = false; if (active) setLoading(false); }
     };
@@ -105,6 +107,17 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
     {createError && <p id="cloud-create-error" className="cloud-error" role="alert">{createError}</p>}
     <div><button type="button" className="cloud-nav" disabled={busy} onClick={cancel}>{t('Cancel')}</button><button className="primary-button" disabled={busy}>{busy ? t('Creating…') : t('Create board')}</button></div>
   </form> : <button type="button" className="cloud-new-tile" onClick={start}><span className="cloud-new-plus" aria-hidden="true">+</span><strong>{t('New board')}</strong><small>{t('Start a new direction')}</small></button>}</>;
+  const restore = async board => {
+    setRestoring(board.id); setTrashError('');
+    try {
+      await services.api(`/api/cloud/trash/${encodeURIComponent(board.id)}/restore`, json('POST', {}));
+      if (!alive.current) return;
+      setTrash(current => current.filter(item => item.id !== board.id));
+      await refresh.current?.();
+    } catch (failure) { if (alive.current) setTrashError(failure.message); }
+    finally { if (alive.current) setRestoring(null); }
+  };
+  const days = value => Math.max(1, Math.ceil((Date.parse(value) - now) / 86400000));
   const sorted = [...boards].sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   const own = sorted.filter(board => board.role === 'owner'), shared = sorted.filter(board => board.role !== 'owner');
   const tile = (board, index) => {
@@ -124,6 +137,11 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
         {loaded && !boards.length && !editing && <section className="cloud-boards-empty"><div className="empty-glyph" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="4" width="7" height="7" rx="2"/><rect x="14" y="13" width="7" height="7" rx="2"/><path d="M10 7.5h4a3 3 0 0 1 3 3V13M7 15v6m-3-3h6"/></svg></div><h2>{t('No boards yet')}</h2><p>{t('Create a board, then share it by link or invite people by email.')}</p><button type="button" className="primary-button" onClick={start}>+ {t('New board')}</button></section>}
         {(loaded || boards.length > 0 || editing) && <><section className="cloud-board-section" aria-labelledby="cloud-own-boards"><h2 id="cloud-own-boards">{t('Your boards')}</h2><div className="cloud-board-grid">{newBoard}{own.map(tile)}</div></section>
           {shared.length > 0 && <section className="cloud-board-section" aria-labelledby="cloud-shared-boards"><h2 id="cloud-shared-boards">{t('Shared with you')}</h2><div className="cloud-board-grid">{shared.map(tile)}</div></section>}</>}
+        {trash.length > 0 && <section className="cloud-board-section cloud-trash" aria-labelledby="cloud-trash-boards"><h2 id="cloud-trash-boards">{t('Recently deleted')}</h2>
+          <p>{t('Deleted boards wait here for 30 days, with everything on them, and are then erased for good.')}</p>
+          {trashError && <p role="alert" className="cloud-error">{trashError}</p>}
+          <ul className="share-people">{trash.map(board => <li key={board.id}><span><b>{board.name}</b><small>{rich('deleted {time}', { time: <time dateTime={board.deletedAt} title={new Date(board.deletedAt).toLocaleString()}>{relativeTime(board.deletedAt, now, timeWords)}</time> })} · {plural(days(board.erasesAt), 'erased in {count} day', 'erased in {count} days')}{!board.own && board.ownerName ? ` · ${board.ownerName}` : ''}</small></span>
+            <button type="button" className="share-copy" disabled={!!restoring} aria-label={t('Restore board {name}', { name: board.name })} onClick={() => restore(board)}>{restoring === board.id ? t('Restoring…') : t('Restore')}</button></li>)}</ul></section>}
       </>}
     </main>
   </div>;
@@ -156,6 +174,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const user = boardAuthor(account) || { name: 'Teammate' }, editable = role !== 'view';
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
   const [shareOpen, setShareOpen] = useState(false), shareButton = useRef(null), [teamOpen, setTeamOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false), historyButton = useRef(null);
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted };
   const [nano, setNano] = useState(undefined), nanoSoon = useRef(() => {});
   useEffect(() => {
@@ -298,6 +317,8 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       if (['agent-generate', 'agent-cancel'].includes(value?.type) && typeof value.requestId === 'string') agentRequest(value);
       // The owner deleted the board: everyone goes back to their boards; only the others are told why.
       if (value?.type === 'deleted') latest.current.onDeleted(!next.deleting);
+      // Someone put the whole board back as it was; everyone hears who did it and to when.
+      if (value?.type === 'restored') next.notify?.(t('{name} restored the board to {time}.', { name: typeof value.by === 'string' && value.by ? value.by : t('Someone'), time: new Date(value.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }));
     };
     let checked = 0;
     const closed = event => { if (event?.code === 4403 || (!provider.wsconnected && Date.now() - checked > 15000)) { checked = Date.now(); latest.current.onAccess(undefined); } };
@@ -330,6 +351,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   session.toolbar = <>
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)}/>
     {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
+    <button ref={historyButton} type="button" className="cloud-history-button" aria-haspopup="dialog" aria-label={t('Version history')} data-tooltip={t('Version history')} onClick={() => setHistoryOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span>{t('Versions')}</span></button>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>{t('Share')}</button>
   </>;
   session.account = <AccountMenu user={account} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
@@ -338,6 +360,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     {editable && <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>}
     {pairDialog(editable && !sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
     {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
+    {historyOpen && <VersionHistory boardId={boardId} services={services} editable={editable} ago={value => relativeTime(value, Date.now(), timeWords)} onRestored={() => { setHistoryOpen(false); historyButton.current?.focus(); }} onClose={() => { setHistoryOpen(false); historyButton.current?.focus(); }}/>}
     {shareOpen && <ShareDialog boardId={boardId} name={boardName} sharing={sharing} services={services} onChange={onSharing} onClose={() => { setShareOpen(false); shareButton.current?.focus(); }}/>}
   </>;
 }

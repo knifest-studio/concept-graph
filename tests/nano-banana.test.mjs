@@ -193,6 +193,8 @@ function cloudSetup(t, extra = {}) {
       async put(key, bytes, metadata) { files.set(key, { bytes: new Uint8Array(bytes), size: bytes.byteLength, ...metadata }); },
       async get(key) { const file = files.get(key); return file ? { size: file.size, arrayBuffer: async () => file.bytes.slice().buffer } : null; },
       async head(key) { return files.get(key) || null; },
+      async list({ prefix }) { return { objects: [...files.keys()].filter(key => key.startsWith(prefix)).map(key => ({ key, customMetadata: files.get(key).customMetadata })), truncated: false }; },
+      async delete(keys) { for (const key of [keys].flat()) files.delete(key); },
     },
     ASSETS: { fetch: async () => new Response('static') }, ...extra,
   };
@@ -201,7 +203,7 @@ function cloudSetup(t, extra = {}) {
   // One room per board, as Durable Objects are; `values` is the room's own storage.
   const room = (name, values = new Map(), { save = false } = {}) => {
     const storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) }, transactionSync: callback => callback(),
-      get: async key => values.get(key), put: async (key, value) => { values.set(key, value); } };
+      get: async key => values.get(key), put: async (key, value) => { values.set(key, value); }, getAlarm: async () => null, setAlarm: async () => {} };
     const created = new BoardRoom({ storage, id: { name }, waitUntil: promise => waits.push(promise), blockConcurrencyWhile: callback => callback(), getWebSockets: () => [] }, env);
     if (!save) created.onSave = async () => {};
     rooms.set(name, created); t.after(() => created.document.destroy());

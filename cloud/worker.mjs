@@ -9,6 +9,7 @@ import { imageSize, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
 import { mcpApi } from './mcp.mjs';
 import { agentScopes, authorize } from './oauth.mjs';
+import { purgeTrash } from './trash.mjs';
 
 export { BoardRoom } from './board-room.mjs';
 export { Directory } from './directory.mjs';
@@ -42,10 +43,12 @@ function name(value, max = 40) {
 }
 
 // The room trusts these headers to say who connected and what they may do, so no copy a client sent reaches it.
-function admitted(request, role, email) {
+function admitted(request, role, user) {
   const next = new Request(request);
   for (const key of [...next.headers.keys()]) if (key.startsWith('x-concept-graph-') || key === 'x-partykit-props') next.headers.delete(key);
-  next.headers.set('x-concept-graph-role', role); next.headers.set('x-concept-graph-email', email);
+  next.headers.set('x-concept-graph-role', role); next.headers.set('x-concept-graph-email', user.email);
+  // The display name, for the board's version history; headers carry ASCII only.
+  next.headers.set('x-concept-graph-name', encodeURIComponent(user.name || ''));
   return next;
 }
 
@@ -94,6 +97,21 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
   const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
   return result.error ? error(result.error, result.status) : json({ run: result.run }, 202);
+}
+
+// Anyone who may open a board sees its versions; restoring one changes the board, so it takes edit access.
+async function versionRoute(request, env, user, url, boardId, versionId) {
+  const board = boardPattern.test(boardId) && await directory(env).boardFor(boardId, user.email);
+  if (!board) return error('Board not found.', 404);
+  if (!board.role) return error('You don’t have access to this board.', 403);
+  const room = await getServerByName(env.BoardRoom, boardId);
+  if (versionId === undefined) return request.method === 'GET' ? json({ versions: await room.listVersions() }) : error('Method not allowed.', 405);
+  if (request.method !== 'POST') return error('Method not allowed.', 405);
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+  if (!canEdit(board.role)) return error('You can only view this board.', 403);
+  const result = await room.restoreVersion({ id: versionId, user: { name: user.name, email: user.email } });
+  return result.error ? error(result.error, result.status) : json(result);
 }
 
 async function route(request, env) {
@@ -169,6 +187,18 @@ async function route(request, env) {
     }
     return error('Method not allowed.', 405);
   }
+  if (path === '/api/cloud/trash') return method === 'GET' ? json({ boards: await directory(env).trashFor(user.email) }) : error('Method not allowed.', 405);
+  const trashMatch = path.match(/^\/api\/cloud\/trash\/([^/]+)\/restore$/);
+  if (trashMatch) {
+    if (method !== 'POST') return error('Method not allowed.', 405);
+    const origin = request.headers.get('Origin');
+    if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+    if (!boardPattern.test(trashMatch[1])) return error('Board not found.', 404);
+    const result = await directory(env).restoreBoard(trashMatch[1], user.email);
+    return result.error ? error(result.error, result.status) : json(result);
+  }
+  const versionMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)\/versions(?:\/([^/]+)\/restore)?$/);
+  if (versionMatch) return versionRoute(request, env, user, url, versionMatch[1], versionMatch[2]);
   const boardMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)(\/sharing)?$/);
   if (boardMatch) {
     const id = boardMatch[1], store = directory(env);
@@ -199,9 +229,9 @@ async function route(request, env) {
       if (origin && origin !== url.origin) return error('Invalid origin.', 403);
       // The exact name, typed by the owner, guards against a stray or replayed request.
       if ((await body(request)).confirmName !== board.name) return error('Type the board’s name to delete it.', 400);
-      await store.deleteBoard(id);
-      try { await (await getServerByName(env.BoardRoom, id)).destroy(); }
-      catch (cause) { console.error('Could not erase the deleted board:', cause); }
+      await store.trashBoard(id, user.email);
+      try { await (await getServerByName(env.BoardRoom, id)).trash(); }
+      catch (cause) { console.error('Could not close the deleted board:', cause); }
       return json({ deleted: id });
     }
     await store.renameBoard(id, name((await body(request)).name, 80));
@@ -285,7 +315,7 @@ async function route(request, env) {
         const board = lobby.className === 'BoardRoom' && await directory(env).boardFor(lobby.name, user.email);
         if (!board) return error('Board not found.', 404);
         if (!board.role) return error('You don’t have access to this board.', 403);
-        return admitted(incoming, board.role, user.email);
+        return admitted(incoming, board.role, user);
       }
     }) || error('Board not found.', 404);
   }
@@ -328,5 +358,6 @@ function providerFor(origin) {
 export default {
   fetch(request, env, ctx) {
     return (providerFor(new URL(request.url).origin) || site).fetch(request, env, ctx);
-  }
+  },
+  scheduled(controller, env, ctx) { ctx.waitUntil(purgeTrash(env)); }
 };

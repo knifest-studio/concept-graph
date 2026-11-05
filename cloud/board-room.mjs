@@ -1,5 +1,5 @@
 import { YServer } from 'y-partyserver';
-import { applyUpdate, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
+import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
 import { imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
@@ -10,20 +10,29 @@ import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/ru
 import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
+import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
 
-const chunkSize = 512 * 1024;
-const origin = 'nano-banana', mcpOrigin = 'mcp', timestamp = () => new Date().toISOString();
+const chunkSize = 512 * 1024, maxAgentDeletes = 200;
+const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
   static callbackOptions = { debounceWait: 1000, debounceMaxWait: 5000 };
   nanoJobs = new Map(); nanoStarting = new Set(); agentAsks = new Map();
+  // Who changed the board since the last save and since the last version, by display name.
+  editedBy = { save: new Set(), version: new Set() };
 
   async onLoad() {
+    const update = this.storedUpdate();
+    if (update) applyUpdate(this.document, update);
+  }
+
+  // The document as last saved, or null for a new board.
+  storedUpdate() {
     const kv = this.ctx.storage.kv;
     const count = kv.get('doc:count') || 0;
-    if (!count) return;
+    if (!count) return null;
     const chunks = [];
     let size = 0;
     for (let i = 0; i < count; i++) {
@@ -35,11 +44,17 @@ export class BoardRoom extends YServer {
     const update = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { update.set(chunk, offset); offset += chunk.length; }
-    applyUpdate(this.document, update);
+    return update;
   }
 
   async onStart(props) {
     await super.onStart(props);
+    const kv = this.ctx.storage.kv;
+    for (const name of kv.get('version:editors') || []) this.editedBy.version.add(name);
+    // A board stored before versions began gets its first one soon after it opens.
+    if (kv.get('doc:count') && !kv.get('version:at') && !await this.ctx.storage.getAlarm()) await this.ctx.storage.setAlarm(Date.now() + 5000);
+    // A person's edits arrive with their connection as the origin.
+    this.document.on('update', (update, from) => { if (from?.state?.name) this.edited(from.state.name); });
     // Edits from here on reach connected people. A paid call is never repeated blindly: a Nano Banana run that this
     // instance is not running was cut off when the room stopped.
     for (const run of [...this.document.getMap('runs').values()]) {
@@ -55,7 +70,9 @@ export class BoardRoom extends YServer {
   // The Worker admitted this person and set their role. A viewer's document updates are ignored; their presence still syncs.
   onConnect(connection, ctx) {
     const role = ctx.request.headers.get('x-concept-graph-role');
-    connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email') }));
+    let name = null;
+    try { name = decodeURIComponent(ctx.request.headers.get('x-concept-graph-name') || '') || null; } catch {}
+    connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email'), name }));
     super.onConnect(connection, ctx);
     this.sendCustomMessage(connection, JSON.stringify({ type: 'access', role: connection.state.role }));
   }
@@ -75,16 +92,31 @@ export class BoardRoom extends YServer {
     }
   }
 
-  // Worker RPC after the owner deletes the board: everyone is sent away and the stored document is erased for good.
-  async destroy() {
-    this.deleted = true;
+  edited(name) { if (typeof name === 'string' && name) { this.editedBy.save.add(name); this.editedBy.version.add(name); } }
+
+  sendAway() {
     for (const job of this.nanoJobs.values()) job.controller?.abort?.();
     for (const connection of this.getConnections()) {
       this.sendCustomMessage(connection, JSON.stringify({ type: 'deleted' }));
       connection.close(4404, 'Board deleted');
     }
+  }
+
+  // Worker RPC after the owner deletes the board: everyone is sent away. The board stays stored, in the trash, for 30 days.
+  async trash() {
+    this.sendAway();
+    await this.onSave();
+  }
+
+  // Worker RPC when a board leaves the trash for good: the stored document and its versions are erased. Daily backups
+  // expire on their own (a bucket lifecycle rule), and nothing can remove them sooner.
+  async destroy() {
+    this.deleted = true;
+    this.sendAway();
     await this.saving;
     await this.ctx.storage.deleteAll();
+    const keys = (await listAll(this.env.FILES, versionPrefixes(this.name)[0])).map(object => object.key);
+    for (let index = 0; index < keys.length; index += 1000) await this.env.FILES.delete(keys.slice(index, index + 1000));
   }
 
   onSave() {
@@ -94,20 +126,100 @@ export class BoardRoom extends YServer {
     return saving;
   }
 
+  // The last version is taken once edits stop; a board opened for the first time since versions began gets its first.
+  async onAlarm() { if (!this.deleted) await this.onSave(); }
+
   async saveSnapshot() {
-    const update = encodeStateAsUpdate(this.document);
-    const stats = boardStats(this.document), updatedAt = new Date().toISOString();
-    const count = Math.ceil(update.length / chunkSize), kv = this.ctx.storage.kv;
+    const kv = this.ctx.storage.kv, update = encodeStateAsUpdate(this.document);
+    const stats = { nodes: this.document.getMap('nodes').size, ...boardStats(this.document) }, updatedAt = new Date().toISOString();
+    // A large deletion keeps the board as it was a moment ago; a restore has kept it already.
+    const previous = kv.get('doc:stats'), removers = [...this.editedBy.save];
+    const before = !this.restoring && previous && removedMany(previous.nodes, stats.nodes) ? this.storedUpdate() : null;
+    this.editedBy.save.clear();
+    const count = Math.ceil(update.length / chunkSize);
     this.ctx.storage.transactionSync(() => {
-      const previous = kv.get('doc:count') || 0;
+      const stored = kv.get('doc:count') || 0;
       for (let i = 0; i < count; i++) kv.put(`doc:${i}`, update.slice(i * chunkSize, (i + 1) * chunkSize));
-      for (let i = count; i < previous; i++) kv.delete(`doc:${i}`);
+      for (let i = count; i < stored; i++) kv.delete(`doc:${i}`);
       kv.put('doc:count', count);
+      kv.put('doc:stats', stats);
+      kv.put('version:editors', [...this.editedBy.version]);
     });
+    if (before) {
+      try { await this.writeVersion(before, { reason: 'before-delete', stats: previous, editors: [...this.editedBy.version], by: removers, removed: previous.nodes - stats.nodes }); }
+      catch (cause) { console.error('Could not keep the board before a large deletion:', cause); }
+    }
     const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', update))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    try { await this.keepVersion(update, hash, stats); }
+    catch (cause) { console.error('Could not keep a board version:', cause); }
     if (hash === kv.get('directory:hash')) return;
-    await this.directory().updateBoardStats(this.name, { ...stats, updatedAt });
+    await this.directory().updateBoardStats(this.name, { imageCount: stats.imageCount, covers: stats.covers, updatedAt });
     kv.put('directory:hash', hash);
+  }
+
+  // A version at most every ten minutes while the board changes; an alarm takes the last one after edits stop.
+  async keepVersion(update, hash, stats) {
+    const kv = this.ctx.storage.kv, now = Date.now();
+    if (hash === kv.get('version:hash')) return;
+    const due = (kv.get('version:at') || 0) + versionEvery;
+    if (now < due) {
+      if (!await this.ctx.storage.getAlarm()) await this.ctx.storage.setAlarm(due);
+      return;
+    }
+    const editors = [...this.editedBy.version];
+    await this.writeVersion(update, { reason: 'auto', stats, editors }, now);
+    for (const name of editors) this.editedBy.version.delete(name);
+    kv.put('version:at', now); kv.put('version:hash', hash); kv.put('version:editors', [...this.editedBy.version]);
+  }
+
+  async writeVersion(update, meta, at = Date.now()) {
+    const body = await pack(update), customMetadata = versionMetadata(meta), kv = this.ctx.storage.kv;
+    const key = versionKey(this.name, at, meta.reason);
+    await this.env.FILES.put(key, body, { customMetadata });
+    // The day's first version is also its backup, which the bucket lock keeps from being deleted or overwritten.
+    const backup = backupKey(this.name, at);
+    if (kv.get('backup:last') !== backup) {
+      try { await this.env.FILES.put(backup, body, { customMetadata: { ...customMetadata, copy: key.split('/').pop() } }); }
+      catch (cause) { console.error('Could not write the daily backup:', cause); }
+      kv.put('backup:last', backup);
+    }
+    if (at - (kv.get('version:pruned') || 0) >= 60 * 60 * 1000) {
+      kv.put('version:pruned', at);
+      try {
+        const entries = (await listAll(this.env.FILES, versionPrefixes(this.name)[0])).map(object => ({ key: object.key, version: shownVersion(object) })).filter(entry => entry.version);
+        const doomed = expiredVersions(entries.map(({ key, version }) => ({ key, at: Date.parse(version.at), reason: version.reason })), at);
+        for (let index = 0; index < doomed.length; index += 1000) await this.env.FILES.delete(doomed.slice(index, index + 1000));
+      } catch (cause) { console.error('Could not remove old board versions:', cause); }
+    }
+  }
+
+  // Worker RPC: the board's versions, newest first. A daily backup shows once the version it copies is gone.
+  async listVersions() {
+    const objects = (await Promise.all(versionPrefixes(this.name).map(prefix => listAll(this.env.FILES, prefix)))).flat();
+    const names = new Set(objects.map(object => object.key.split('/').pop()));
+    return objects.filter(object => !names.has(object.customMetadata?.copy)).map(shownVersion).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at));
+  }
+
+  // Worker RPC for someone who may edit. The board as it is now is kept first, so a restore can be undone the same way.
+  async restoreVersion({ id, user }) {
+    const key = keyOf(this.name, id), object = key && await this.env.FILES.get(key);
+    if (!object) return { error: 'Version not found.', status: 404 };
+    const snapshot = new Doc();
+    try {
+      try { applyUpdate(snapshot, await unpack(new Uint8Array(await object.arrayBuffer()))); }
+      catch (cause) { console.error('Could not read a board version:', key, cause); return { error: 'This version could not be read.', status: 500 }; }
+      await this.saving;
+      const stats = { nodes: this.document.getMap('nodes').size, ...boardStats(this.document) };
+      try { await this.writeVersion(encodeStateAsUpdate(this.document), { reason: 'before-restore', stats, editors: [user.name], by: [user.name] }); }
+      catch (cause) { console.error('Could not keep the board before a restore:', cause); return { error: 'Could not keep the current board before restoring. Try again.', status: 503 }; }
+      const changed = restoreDocument(this.document, snapshot, restoreOrigin);
+      this.edited(user.name);
+      this.restoring = true;
+      try { await this.onSave(); } finally { this.restoring = false; }
+      const version = shownVersion(object);
+      this.broadcastCustomMessage(JSON.stringify({ type: 'restored', by: user.name, at: version?.at }));
+      return { restored: { id, at: version?.at, changed } };
+    } finally { snapshot.destroy(); }
   }
 
   async onClose(connection, code, reason, wasClean) {
@@ -188,12 +300,20 @@ export class BoardRoom extends YServer {
     try {
       if (name === 'start_run') return await this.mcpStart(args.nodeId, user);
       if (name === 'cancel_run') return await this.mcpCancel(args.runId, user);
+      if (name === 'list_versions') return { value: { versions: (await this.listVersions()).slice(0, args.limit || 50) } };
+      if (name === 'restore_version') { const result = await this.restoreVersion({ id: args.versionId, user }); return result.error ? { error: result.error } : { value: result.restored }; }
       const prepared = (await tool.prepare?.(args, this.env)) || {};
       const before = readCloudGraph(this.document), revision = () => revisionOf(encodeStateVector(this.document));
       const { result, graph } = runBoardTool(tool, { graph: before, args, user, prepared, revision: revision(), templates: readBoardTemplates(this.document),
         saveTemplate: (value, existing) => saveBoardTemplate(this.document, value, existing, mcpOrigin), deleteTemplate: id => deleteBoardTemplate(this.document, id, mcpOrigin) });
       if (tool.access === 'view') return { value: result };
-      if (graph) applyLocalGraph(this.document, graph, before, mcpOrigin);
+      if (graph) {
+        // A runaway agent cannot empty a board in one call; whatever it does delete is kept in the board's versions.
+        const kept = new Set(graph.nodes.map(node => node.id)), removed = before.nodes.filter(node => !kept.has(node.id)).length;
+        if (removed > maxAgentDeletes) return { error: `This would delete ${removed} nodes; an agent can delete at most ${maxAgentDeletes} in one call. Ask the person to delete them on the board, or delete fewer at a time.` };
+        applyLocalGraph(this.document, graph, before, mcpOrigin);
+      }
+      this.edited(user?.name);
       await this.onSave();
       return { value: { ...result, revision: revision() } };
     } catch (cause) {
