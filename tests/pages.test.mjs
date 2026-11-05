@@ -213,7 +213,7 @@ test('page boards export as version 5, older archives open on the first page, an
   const old = await importBoardArchive(await archive(4, legacy), assets);
   assert.equal(Object.hasOwn(old.graph, 'pages'), false); assert.deepEqual(pageContent(old.graph, 'page-1').nodes.map(node => node.id), ['a', 'b']);
   await assert.rejects(importBoardArchive(await archive(4, { ...legacy, graph: { ...legacy.graph, pages } }), assets), /uses pages/);
-  await assert.rejects(importBoardArchive(await archive(7, legacy), assets), /not supported/);
+  await assert.rejects(importBoardArchive(await archive(8, legacy), assets), /not supported/);
   const storage = path.join(directory, 'storage'); await mkdir(storage);
   const paged = createBoard('Paged', { ...structuredClone(graph), revision: 0 }), plain = createBoard('Plain');
   await writeWorkspace(storage, { version: 1, defaultBoardId: plain.id, boards: [plain] });

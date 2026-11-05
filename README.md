@@ -16,8 +16,9 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 - Paste text or images directly onto the canvas; duplicate nodes, copy images, and copy node IDs for agents.
 - Branch by dragging an output into empty space, then type the next prompt.
 - Keep separate boards, fold groups, align branches, and fit the current selection.
-- Images from the same generation are grouped automatically as they arrive.
+- Images from the same generation are grouped automatically as they arrive. Folded, the group becomes a slideshow card: page through the images one at a time and drag from the card to use the shown one as a reference. Expanded, every image can be connected on its own. Any group with images can be switched between a slideshow and a plain group from its context menu.
 - Collapse individual text and image nodes into compact squares.
+- Describe images as text: connect images to a Describe image node (or choose Describe image on an image) and Codex writes a detailed description into a new text prompt that you can edit, generate from, or use as context. An optional focus such as "only the lighting" steers the description. On the website it runs on an up-to-date helper, or on the site's Gemini key for people allowed to use it.
 - Inspect original prompts and input images for earlier runs; download image originals.
 - Open a run's diagnostics in History to inspect available agent messages, model settings, events and errors.
 - Keep unrelated Codex skills, plugins and configured MCP servers out of image-generation threads without changing global settings.
@@ -25,6 +26,9 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 - Save custom text nodes with reusable instructions and reference images, and switch existing prompts between saved types.
 - Generated images receive captions automatically when useful; multiple images from one run always have editable captions.
 - Connect a local MCP-capable agent to read and change boards, inspect images and start generation.
+- Sketch around your ideas as in FigJam: draw with the pen, add stickies, stamps and sections, place rectangles, ellipses, diamonds and triangles with text inside (R, O), and connect things with arrows (L) that stay attached when they move.
+- Delete a board you no longer need; you type its name to confirm. The canvas stops a little past the board's content, so you cannot scroll off and lose it.
+- Switch the interface between English and Ukrainian. It follows your browser's language until you choose one.
 - Switch between light and dark themes. Boards save automatically on your computer.
 
 ## Desktop preview
@@ -107,7 +111,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release instructions,
 
 ## Current limits
 
-One active generation across all boards; up to 10 reference images per run, including custom-node references; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board when running from source. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA. Automatic captions describe the requested result, not verified image content; they may be inaccurate. If Codex omits a caption in a multi-image run, a generic label is used; captions can be edited manually. Custom-node exports use board format version 2; boards with captions or legacy caption settings use version 3. Older app versions cannot import newer formats.
+One active generation across all boards; up to 10 reference images per run, including custom-node references; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board when running from source. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA. Automatic captions describe the requested result, not verified image content; they may be inaccurate. If Codex omits a caption in a multi-image run, a generic label is used; captions can be edited manually. Custom-node exports use board format version 2; boards with captions or legacy caption settings use version 3, and boards with shapes or arrows use version 7. Older app versions cannot import newer formats.
 
 The Codex app-server integration is experimental and may need changes after Codex updates. The example board was generated end-to-end with public CLI **0.163.0** and ChatGPT authentication. CI checks the app with a fake worker; account access and real generation are separate manual checks.
 

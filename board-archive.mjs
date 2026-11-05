@@ -85,6 +85,11 @@ function hasAnnotations(graph) {
 }
 
 const hasSections = graph => !!graph.sections?.length;
+function hasShapes(graph) {
+  let found = false;
+  visitNodes(graph, node => { if (['shape', 'arrow'].includes(node?.type)) found = true; });
+  return found;
+}
 
 function referencedAssets(graph) {
   const assets = new Set();
@@ -115,7 +120,7 @@ export async function exportBoardArchive(board, assetsDir) {
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -160,7 +165,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
@@ -170,6 +175,8 @@ export async function importBoardArchive(bytes, assetsDir) {
     if (manifest.version < 5 && hasPageData(board.graph)) fail('This board uses pages and requires a newer board format.');
     // Apps before sections refuse format 6 instead of opening the board without them.
     if (manifest.version < 6 && hasSections(board.graph)) fail('This board uses sections and requires a newer board format.');
+    // Apps before shapes and arrows refuse format 7.
+    if (manifest.version < 7 && hasShapes(board.graph)) fail('This board uses shapes or arrows and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');

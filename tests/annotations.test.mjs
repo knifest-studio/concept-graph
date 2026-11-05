@@ -103,3 +103,32 @@ test('annotation clipboard duplication, grouping, bounds, layer order and alignm
   assert.ok(Number.isFinite(groupBounds(group, value.nodes).height));
   assert.deepEqual(nodeSize(nodes()[1]), { width: 200, height: 200 }); assert.deepEqual(nodeSize(nodes()[2]), { width: 48, height: 48 });
 });
+
+test('shapes and arrows validate, and arrows follow, detach from and copy with the things they hold', async () => {
+  const { arrowEnds, detachArrows } = await import('../src/canvas.mjs');
+  const { reconcileArrows } = await import('../src/annotations.mjs');
+  const { duplicateNodes } = await import('../graph.mjs');
+  const box = { id: 'box', type: 'shape', position: { x: 0, y: 0 }, data: { shape: 'rectangle', width: 200, height: 100, color: '#ffffff', text: 'Idea' } };
+  const ring = { id: 'ring', type: 'shape', position: { x: 400, y: 0 }, data: { shape: 'ellipse', width: 100, height: 100, color: '#dceaff' } };
+  const arrow = { id: 'arrow', type: 'arrow', position: { x: 184, y: 34 }, data: { from: { x: 200, y: 50, node: 'box' }, to: { x: 400, y: 50, node: 'ring' }, color: '#6b6e89' } };
+  const graph = { nodes: [box, ring, arrow], edges: [] };
+  validateGraph(graph);
+  for (const bad of [{ ...box, data: { ...box.data, shape: 'star' } }, { ...box, data: { ...box.data, width: 5 } }, { ...arrow, data: { ...arrow.data, from: { x: 'a', y: 0 } } }, { ...arrow, data: { ...arrow.data, dashed: 'yes' } }])
+    assert.throws(() => validateGraph({ nodes: [bad], edges: [] }), /Invalid (shape|arrow)/);
+  assert.throws(() => validateGraph({ nodes: [box, ring, arrow], edges: [{ id: 'e', source: 'box', target: 'ring' }] }), /Annotations cannot have connections/);
+  const byId = new Map(graph.nodes.map(node => [node.id, node])), size = node => annotationSize(node);
+  // Ends sit on each outline, 6px out, facing each other: the box's right side and the circle's left.
+  assert.deepEqual(arrowEnds(arrow, byId, size), { from: { x: 206, y: 50 }, to: { x: 394, y: 50 }, attached: true });
+  const moved = { ...ring, position: { x: 400, y: 300 } };
+  assert.notDeepEqual(arrowEnds(arrow, new Map([...byId, ['ring', moved]]), size).to, { x: 394, y: 50 });
+  // Deleting the circle leaves that end where it was drawn.
+  const [, kept] = detachArrows(graph.nodes, [box, arrow], size);
+  assert.deepEqual(kept.data.to, { x: 394, y: 50 }); assert.equal(kept.data.from.node, 'box');
+  // Dragging a free arrow carries both points.
+  const free = { ...kept, data: { ...kept.data, from: { x: 0, y: 0 } } }, dragged = reconcileArrows([free], [{ ...free, position: { x: free.position.x + 10, y: free.position.y + 5 } }])[0];
+  assert.deepEqual([dragged.data.from, dragged.data.to], [{ x: 10, y: 5 }, { x: 404, y: 55 }]);
+  // A copy holds on to copied things only.
+  const copies = duplicateNodes(graph, ['box', 'arrow'], { offset: { x: 20, y: 20 } }), copy = copies.nodes.find(node => node.type === 'arrow');
+  assert.equal(copy.data.from.node, copies.nodes.find(node => node.type === 'shape').id);
+  assert.deepEqual(copy.data.to, { x: 420, y: 70 });
+});

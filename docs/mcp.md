@@ -1,5 +1,7 @@
 # Concept Graph MCP
 
+This guide covers the desktop app's local boards. For cloud team boards, connect agents to the site's remote MCP server instead; see [Agents over MCP](cloud-preview.md#agents-over-mcp).
+
 Concept Graph can expose its local boards to MCP-capable agents through a local stdio server. Open the desktop app before asking an agent to use it. The MCP process connects to that running app and its selected data folder; it does not start a second copy or create another library. Keep both the agent and Concept Graph on the same computer and user account.
 
 The desktop package includes the required Node runtime and MCP server. You do not need to install Node.js, clone this repository, or provide an API key for the MCP connection. Image generation still uses the account signed into Concept Graph and its available Codex limits.

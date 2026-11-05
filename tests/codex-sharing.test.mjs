@@ -204,3 +204,35 @@ test('an owner serves at most a few teammate runs at once and ignores runs writt
   assert.equal(ownerDoc.getMap('runs').get(forged.id).status, 'failed');
   ownerDoc.destroy(); requesterDoc.destroy();
 });
+
+test('granted access survives reloads on either side for a while, but not a revoke or a long absence', () => {
+  const room = new Room(), clock = { now: 1000 }, stores = new Map();
+  const memory = name => { if (!stores.has(name)) stores.set(name, {}); return { read: () => stores.get(name), write: value => stores.set(name, value) }; };
+  const join = (id, user) => { const presence = new Presence(room, id), sharing = new CodexSharing(presence, () => clock.now, memory(user.name)); presence.setLocalState({ user }); sharing.live(true); return sharing; };
+  const leave = sharing => sharing.awareness.setLocalState(null);
+  let alice = join(1, owner), bob = join(2, requester);
+  clock.now += sharingGrace.join; alice.setReady(true);
+  bob.request(1); alice.allow(alice.view().incoming[0].id);
+  assert.deepEqual(bob.maintain().map(event => event.type), ['granted']);
+  // The requester reloads: a new client asks again by itself and the owner lets it in without a prompt.
+  leave(bob); bob = join(3, requester);
+  assert.deepEqual(bob.maintain(), []); alice.maintain();
+  assert.deepEqual(bob.maintain().map(event => event.type), ['resumed']); assert.equal(bob.using().to, 1);
+  assert.match(sharingMessage({ type: 'resumed', user: owner }), /Olena’s Codex again/);
+  // The owner reloads: the requester waits, then asks the owner's new client.
+  leave(alice); clock.now += sharingGrace.leave + 1;
+  assert.deepEqual(bob.maintain().map(event => event.type), ['left']); assert.equal(bob.using(), null);
+  alice = join(4, owner); alice.setReady(true); clock.now += sharingGrace.join;
+  bob.maintain(); alice.maintain();
+  assert.deepEqual(bob.maintain().map(event => event.type), ['resumed']); assert.equal(bob.using().to, 4);
+  // A revoke is final, even across reloads.
+  alice.decline(alice.view().shared[0].id);
+  assert.deepEqual(bob.maintain().map(event => event.type), ['revoked']);
+  leave(bob); bob = join(5, requester); bob.maintain(); alice.maintain();
+  assert.equal(bob.view().outgoing, null); assert.equal(alice.view().incoming.length, 0);
+  // Without a revoke, memory lasts only `remember` after the two last saw each other.
+  bob.request(4); alice.allow(alice.view().incoming[0].id); bob.maintain(); alice.maintain();
+  leave(bob); clock.now += sharingGrace.remember + 1;
+  bob = join(6, requester); bob.maintain();
+  assert.equal(bob.view().outgoing, null);
+});

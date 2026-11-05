@@ -1,5 +1,6 @@
 import { imageAuthor } from './annotations.mjs';
 import { modelNames } from '../graph.mjs';
+import { plural, t } from './i18n.mjs';
 
 const settingId = value => typeof value === 'string' && /^[\w.\/:+-]{1,128}$/.test(value) ? value : undefined;
 const time = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -9,9 +10,9 @@ const pixels = value => Number.isSafeInteger(value) && value > 0 ? value : undef
 export function formatDuration(ms) {
   if (!Number.isFinite(ms) || ms < 0) return undefined;
   const total = Math.round(ms / 1000), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = total % 60;
-  if (!total) return 'under 1 s';
-  if (hours) return `${hours} h${minutes ? ` ${minutes} min` : ''}`;
-  return minutes ? `${minutes} min${seconds ? ` ${seconds} s` : ''}` : `${seconds} s`;
+  if (!total) return t('under 1 s');
+  if (hours) return minutes ? t('{hours} h {minutes} min', { hours, minutes }) : t('{hours} h', { hours });
+  return minutes ? seconds ? t('{minutes} min {seconds} s', { minutes, seconds }) : t('{minutes} min', { minutes }) : t('{seconds} s', { seconds });
 }
 
 // Facts for the full-screen view. Unknown values are left out instead of guessed.
@@ -31,13 +32,13 @@ export function imageInfo(node, runs = [], { width, height, formatDate = value =
   const createdAt = time(data.createdAt) || time(run?.finishedAt) || time(run?.createdAt);
   const size = pixels(width) && pixels(height) ? `${width} × ${height} px` : undefined;
   const rows = [
-    !generated && !caption && text(data.label) && { key: 'name', label: 'File', value: text(data.label) },
-    template && { key: 'template', label: 'Custom node', value: template },
-    model && { key: 'model', label: 'Model', value: Object.hasOwn(modelNames, model) ? modelNames[model] : model },
-    effort && { key: 'effort', label: 'Reasoning effort', value: effort[0].toUpperCase() + effort.slice(1) },
-    duration && { key: 'duration', label: 'Generation time', value: duration, ...(outputs > 1 ? { note: `Whole run, ${outputs} images` } : {}) },
-    createdAt && { key: 'created', label: generated ? 'Created' : 'Added', value: formatDate(createdAt) },
-    size && { key: 'size', label: 'Size', value: size },
+    !generated && !caption && text(data.label) && { key: 'name', label: t('File'), value: text(data.label) },
+    template && { key: 'template', label: t('Custom node'), value: template },
+    model && { key: 'model', label: t('Model'), value: Object.hasOwn(modelNames, model) ? modelNames[model] : model },
+    effort && { key: 'effort', label: t('Reasoning effort'), value: t(effort[0].toUpperCase() + effort.slice(1)) },
+    duration && { key: 'duration', label: t('Generation time'), value: duration, ...(outputs > 1 ? { note: plural(outputs, 'Whole run, {count} image', 'Whole run, {count} images') } : {}) },
+    createdAt && { key: 'created', label: generated ? t('Created') : t('Added'), value: formatDate(createdAt) },
+    size && { key: 'size', label: t('Size'), value: size },
   ].filter(Boolean);
   return { kind: generated ? 'generated' : 'reference', ...(author ? { author } : {}), ...(caption ? { caption } : {}), ...(prompt ? { prompt } : {}), rows };
 }

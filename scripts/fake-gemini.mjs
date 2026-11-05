@@ -7,6 +7,7 @@
 //   [two]     two images            [text]   text only, no image (the run fails with the model's text)
 //   [refuse]  HTTP 400 safety block [busy]   HTTP 429 rate limit
 //   [error]   HTTP 500              [slow]   answers after 30 s (try Cancel)
+// Any other model (the description model) answers with a short text.
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { crc32, deflateSync } from 'node:zlib';
@@ -53,6 +54,12 @@ createServer(async (request, response) => {
   if (mode === 'error') return send(response, 500, { error: { code: 'api_error', message: 'Internal error.' } });
   if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
   if (response.destroyed) return;
+  // Text models (descriptions) answer in words only.
+  if (body.model !== 'gemini-nano-banana-2.1') {
+    const input_tokens = Math.ceil(prompt.length / 4) + references * 258, text = `A fake description of ${references} image(s): a centred subject on a soft gradient background, even light, calm mood.`;
+    return send(response, 200, { id: `fake-${Date.now()}`, object: 'interaction', status: 'completed', model: body.model, created: new Date().toISOString(), updated: new Date().toISOString(),
+      steps: [{ type: 'model_output', content: [{ type: 'text', text }] }], usage: { total_input_tokens: input_tokens, total_output_tokens: 40, total_thought_tokens: 120, total_tokens: input_tokens + 160 } });
+  }
   const count = mode === 'two' ? 2 : mode === 'text' ? 0 : 1, input_tokens = Math.ceil(prompt.length / 4) + references * 1120;
   const images = Array.from({ length: count }, (_, index) => ({ type: 'image', mime_type: 'image/png', data: picture(`${prompt}#${index}#${Date.now()}`).toString('base64') }));
   const text = count ? 'Here is the image.' : 'I can’t create that image. Try describing it differently.';

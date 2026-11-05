@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { flushSync } from 'react-dom';
-import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, NodeResizer, Position, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
+import { createPortal, flushSync } from 'react-dom';
+import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
+import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
-import { AnnotationTools, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
-import { boardAuthor, drawingFromStroke, isAnnotation, penPalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
+import { AnnotationTools, ArrowNode, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, ShapeNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
+import { arrowPalette, arrowPosition, boardAuthor, stamps, drawingFromStroke, isAnnotation, penPalette, reconcileArrows, shapeDefault, shapePalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from './sections.mjs';
 import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSignature } from './history.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
-import { GeneratorPicker } from './GeneratorPicker.jsx';
+import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { nanoState, usesNano } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -30,6 +30,9 @@ import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx';
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
 import { BoardPages } from './BoardPages.jsx';
+import { LanguageSelect } from './LanguageSelect.jsx';
+import { plural, t } from './i18n.mjs';
+import { rich } from './i18n-rich.jsx';
 import { arrangeLayers, layerShortcut, nextLayer, stackOnTop } from './layers.mjs';
 import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
 import { gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
@@ -73,7 +76,7 @@ function Icon({ name, size = 18 }) {
     mic: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></>,
     group: <><rect x="3" y="3" width="18" height="18" rx="3" strokeDasharray="3 3"/><rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/></>,
     align: <><rect x="2" y="9" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M8 12h4m4-7h-4v14h4"/></>,
-    chevron: <path d="m8 5 7 7-7 7"/>, ungroup: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><path d="m9 9 6 6m0-6-6 6"/></>,
+    chevron: <path d="m8 5 7 7-7 7"/>, boards: <><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></>, eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>, slides: <><rect x="6" y="5" width="12" height="14" rx="2"/><path d="M3 8v8m18-8v8"/></>, describe: <><rect x="3" y="4" width="9" height="9" rx="1.5"/><path d="M15 6h6M15 10h6M3 17h18M3 21h12"/></>, ungroup: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><path d="m9 9 6 6m0-6-6 6"/></>,
     sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></>,
     moon: <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>,
     upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/></>,
@@ -82,7 +85,7 @@ function Icon({ name, size = 18 }) {
     text: <><path d="M4 5h16M12 5v14M8 19h8"/></>, play: <path d="m8 5 11 7-11 7z"/>, arrow: <path d="M5 12h14m-6-6 6 6-6 6"/>,
     tag: <><path d="M20 13 13 20 4 11V4h7l9 9Z"/><circle cx="8" cy="8" r="1"/></>,
     expand: <path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/>, collapse: <path d="M4 9h5V4m11 5h-5V4M4 15h5v5m11-5h-5v5"/>, download: <><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></>,
-    close: <path d="m6 6 12 12M6 18 18 6"/>, undo: <path d="m9 5-5 5 5 5M4 10h10a6 6 0 0 1 0 12"/>, redo: <path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12"/>,
+    close: <path d="m6 6 12 12M6 18 18 6"/>, back: <path d="M19 12H5m6-6-6 6 6 6"/>, undo: <path d="m9 5-5 5 5 5M4 10h10a6 6 0 0 1 0 12"/>, redo: <path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12"/>,
     minus: <path d="M5 12h14"/>, check: <path d="m5 12 4 4L19 6"/>, clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
     trash: <><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></>, branch: <><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m12-10c0 7-12 1-12 8"/></>,
   };
@@ -92,12 +95,35 @@ function Icon({ name, size = 18 }) {
 const noInputs = { images: 0, text: 0 };
 const failedRun = run => ['error', 'failed'].includes(run?.status);
 const NanoReadiness = ({ note }) => <div className="node-readiness nodrag"><span>{note}</span></div>;
-const Readiness = ({ readiness, action, fix }) => <div className="node-readiness nodrag"><span>{readiness === 'helper' ? 'Helper not connected.' : readiness === 'install' ? 'Codex is not installed.' : readiness === 'signin' ? 'Sign-in needed.' : 'Codex is not ready.'}</span><button type="button" onClick={fix}>{action}</button></div>;
+const Readiness = ({ readiness, action, fix }) => <div className="node-readiness nodrag"><span>{readiness === 'helper' ? t('Helper not connected.') : readiness === 'install' ? t('Codex is not installed.') : readiness === 'signin' ? t('Sign-in needed.') : t('Codex is not ready.')}</span><button type="button" onClick={fix}>{action}</button></div>;
 // What a prompt shows about its latest run; `now` counts only while that run is active, so idle cards ignore the timer.
 const runView = (state, id) => {
   const run = state.latestRun.get(id), active = busy(run);
   return { runId: run?.id, status: run?.status, error: run?.error, active, starting: state.starting === id, byName: run?.by?.name, timer: active ? formatDuration(runElapsed(run, state.now)) : '' };
 };
+
+const toolType = 'application/x-concept-graph-tool';
+// A prompt grows with its text up to a square, then scrolls; dragging its bottom edge stores its own height instead.
+const textHeights = Object.freeze({ min: 80, max: 4000 });
+const textHeight = data => data.height ? { height: data.height, maxHeight: 'none' } : undefined;
+const hiddenBelow = input => input.scrollHeight - input.scrollTop - input.clientHeight > 2;
+
+// With the Stamp tool the pointer carries the chosen stamp over the board, as in FigJam; over the toolbar and panels the
+// usual pointer comes back.
+function StampCursor({ emoji, area, start }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const element = area.current, cursor = ref.current;
+    if (!element || !cursor) return;
+    const place = (x, y, shown) => { cursor.style.transform = `translate(${x}px, ${y}px)`; cursor.style.opacity = shown ? '1' : '0'; };
+    const move = event => place(event.clientX, event.clientY, !!event.target.closest?.('.react-flow__pane, .react-flow__node, .react-flow__edge'));
+    const leave = () => { cursor.style.opacity = '0'; };
+    if (start) { const under = document.elementFromPoint(start.x, start.y); place(start.x, start.y, !!under?.closest('.react-flow__pane, .react-flow__node, .react-flow__edge')); }
+    element.addEventListener('pointermove', move); element.addEventListener('pointerleave', leave);
+    return () => { element.removeEventListener('pointermove', move); element.removeEventListener('pointerleave', leave); };
+  }, []);
+  return createPortal(<div ref={ref} className="stamp-cursor" aria-hidden="true">{emoji}</div>, document.body);
+}
 
 function TextNode(props) {
   return useDetail(props.id) === 'full' ? <FullTextNode {...props}/> : <LightNode {...props}/>;
@@ -111,26 +137,34 @@ function FullTextNode(props) {
 function ExpandedTextNode({ id, data, selected }) {
   const canvas = useCanvas();
   const view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, inputs: inputLabel(state.inputs.get(id) || noInputs), readiness: state.readinessKey, readinessAction: state.readinessAction,
-    focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates, nanoSelectable: state.nanoSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, nanoBudget: state.nanoBudget, readOnly: state.readOnly }), shallowEqual);
+    focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates, images: (state.inputs.get(id) || noInputs).images, nanoSelectable: state.nanoSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, nanoBudget: state.nanoBudget, readOnly: state.readOnly }), shallowEqual);
   const pending = view.active || view.starting;
   const canCancel = !cloud || view.starting || view.byName === view.userName;
-  const [draft, setDraft] = useState(data.text);
-  const canRun = !!draft.trim() || !!data.template?.instructions?.trim();
+  const [draft, setDraft] = useState(data.text), [more, setMore] = useState(false);
+  // A describe node needs only images; its text is an optional focus for the description.
+  const describe = data.task === describeTask, canRun = describe ? view.images > 0 : !!draft.trim() || !!data.template?.instructions?.trim();
   const editor = useRef(null), generateButton = useRef(null), edited = useRef(false);
   const changeText = value => { setDraft(value); if (!edited.current) { canvas.checkpoint(); edited.current = true; } canvas.editText(id, value); };
   const dictation = usePromptDictation(editor, draft, changeText, canvas.dictationLanguage, canvas);
   // A Nano Banana prompt needs no helper; it is blocked only by what the site allows this person.
-  const nano = cloud && usesNano(data), blocked = nano ? !view.nanoReady : view.readiness !== 'ready', connect = blocked && !nano;
+  // A Gemini description needs no daily images, only the person's place on the allowed list.
+  const nano = cloud && usesNano(data), blocked = nano ? (describe ? !view.nanoSelectable : !view.nanoReady) : view.readiness !== 'ready', connect = blocked && !nano;
   // React Flow propagates node data through its store after the input event.
   // Keep the controlled input synchronous so React never restores an old value/caret.
   useLayoutEffect(() => {
     if (cloud || document.activeElement !== editor.current) setDraft(data.text);
   }, [data.text]);
+  // The text grows the card up to a square (or the height its bottom edge was dragged to), then scrolls; only a field that
+  // scrolls keeps the wheel from panning the board.
   useLayoutEffect(() => {
     const input = editor.current;
     input.style.height = '0px';
     input.style.height = `${input.scrollHeight}px`;
-  }, [draft]);
+    input.classList.toggle('nowheel', input.scrollHeight > input.clientHeight + 1);
+    setMore(hiddenBelow(input));
+  }, [draft, data.height]);
+  // Text cut off by the square (or a dragged height) fades out with a Show all button, until it is scrolled to the end.
+  const showAll = () => { const input = editor.current, card = input?.closest('.text-node'); if (card) canvas.setPromptHeight(id, card.offsetHeight + input.scrollHeight - input.clientHeight + 4); };
   useEffect(() => {
     if (!view.focus) return;
     // Wait until the release event finishes focusing the source node.
@@ -140,21 +174,24 @@ function ExpandedTextNode({ id, data, selected }) {
     }, 0);
     return () => clearTimeout(timer);
   }, [view.focus, id]);
-  return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}`} style={data.template ? { '--template-color': templateColor(data.template) } : undefined}>
-    <Handle type="target" position={Position.Left} aria-label="Connect input to prompt"/>
-    <header className="node-drag"><NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/><button className="text-node-collapse nodrag" type="button" aria-label="Collapse text node" data-tooltip="Collapse node" onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? 'Starting…' : canCancel ? `Generating… ${view.timer}` : `Generating… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? 'Connect and generate' : nano ? 'Generate with Nano Banana' : 'Generate image'} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? 'Write a prompt first' : nano && blocked ? view.nanoNote : `${connect ? 'Connect and generate' : nano ? 'Generate with Nano Banana' : 'Generate image'} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? 'Connect' : nano ? 'Nano Banana' : 'Generate'}</span></button></div>{cloud && !pending && <GeneratorPicker id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>Cancel</button>}</div></header>
-    <div className="prompt-editor">
-      <textarea ref={editor} className="nodrag" rows={1} aria-label="Image prompt" readOnly={view.readOnly} value={draft} placeholder="Describe the image you want, then click Generate" onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
-      {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? 'Stop dictation' : 'Dictate prompt'} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? 'Finishing dictation…' : 'Stop dictation · Esc' : 'Dictate (speech is recognised by your browser’s service)'} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
-      {dictation.active && <button type="button" className="dictation-lang nodrag" aria-label={`Dictation language ${dictation.language || '…'}, click to switch`} data-tooltip="Switch language · UK / EN / RU" disabled={!dictation.language || dictation.stopping} onPointerDown={event => event.preventDefault()} onClick={dictation.switchLanguage}>{dictation.language || '…'}</button>}
+  return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}${describe ? ' describe-node' : ''}${data.height ? ' sized' : ''}`} style={{ ...(data.template ? { '--template-color': templateColor(data.template) } : {}), ...textHeight(data) }}>
+    {!view.readOnly && <NodeResizeControl position="bottom" variant="line" resizeDirection="vertical" minHeight={textHeights.min} maxHeight={textHeights.max} className="text-height-handle" title={t('Drag to change the height')}/>}
+    <Handle type="target" position={Position.Left} aria-label={t('Connect input to prompt')}/>
+    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : t('Generate with Nano Banana') : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? view.nanoNote : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : t('Generate with Nano Banana') : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <div className={`prompt-editor${more ? ' has-more' : ''}`}>
+      <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
+      {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? t('Stop dictation') : t('Dictate prompt')} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? t('Finishing dictation…') : t('Stop dictation · Esc') : t('Dictate (speech is recognised by your browser’s service)')} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
+      {dictation.active && <button type="button" className="dictation-lang nodrag" aria-label={t('Dictation language {language}, click to switch', { language: dictation.language || '…' })} data-tooltip={t('Switch language · UK / EN / RU')} disabled={!dictation.language || dictation.stopping} onPointerDown={event => event.preventDefault()} onClick={dictation.switchLanguage}>{dictation.language || '…'}</button>}
+      {more && !view.readOnly && <button type="button" className="prompt-more nodrag" onClick={showAll}>{t('Show all')}</button>}
       {dictation.interim && <div className="dictation-interim" role="status">{dictation.interim}</div>}
-      {dictation.active && <span className="sr-only" role="status">{dictation.stopping ? 'Finishing dictation' : dictation.listening ? `Recording ${dictation.language}` : 'Starting dictation'}</span>}
+      {dictation.active && <span className="sr-only" role="status">{dictation.stopping ? t('Finishing dictation') : dictation.listening ? t('Recording {language}', { language: dictation.language }) : t('Starting dictation')}</span>}
     </div>
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
-    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}
+    {nano && !describe && <VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly}/>}
+    {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && blocked && !pending && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
-    {failedRun(view) && <div className="node-error nodrag">{view.error}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>View run details</button>}</div>}
-    <Handle type="source" position={Position.Right} aria-label="Connect prompt to another node"/>
+    {failedRun(view) && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}
+    <Handle type="source" position={Position.Right} aria-label={t('Connect prompt to another node')}/>
   </article></NodeContextMenu>;
 }
 
@@ -197,15 +234,15 @@ function ExpandedImageNode({ id, data }) {
   }, [view.variation, id]);
   const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
   return <NodeContextMenu id={id} type="image" actions={canvas}><div className="image-node-wrapper">
-    {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label="Image caption" title={view.readOnly ? undefined : "Edit image caption"} readOnly={view.readOnly} maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
+    {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label={t('Image caption')} title={view.readOnly ? undefined : t('Edit image caption')} readOnly={view.readOnly} maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
-    {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || 'Concept image'} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
+    {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || t('Concept image')} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
     <div className="image-shade"/>
-    <button className="image-collapse nodrag" type="button" aria-label="Collapse image node" data-tooltip="Collapse node" onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
-    {!data.caption?.trim() && !captionFocused && <button className="image-caption-add nodrag" type="button" aria-label="Add image caption" data-tooltip="Add image caption" onClick={event => { event.stopPropagation(); setCaptionFocused(true); }} onDoubleClick={event => event.stopPropagation()}><Icon name="tag" size={15}/></button>}
-    <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip="View fullscreen" aria-label="Open image fullscreen" onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
-    <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip="New prompt that uses this image as a reference" onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>+ Prompt from this</button>
-    <Handle type="source" position={Position.Right} aria-label="Connect image as reference"/>
+    <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
+    {!data.caption?.trim() && !captionFocused && <button className="image-caption-add nodrag" type="button" aria-label={t('Add image caption')} data-tooltip={t('Add image caption')} onClick={event => { event.stopPropagation(); setCaptionFocused(true); }} onDoubleClick={event => event.stopPropagation()}><Icon name="tag" size={15}/></button>}
+    <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
+    <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip={t('New prompt that uses this image as a reference')} onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>{t('+ Prompt from this')}</button>
+    <Handle type="source" position={Position.Right} aria-label={t('Connect image as reference')}/>
   </article></div></NodeContextMenu>;
 }
 
@@ -237,13 +274,13 @@ function CollapsedNode({ id, data, kind }) {
   const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
   return <NodeContextMenu id={id} type={kind} actions={canvas}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
-      {(!isImage || data.runId) && <Handle type="target" position={Position.Left} isConnectable={!isImage} aria-label={isImage ? 'Image input' : 'Connect input to prompt'}/>}
+      {(!isImage || data.runId) && <Handle type="target" position={Position.Left} isConnectable={!isImage} aria-label={isImage ? t('Image input') : t('Connect input to prompt')}/>}
       {isImage ? <CollapsedImage asset={data.asset} id={id}/> : <Icon name="text" size={26}/>}
-      {busy(run) && <span className="collapsed-run-dot" aria-label="Generating" title="Generating…"/>}
-      {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={run.error} title={run.error}/>}
-      <button className="collapsed-node-expand nodrag" type="button" aria-label={`Expand ${isImage ? 'image' : 'text'} node`} data-tooltip="Expand node" onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>
-      {isImage && <button className="collapsed-prompt-from nodrag" type="button" aria-label="+ Prompt from this" data-tooltip="New prompt that uses this image as a reference" onClick={() => canvas.promptFrom(id)}><Icon name="plus" size={15}/></button>}
-      <Handle type="source" position={Position.Right} aria-label={isImage ? 'Connect image as reference' : 'Connect prompt to another node'}/>
+      {busy(run) && <span className="collapsed-run-dot" aria-label={t('Generating')} title={t('Generating…')}/>}
+      {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={t(run.error)} title={t(run.error)}/>}
+      <button className="collapsed-node-expand nodrag" type="button" aria-label={isImage ? t('Expand image node') : t('Expand text node')} data-tooltip={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>
+      {isImage && <button className="collapsed-prompt-from nodrag" type="button" aria-label={t('+ Prompt from this')} data-tooltip={t('New prompt that uses this image as a reference')} onClick={() => canvas.promptFrom(id)}><Icon name="plus" size={15}/></button>}
+      <Handle type="source" position={Position.Right} aria-label={isImage ? t('Connect image as reference') : t('Connect prompt to another node')}/>
     </article>
   </NodeContextMenu>;
 }
@@ -257,7 +294,7 @@ function LightNode({ id, type, data, selected }) {
     return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), create: state.detail !== 'tiny' || !state.crowded,
       readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote };
   }, shallowEqual);
-  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesNano(data);
+  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesNano(data), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
     {(!isImage || data.runId) && <LodHandle type="target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
     {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
@@ -265,19 +302,22 @@ function LightNode({ id, type, data, selected }) {
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
   if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
-  return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}`} style={template}>
-    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}`}>{text || 'Describe the image you want, then click Generate'}</div>
-    {view.inputs && <div className="node-inputs">Inputs: {view.inputs}</div>}
+  const describe = data.task === describeTask;
+  return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
+    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
+    {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
+    {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && (nano ? !view.nanoReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
-    {view.failed && <div className="node-error nodrag">{view.error}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>View run details</button>}</div>}<LodHandle type="source"/>
+    {view.failed && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}<LodHandle type="source"/>
   </article>;
 }
 
 const LodHandle = ({ type }) => <i {...lodHandleProps(type)}/>;
 
-function LightImage({ id, asset, aspect, create, collapsed = false }) {
+function LightImage({ id, asset, aspect, create, collapsed = false, slide }) {
   const ref = useRef(null), image = useCanvasImage(assetUrl(asset), { small: true, create });
   useOutputReady(ref, image.src, id);
+  useLearnedAspect(slide, image.aspectRatio);
   const className = collapsed ? 'collapsed-node-image' : 'image-content', aspectRatio = collapsed ? undefined : image.aspectRatio || (aspect ? `1 / ${aspect}` : undefined);
   return image.src ? <img ref={ref} className={className} src={image.src} style={aspectRatio ? { aspectRatio } : undefined} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt="" draggable="false"/>
     : <span className={`${className} image-placeholder`} style={collapsed ? undefined : { aspectRatio: aspectRatio || '1' }}/>;
@@ -295,18 +335,44 @@ function RenameField({ name, label, className, onSave, onDone }) {
   return <input ref={input} className={`${className} nodrag`} aria-label={label} maxLength={80} value={value} onChange={event => setValue(event.target.value)} onBlur={save} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { cancelled.current = true; onDone(); } }}/>;
 }
 
-// Groups bundle nodes and fold them into one compact card; their small name sits in the frame's header.
+// Groups bundle nodes and fold them into one compact card; their small name sits in the frame's header. A folded
+// slideshow (one run's images) shows one image instead, and its output dot connects that image.
 function FullGroupNode({ id, data }) {
-  const canvas = useCanvas(), editing = useCanvasValue(state => state.renaming === id);
-  return <NodeContextMenu id={id} type="group" actions={canvas}><article data-feel-node={id} className={`group-frame ${data.collapsed ? 'collapsed' : ''}`}>
-    <header><button className={`group-toggle nodrag ${data.collapsed ? '' : 'expanded'}`} aria-label={`${data.collapsed ? 'Expand' : 'Collapse'} ${data.name}`} data-tooltip={data.collapsed ? 'Expand group' : 'Collapse group'} onClick={() => canvas.toggleGroup(id)}><Icon name="chevron" size={16}/></button>{editing ? <RenameField name={data.name} label="Group name" className="group-name-input" onSave={name => canvas.editGroup(id, { name })} onDone={() => canvas.renameGroup(null)}/> : <strong tabIndex={0} role="button" title="Double-click to rename group" onDoubleClick={() => canvas.renameGroup(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameGroup(id); } }}>{data.name}</strong>}<span>{data.count} nodes</span><button className="icon-button nodrag" aria-label={`Ungroup ${data.name}`} data-tooltip="Ungroup; keep nodes" onClick={() => canvas.ungroup(id)}><Icon name="ungroup" size={16}/></button></header>
-    {data.collapsed && <><Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} isConnectable={false}/></>}
+  const canvas = useCanvas(), editing = useCanvasValue(state => state.renaming === id), slideshow = data.collapsed && data.slide, kind = data.slideshow ? 'slideshow' : 'group';
+  return <NodeContextMenu id={id} type="group" actions={canvas} slideshow={data.images ? !!data.slideshow : undefined}><article data-feel-node={id} className={`group-frame ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
+    <header><button className={`group-toggle nodrag ${data.collapsed ? '' : 'expanded'}`} aria-label={data.collapsed ? t('Expand {name}', { name: data.name }) : t('Collapse {name}', { name: data.name })} data-tooltip={data.collapsed ? kind === 'slideshow' ? t('Expand slideshow') : t('Expand group') : data.slideshow ? t('Fold into slideshow') : t('Collapse group')} onClick={() => canvas.toggleGroup(id)}><Icon name="chevron" size={16}/></button>{data.slideshow && <i className="group-kind" title={t('Slideshow')}><Icon name="slides" size={14}/></i>}{editing ? <RenameField name={data.name} label={t('Group name')} className="group-name-input" onSave={name => canvas.editGroup(id, { name })} onDone={() => canvas.renameGroup(null)}/> : <strong tabIndex={0} role="button" title={t('Double-click to rename group')} onDoubleClick={() => canvas.renameGroup(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameGroup(id); } }}>{data.name}</strong>}<span>{slideshow ? `${data.index + 1} / ${data.images}` : data.slideshow ? plural(data.images, '{count} image', '{count} images') : plural(data.count, '{count} node', '{count} nodes')}</span><button className="icon-button nodrag" aria-label={t('Ungroup {name}', { name: data.name })} data-tooltip={t('Ungroup; keep nodes')} onClick={() => canvas.ungroup(id)}><Icon name="ungroup" size={16}/></button></header>
+    {slideshow && <SlideshowStage id={id} slide={data.slide} count={data.images}/>}
+    {data.collapsed && <><Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} isConnectable={!!slideshow} aria-label={slideshow ? t('Connect the shown image as reference') : undefined}/></>}
   </article></NodeContextMenu>;
 }
 
+// An image with no stored proportions (older or imported ones) gets them from the loaded picture, so a folded
+// slideshow takes the shown image's shape instead of a square.
+const imageAspect = ratio => { const [width, height] = String(ratio || '').split('/').map(Number); return width > 0 && height > 0 ? height / width : undefined; };
+function useLearnedAspect(slide, ratio) {
+  const canvas = useCanvas(), aspect = imageAspect(ratio);
+  useEffect(() => { if (slide && !slide.aspect && aspect) canvas.learnAspect(slide.asset, aspect); }, [slide?.asset, slide?.aspect, aspect]);
+}
+
+function SlideshowStage({ id, slide, count }) {
+  const canvas = useCanvas(), image = useCanvasImage(assetUrl(slide.asset)), ref = useRef(null);
+  useOutputReady(ref, image.src, slide.id);
+  useLearnedAspect(slide, image.aspectRatio);
+  const press = action => ({ onClick: event => { event.stopPropagation(); action(); }, onDoubleClick: event => event.stopPropagation() });
+  return <div className="slideshow-stage">
+    {image.src ? <img ref={ref} key={slide.id} className="slideshow-image" src={image.src} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt="" draggable="false"/> : <span className="slideshow-image image-placeholder"/>}
+    <div className="image-shade"/>
+    <button className="image-expand nodrag" data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} {...press(() => canvas.view(slide.id))}><Icon name="expand" size={24}/></button>
+    {count > 1 && <><button type="button" className="slideshow-step previous nodrag" aria-label={t('Previous image')} data-tooltip={t('Previous image')} {...press(() => canvas.showSlide(id, -1))}><Icon name="chevron" size={18}/></button>
+      <button type="button" className="slideshow-step next nodrag" aria-label={t('Next image')} data-tooltip={t('Next image')} {...press(() => canvas.showSlide(id, 1))}><Icon name="chevron" size={18}/></button></>}
+    <button type="button" className="image-prompt-from nodrag" data-tooltip={t('New prompt that uses this image as a reference')} {...press(() => canvas.promptFrom(slide.id))}>{t('+ Prompt from this')}</button>
+  </div>;
+}
+
 function LightGroupNode({ id, data }) {
-  return <article data-feel-node={id} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''}`}>
-    <header/>{data.collapsed && <><LodHandle type="target"/><LodHandle type="source"/></>}
+  const slideshow = data.collapsed && data.slide, create = useCanvasValue(state => state.detail !== 'tiny' || !state.crowded);
+  return <article data-feel-node={id} className={`group-frame lod-node ${data.collapsed ? 'collapsed' : ''}${slideshow ? ' slideshow' : ''}`}>
+    <header/>{slideshow && <div className="slideshow-stage"><LightImage id={data.slide.id} asset={data.slide.asset} create={create} collapsed slide={data.slide}/></div>}{data.collapsed && <><LodHandle type="target"/><LodHandle type="source"/></>}
   </article>;
 }
 
@@ -319,7 +385,7 @@ function SectionNode({ id, data, selected }) {
   return <NodeContextMenu id={id} type="section" actions={canvas}><div className={`section-frame${data.color ? ' colored' : ''}`} style={sectionStyle(data.color)}>
     {sectionEdges.map(side => <i key={side} className={`section-edge ${side} section-handle`}/>)}
     {/* Zoomed out the visible title is drawn on top (SectionTitles); this copy stays under it, invisible, so the title still drags and renames. */}
-    <div className={`section-label section-handle${full || editing ? '' : ' ghost'}`}>{editing ? <RenameField name={data.name} label="Section name" className="section-name-input" onSave={name => canvas.editSection(id, { name })} onDone={() => canvas.renameSection(null)}/> : <strong tabIndex={0} role="button" title="Drag to move the section with its contents · double-click to rename" onDoubleClick={() => canvas.renameSection(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameSection(id); } }}>{data.name}</strong>}{selected && !editing && <ColorPicker color={data.color} colors={sectionPalette} label="Section color" allowDefault custom onChange={color => canvas.editSection(id, { color })}/>}</div>}
+    <div className={`section-label section-handle${full || editing ? '' : ' ghost'}`}>{editing ? <RenameField name={data.name} label={t('Section name')} className="section-name-input" onSave={name => canvas.editSection(id, { name })} onDone={() => canvas.renameSection(null)}/> : <strong tabIndex={0} role="button" title={t('Drag to move the section with its contents · double-click to rename')} onDoubleClick={() => canvas.renameSection(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameSection(id); } }}>{data.name}</strong>}{selected && !editing && <ColorPicker color={data.color} colors={sectionPalette} label={t('Section color')} allowDefault custom onChange={color => canvas.editSection(id, { color })}/>}</div>
     {full && <NodeResizer isVisible={selected && !editing} minWidth={sectionMinimum.width} minHeight={sectionMinimum.height} handleClassName="section-resize-handle" lineClassName="section-resize-line" onResizeStart={canvas.sectionResizeStart} onResizeEnd={canvas.sectionResizeEnd}/>}
   </div></NodeContextMenu>;
 }
@@ -334,27 +400,28 @@ function SectionTitles({ sections }) {
 }
 
 function AnnotationNode(props) {
-  const canvas = useCanvas(), Component = useDetail(props.id) === 'full' ? { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode }[props.type] : LightAnnotation;
+  const canvas = useCanvas(), Component = useDetail(props.id) === 'full' ? { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode, shape: ShapeNode, arrow: ArrowNode }[props.type] : LightAnnotation;
   return <Component {...props} actions={canvas}/>;
 }
-const nodeTypes = { text: TextNode, image: ImageNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode };
+const nodeTypes = { text: TextNode, image: ImageNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode, shape: AnnotationNode, arrow: AnnotationNode };
 function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
 }
 const edgeTypes = { feedback: FeedbackEdge };
 // Constant props: React Flow copies changed props into its store, and every copy re-runs every card's and edge's selector.
-const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], proOptions = { hideAttribution: true };
+// As in FigJam, Shift (or ⌘) toggles a card in or out of the selection, and a Shift drag starts on empty canvas like any box.
+const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
 // One generation in the History tab. Memoized: a board can hold thousands, and only active runs need the 1 s timer.
 const HistoryItem = React.memo(function HistoryItem({ run, now, page, canCancel, canvas }) {
-  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip="Show this generation" onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : run.status}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.outputIds.length} image{run.outputIds.length === 1 ? '' : 's'}{page && ` · ${page}`}</small></button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip="Cancel generation" onClick={() => canvas.cancel(run.id)}>Cancel run</button>}{run.error && <p>{run.error}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>Run details</button>}</div>;
+  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : plural(run.outputIds.length, '{count} image', '{count} images')}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
 });
 const noSections = Object.freeze([]);
 
 async function api(url, options = {}) {
   const response = await request(url, options);
   const value = await response.json();
-  if (!response.ok) throw Object.assign(new Error(value.error || 'Request failed.'), { status: response.status, value });
+  if (!response.ok) throw Object.assign(new Error(value.error || t('Request failed.')), { status: response.status, value });
   return value;
 }
 const jsonOptions = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -386,31 +453,31 @@ function UsageLimit({ status, version }) {
   const remaining = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Number((100 - value).toFixed(1)) : null;
   const first = buckets.flatMap(bucket => [bucket.primary, bucket.secondary]).find(window => remaining(window?.usedPercent) !== null);
   const windowLabel = minutes => {
-    if (!Number.isFinite(minutes) || minutes <= 0) return 'Usage window';
-    if (minutes % 1440 === 0) return `${minutes / 1440}-day limit`;
-    if (minutes % 60 === 0) return `${minutes / 60}-hour limit`;
-    return `${minutes}-minute limit`;
+    if (!Number.isFinite(minutes) || minutes <= 0) return t('Usage window');
+    if (minutes % 1440 === 0) return plural(minutes / 1440, '{count}-day limit', '{count}-day limit');
+    if (minutes % 60 === 0) return plural(minutes / 60, '{count}-hour limit', '{count}-hour limit');
+    return plural(minutes, '{count}-minute limit', '{count}-minute limit');
   };
   return <details className="usage" onToggle={event => { if (event.currentTarget.open) refresh(); }} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}>
-    <summary aria-label="Codex usage limits"><Icon name="clock" size={15}/><span>Usage{first ? ` · ${remaining(first.usedPercent)}% left` : ''}</span></summary>
-    <div className="usage-panel" aria-label="Codex usage limits">
-      <div className="usage-heading"><strong>Codex usage</strong><button type="button" onClick={refresh} disabled={!ready || loading}>{loading ? 'Refreshing…' : 'Refresh'}</button></div>
+    <summary aria-label={t('Codex usage limits')}><Icon name="clock" size={15}/><span>{first ? t('Usage · {percent}% left', { percent: remaining(first.usedPercent) }) : t('Usage')}</span></summary>
+    <div className="usage-panel" aria-label={t('Codex usage limits')}>
+      <div className="usage-heading"><strong>{t('Codex usage')}</strong><button type="button" onClick={refresh} disabled={!ready || loading}>{loading ? t('Refreshing…') : t('Refresh')}</button></div>
       <div aria-live="polite">
-        {!ready ? <p>Connect and sign in to Codex to see usage.</p> : loading && !usage ? <p>Loading usage…</p> : !usage?.available || !buckets.length ? <p>Usage information is unavailable. Try refreshing later.</p> : buckets.map((bucket, index) => <div className="usage-bucket" key={bucket.id || index}>
+        {!ready ? <p>{t('Connect and sign in to Codex to see usage.')}</p> : loading && !usage ? <p>{t('Loading usage…')}</p> : !usage?.available || !buckets.length ? <p>{t('Usage information is unavailable. Try refreshing later.')}</p> : buckets.map((bucket, index) => <div className="usage-bucket" key={bucket.id || index}>
           {bucket.name && <h3>{bucket.name}</h3>}
           {[bucket.primary, bucket.secondary].filter(Boolean).length ? [bucket.primary, bucket.secondary].filter(Boolean).map((window, windowIndex) => {
             const percent = remaining(window.usedPercent);
             const reset = Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? new Date(window.resetsAt * 1000) : null;
             const resetValid = reset && Number.isFinite(reset.getTime());
             return <div className="usage-window" key={windowIndex}>
-              <div><span>{windowLabel(window.windowDurationMins)}</span><strong>{percent === null ? 'Unavailable' : `${percent}% left`}</strong></div>
-              {percent !== null && <progress max="100" value={percent} aria-label={`${windowLabel(window.windowDurationMins)}: ${percent}% remaining`}/>}
-              <small>{resetValid ? `Resets ${reset.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}` : 'Reset time unavailable'}</small>
+              <div><span>{windowLabel(window.windowDurationMins)}</span><strong>{percent === null ? t('Unavailable') : t('{percent}% left', { percent })}</strong></div>
+              {percent !== null && <progress max="100" value={percent} aria-label={t('{window}: {percent}% remaining', { window: windowLabel(window.windowDurationMins), percent })}/>}
+              <small>{resetValid ? t('Resets {time}', { time: reset.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }) : t('Reset time unavailable')}</small>
             </div>;
-          }) : <p>No usage windows available.</p>}
+          }) : <p>{t('No usage windows available.')}</p>}
         </div>)}
       </div>
-      <p className="usage-note">These are Codex usage limits; image generation may have a separate limit.</p>
+      <p className="usage-note">{t('These are Codex usage limits; image generation may have a separate limit.')}</p>
     </div>
   </details>;
 }
@@ -425,13 +492,13 @@ function TemplateEditor({ template, initial = template, templates, onClose, onSa
   const imageInput = useRef(null);
   const perform = async task => {
     setError(''); setBusy(true); onBusyChange(true);
-    try { await task(); } catch (failure) { setError(failure.message || 'Something went wrong. Please try again.'); }
+    try { await task(); } catch (failure) { setError(failure.message || t('Something went wrong. Please try again.')); }
     finally { setBusy(false); onBusyChange(false); }
   };
   const upload = event => {
     const files = [...event.target.files]; event.target.value = '';
     if (!files.length) return;
-    if (assets.length + files.length > 10) { setError('Choose at most 10 reference images.'); return; }
+    if (assets.length + files.length > 10) { setError(t('Choose at most 10 reference images.')); return; }
     perform(async () => {
       for (const file of files) {
         const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
@@ -441,19 +508,19 @@ function TemplateEditor({ template, initial = template, templates, onClose, onSa
   };
   return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="template-editor-title" onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
     <form className="template-editor" onSubmit={event => { event.preventDefault(); if (!name.trim() || busy) return; perform(() => onSave({ name: name.trim(), instructions, assets, ...(template || colorPicked ? { color } : {}), ...(initial?.labelOutputs === undefined ? {} : { labelOutputs: initial.labelOutputs }) })); }}>
-      <h2 id="template-editor-title">{template ? 'Edit custom node' : 'Create custom node'}</h2>
-      <p className="template-intro">{cloud ? 'Save instructions and reference images to reuse on this board. Everyone on it can use and change them.' : 'Save instructions and reference images to reuse on any board.'}</p>
-      <label htmlFor="template-name">Name</label>
-      <input id="template-name" autoFocus value={name} maxLength={80} placeholder="e.g. Character multiview" onChange={event => setName(event.target.value)} disabled={busy} required/>
-      <fieldset className="template-colors"><legend>Colour</legend>{templatePalette.map(value => <button key={value} type="button" aria-label={`Colour ${value}`} aria-pressed={color === value} style={{ '--swatch-color': value }} disabled={busy} onClick={() => { setColor(value); setColorPicked(true); }}>{color === value && <Icon name="check" size={14}/>}</button>)}</fieldset>
-      <label htmlFor="template-instructions">Additional instructions</label>
-      <textarea id="template-instructions" value={instructions} maxLength={100000} placeholder="Describe the result you want this node to create…" onChange={event => setInstructions(event.target.value)} disabled={busy} rows={5}/>
-      <p className="template-hint">These instructions are included with the text you write in the node.</p>
-      <div className="template-reference-heading"><span>Reference images <small>{assets.length}/10</small></span><button type="button" onClick={() => imageInput.current?.click()} disabled={busy || assets.length >= 10}>+ Add images</button></div>
-      <input ref={imageInput} className="template-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={upload} tabIndex={-1} aria-label="Choose reference images"/>
-      {assets.length ? <div className="template-reference-grid">{assets.map((asset, index) => <div className="template-reference" key={`${asset}-${index}`}><img src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`Reference ${index + 1}`}/><button type="button" aria-label={`Remove reference ${index + 1}`} data-tooltip="Remove reference" disabled={busy} onClick={() => setAssets(current => current.filter((_, i) => i !== index))}><Icon name="close" size={13}/></button></div>)}</div> : <p className="template-hint">Optional. These images are included every time you run the node.</p>}
+      <h2 id="template-editor-title">{template ? t('Edit custom node') : t('Create custom node')}</h2>
+      <p className="template-intro">{cloud ? t('Save instructions and reference images to reuse on this board. Everyone on it can use and change them.') : t('Save instructions and reference images to reuse on any board.')}</p>
+      <label htmlFor="template-name">{t('Name')}</label>
+      <input id="template-name" autoFocus value={name} maxLength={80} placeholder={t('e.g. Character multiview')} onChange={event => setName(event.target.value)} disabled={busy} required/>
+      <fieldset className="template-colors"><legend>{t('Colour')}</legend>{templatePalette.map(value => <button key={value} type="button" aria-label={t('Colour {value}', { value })} aria-pressed={color === value} style={{ '--swatch-color': value }} disabled={busy} onClick={() => { setColor(value); setColorPicked(true); }}>{color === value && <Icon name="check" size={14}/>}</button>)}</fieldset>
+      <label htmlFor="template-instructions">{t('Additional instructions')}</label>
+      <textarea id="template-instructions" value={instructions} maxLength={100000} placeholder={t('Describe the result you want this node to create…')} onChange={event => setInstructions(event.target.value)} disabled={busy} rows={5}/>
+      <p className="template-hint">{t('These instructions are included with the text you write in the node.')}</p>
+      <div className="template-reference-heading"><span>{t('Reference images')} <small>{assets.length}/10</small></span><button type="button" onClick={() => imageInput.current?.click()} disabled={busy || assets.length >= 10}>{t('+ Add images')}</button></div>
+      <input ref={imageInput} className="template-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={upload} tabIndex={-1} aria-label={t('Choose reference images')}/>
+      {assets.length ? <div className="template-reference-grid">{assets.map((asset, index) => <div className="template-reference" key={`${asset}-${index}`}><img src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('Reference {number}', { number: index + 1 })}/><button type="button" aria-label={t('Remove reference {number}', { number: index + 1 })} data-tooltip={t('Remove reference')} disabled={busy} onClick={() => setAssets(current => current.filter((_, i) => i !== index))}><Icon name="close" size={13}/></button></div>)}</div> : <p className="template-hint">{t('Optional. These images are included every time you run the node.')}</p>}
       {error && <p className="template-error" role="alert">{error}</p>}
-      <div className="template-editor-actions">{template && <button className="template-delete" type="button" disabled={busy} onClick={() => { if (window.confirm('Delete this custom node? Nodes already on your boards will keep their settings.')) perform(onDelete); }}>Delete</button>}<button type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary-button" type="submit" disabled={busy || !name.trim()}>{busy ? 'Working…' : 'Save custom node'}</button></div>
+      <div className="template-editor-actions">{template && <button className="template-delete" type="button" disabled={busy} onClick={() => { if (window.confirm(t('Delete this custom node? Nodes already on your boards will keep their settings.'))) perform(onDelete); }}>{t('Delete')}</button>}<button type="button" disabled={busy} onClick={onClose}>{t('Cancel')}</button><button className="primary-button" type="submit" disabled={busy || !name.trim()}>{busy ? t('Working…') : t('Save custom node')}</button></div>
     </form>
   </div>;
 }
@@ -462,47 +529,51 @@ function TemplateDetails({ template, library = false, onClose }) {
   return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="template-details-title" onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
     <div className="template-details">
       <h2 id="template-details-title">{template.name}</h2>
-      <p className="template-hint">{library ? 'A custom node saved on this board.' : 'These settings are saved in this node. Editing the library won’t change them.'}</p>
-      <h3>Additional instructions</h3><p className="template-instructions">{template.instructions || 'No additional instructions'}</p>
-      <h3>Reference images</h3>
-      {template.assets?.length ? <div className="template-reference-grid">{template.assets.map((asset, index) => <div className="template-reference" key={`${asset}-${index}`}><img src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`Reference ${index + 1}`}/></div>)}</div> : <p className="template-hint">No saved reference images</p>}
-      <div className="template-details-actions"><button className="primary-button" autoFocus onClick={onClose}>Done</button></div>
+      <p className="template-hint">{library ? t('A custom node saved on this board.') : t('These settings are saved in this node. Editing the library won’t change them.')}</p>
+      <h3>{t('Additional instructions')}</h3><p className="template-instructions">{template.instructions || t('No additional instructions')}</p>
+      <h3>{t('Reference images')}</h3>
+      {template.assets?.length ? <div className="template-reference-grid">{template.assets.map((asset, index) => <div className="template-reference" key={`${asset}-${index}`}><img src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('Reference {number}', { number: index + 1 })}/></div>)}</div> : <p className="template-hint">{t('No saved reference images')}</p>}
+      <div className="template-details-actions"><button className="primary-button" autoFocus onClick={onClose}>{t('Done')}</button></div>
     </div>
   </div>;
 }
 
-function AgentConnect({ onClose }) {
-  const [setup, setSetup] = useState(null), [error, setError] = useState(''), [copyStatus, setCopyStatus] = useState('');
-  const promptRef = useRef(null);
+// Desktop agents reach the app's local stdio server; on team boards they connect to the site's MCP address and sign in there.
+function AgentConnect({ onClose, cloud = false }) {
+  const [setup, setSetup] = useState(cloud ? { available: true } : null), [error, setError] = useState(''), [copyStatus, setCopyStatus] = useState('');
+  const promptRef = useRef(null), endpoint = `${location.origin}/mcp`;
   useEffect(() => {
+    if (cloud) return;
     let active = true;
-    api('/api/desktop/mcp-setup').then(value => { if (active) setSetup(value); }).catch(() => { if (active) setError('Could not load connection details. Restart Concept Graph and try again.'); });
+    api('/api/desktop/mcp-setup').then(value => { if (active) setSetup(value); }).catch(() => { if (active) setError(t('Could not load connection details. Restart Concept Graph and try again.')); });
     return () => { active = false; };
-  }, []);
-  const prompt = setup?.command && Array.isArray(setup.args) ? `Connect your current agent to the local Concept Graph MCP server using stdio. Concept Graph is installed on this computer. Use this configuration:\n${JSON.stringify({ command: setup.command, args: setup.args }, null, 2)}\nCheck the existing concept-graph configuration for your client; register it if missing or update outdated paths if needed, preserving other settings. Verify the connection and tell me if a new session or restart is needed. Keep Concept Graph open, and do not expose credentials or board contents.` : '';
+  }, [cloud]);
+  const prompt = cloud ? `Connect your current agent to my Concept Graph team boards. It is a remote MCP server (Streamable HTTP) at ${endpoint} that signs in with OAuth; no API key is needed. Register it as "concept-graph" in your MCP client, preserving other settings: in Claude Code, claude mcp add --transport http --scope user concept-graph ${endpoint}; in Codex, codex mcp add concept-graph --url ${endpoint}, then codex mcp login concept-graph. Then start the sign-in so I can approve access in my browser, and tell me if a new session or restart is needed. Do not expose tokens or board contents.`
+    : setup?.command && Array.isArray(setup.args) ? `Connect your current agent to the local Concept Graph MCP server using stdio. Concept Graph is installed on this computer. Use this configuration:\n${JSON.stringify({ command: setup.command, args: setup.args }, null, 2)}\nCheck the existing concept-graph configuration for your client; register it if missing or update outdated paths if needed, preserving other settings. Verify the connection and tell me if a new session or restart is needed. Keep Concept Graph open, and do not expose credentials or board contents.` : '';
   const copy = async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(prompt);
-      setCopyStatus('Copied! Paste it into your agent.');
+      setCopyStatus(t('Copied! Paste it into your agent.'));
     } catch {
       promptRef.current?.focus();
       promptRef.current?.select();
       try {
         if (!document.execCommand('copy')) throw new Error('Copy failed');
-        setCopyStatus('Copied! Paste it into your agent.');
-      } catch { setCopyStatus('Select the text and copy it using your keyboard.'); }
+        setCopyStatus(t('Copied! Paste it into your agent.'));
+      } catch { setCopyStatus(t('Select the text and copy it using your keyboard.')); }
     }
   };
   return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="agent-connect-title" onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
     <div className="agent-connect-card">
-      <div className="agent-connect-heading"><div><span className="eyebrow">MCP CONNECTION</span><h2 id="agent-connect-title">Connect MCP</h2></div><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><Icon name="close" size={17}/></button></div>
-      <p>Copy this message and send it to Codex or Claude Code running on this computer. The agent can set up the connection for you.</p>
-      {error ? <p className="agent-connect-error" role="alert">{error}</p> : !setup ? <p>Loading connection details…</p> : <>
-        {!setup.available && <p className="agent-connect-error" role="alert">MCP is unavailable in this window. Close any other Concept Graph window and restart the app.</p>}
-        {prompt && <><label htmlFor="agent-connect-prompt">Message for your agent</label><textarea id="agent-connect-prompt" ref={promptRef} readOnly value={prompt} rows={7} onFocus={event => event.target.select()}/><div className="agent-connect-actions"><button className="primary-button" autoFocus type="button" onClick={copy}><Icon name="copy" size={15}/> Copy message</button><span role="status">{copyStatus}</span></div></>}
+      <div className="agent-connect-heading"><div><span className="eyebrow">{t('MCP CONNECTION')}</span><h2 id="agent-connect-title">{t('Connect MCP')}</h2></div><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><Icon name="close" size={17}/></button></div>
+      <p>{cloud ? t('Copy this message and send it to Claude Code, Codex or another agent. It connects with your Google sign-in, and you approve access in the browser.') : t('Copy this message and send it to Codex or Claude Code running on this computer. The agent can set up the connection for you.')}</p>
+      {error ? <p className="agent-connect-error" role="alert">{error}</p> : !setup ? <p>{t('Loading connection details…')}</p> : <>
+        {!setup.available && <p className="agent-connect-error" role="alert">{t('MCP is unavailable in this window. Close any other Concept Graph window and restart the app.')}</p>}
+        {prompt && <><label htmlFor="agent-connect-prompt">{t('Message for your agent')}</label><textarea id="agent-connect-prompt" ref={promptRef} readOnly value={prompt} rows={7} onFocus={event => event.target.select()}/><div className="agent-connect-actions"><button className="primary-button" autoFocus type="button" onClick={copy}><Icon name="copy" size={15}/> {t('Copy message')}</button><span role="status">{copyStatus}</span></div></>}
       </>}
-      <p className="agent-connect-note">Keep Concept Graph open. A connected agent can read and change your boards and images, and start generation.</p>
+      {cloud && <p>{t('In apps such as Claude Desktop, add a custom connector with this address: {url}', { url: endpoint })}</p>}
+      <p className="agent-connect-note">{cloud ? t('A connected agent acts as you: it can read and change every board you can open, and start Nano Banana generation.') : t('Keep Concept Graph open. A connected agent can read and change your boards and images, and start generation.')}</p>
     </div>
   </div>;
 }
@@ -516,11 +587,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const runRef = useRef(runs); runRef.current = runs;
   const [groups, setGroups] = useState([]), [focusId, setFocusId] = useState(null);
   const [sections, setSections] = useState(noSections), [renaming, setRenaming] = useState(null), [tool, setTool] = useState('select');
+  const [viewerSlides, setViewerSlides] = useState(() => new Map()), [learnedAspects, setLearnedAspects] = useState(() => new Map());
   const [pen, setPen] = useState({ color: penPalette[0], width: 4 }), [stickyColor, setStickyColor] = useState(stickyPalette[0]), [stamp, setStamp] = useState('like');
+  const [shape, setShape] = useState({ kind: 'rectangle', color: shapePalette[0] }), [arrowColor, setArrowColor] = useState(arrowPalette[0]), arrowDraft = useRef(null);
   const strokePreview = useRef(null), stroke = useRef(null), toolRef = useRef('select'), sectionPreview = useRef(null), sectionDraft = useRef(null), sectionMoves = useRef(new Map());
-  const chooseTool = value => { if (stroke.current || sectionDraft.current) moving.current = false; toolRef.current = value; setTool(value); stroke.current = null; sectionDraft.current = null; strokePreview.current?.show([]); sectionPreview.current?.show(null); };
+  const chooseTool = value => { if (stroke.current || sectionDraft.current || arrowDraft.current) moving.current = false; toolRef.current = value; setTool(value); stroke.current = null; sectionDraft.current = null; arrowDraft.current = null; strokePreview.current?.show([]); sectionPreview.current?.show(null); };
   const [focusControl, setFocusControl] = useState('text'), [highlight, setHighlight] = useState(null), [helperOffline, setHelperOffline] = useState(false);
-  const canvasElement = useRef(null), highlightTimer = useRef(null), pendingIntent = useRef(null), alive = useRef(true), runAction = useRef(null), generationStarting = useRef(false);
+  const viewOnlyNoticed = useRef(0), imageDrop = useRef(null), canvasElement = useRef(null), highlightTimer = useRef(null), pendingIntent = useRef(null), alive = useRef(true), runAction = useRef(null), generationStarting = useRef(false);
   const guide = useGettingStarted(gettingStartedKey(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local'));
   const groupRef = useRef([]), sectionRef = useRef(noSections);
   // Pages are part of the board; the open page and its viewport are this person's preference.
@@ -549,7 +622,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const [mcpBusy, setMcpBusy] = useState(false);
   const editorId = useRef(null), editorReady = useRef(false), mcpLocked = useRef(false), mcpBarrier = useRef(null), mcpUiRequest = useRef(null), moving = useRef(false), connecting = useRef(false);
   const boardFileInput = useRef(null);
-  const [boardForm, setBoardForm] = useState(null), [nameDraft, setNameDraft] = useState('');
+  const [boardForm, setBoardForm] = useState(null), [nameDraft, setNameDraft] = useState(''), [deleteName, setDeleteName] = useState('');
   const originalBoardName = useRef('');
   const switchingRef = useRef(false), uploads = useRef(0);
   const boardPath = `/api/boards/${boardId}`;
@@ -609,7 +682,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const show = list => setTemplates(current => JSON.stringify(current) === JSON.stringify(list) ? current : list);
     if (cloudSession) { show(cloudSession.templates.read()); setTemplatesError(''); return; }
     try { show((await api('/api/templates')).templates); setTemplatesError(''); }
-    catch { setTemplatesError('Custom nodes unavailable.'); }
+    catch { setTemplatesError(t('Custom nodes unavailable.')); }
   }, []);
   // A cloud board's custom nodes live in its document and arrive with everyone's other changes.
   useEffect(() => { refreshTemplates(); return cloudSession?.templates.subscribe(refreshTemplates); }, [refreshTemplates]);
@@ -694,8 +767,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const trackOwnRun = runId => { effects.ownRun(runId); guide.report({ type: 'run-started', id: runId }); };
   useEffect(() => {
-    if (cloudSession) cloudSession.onOwnRun = trackOwnRun;
-    return () => { if (cloudSession) cloudSession.onOwnRun = null; };
+    if (cloudSession) { cloudSession.onOwnRun = trackOwnRun; cloudSession.onAgentRun = nodeId => agentRunRef.current(nodeId); }
+    return () => { if (cloudSession) cloudSession.onOwnRun = cloudSession.onAgentRun = null; };
   }, []);
   useEffect(() => { for (const run of runs) guide.report({ type: 'run-finished', run }); }, [runs, guide.state.ownRuns]);
   useEffect(() => { if (helperNeeded && readiness.key === 'ready') guide.report({ type: 'helper' }); }, [readiness.key]);
@@ -721,7 +794,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (pairing || readiness.key !== 'ready' || !pendingIntent.current) return;
     const intent = pendingIntent.current; pendingIntent.current = null;
     if (intentUnchanged(intent, currentGraph(), boardId)) runAction.current(intent.nodeId, intent);
-    else { focusNode(intent.nodeId); notify('Prompt changed — review and click Generate'); }
+    else { focusNode(intent.nodeId); notify(t('Prompt changed — review and click Generate')); }
   }, [readiness.key, pairing]);
   useEffect(() => {
     if (!login || !helperNeeded) return;
@@ -760,7 +833,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const markDirty = (drag = false) => {
     if (cloudSession) {
       // A viewer's change is undone at once: nothing is written, and reading the board back restores it.
-      if (readOnlyRef.current) { syncCloud(); return; }
+      if (readOnlyRef.current) {
+        syncCloud();
+        if (Date.now() - viewOnlyNoticed.current > 8000) { viewOnlyNoticed.current = Date.now(); notify(t('You can only view this board. Ask its owner for edit access.')); }
+        return;
+      }
       dirty.current = true;
       if (!cloudSession.provider.wsconnected || !cloudSession.provider.synced) cloudOfflineEdits.current = true;
       if (!drag) syncCloud();
@@ -820,10 +897,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     putGroups(mergedGroups);
     putSections(mergeSections(sectionRef.current, remote.sections || [], base.current.sections || []));
     base.current = remote;
-    if (newNodes.length) notify(`${newNodes.length} new image${newNodes.length === 1 ? '' : 's'} added to your canvas`);
+    const newImages = newNodes.filter(node => node.type === 'image').length;
+    if (newImages) notify(plural(newImages, '{count} new image added to your canvas', '{count} new images added to your canvas'));
+    else if (newNodes.some(node => node.data.runId)) notify(t('New description added to your canvas'));
   };
   const saveNow = async () => {
-    if (cloudSession) { syncCloud(); if (cloudOfflineEdits.current && !cloudSession.provider.synced) throw new Error('Reconnect before leaving this board so your offline edits can sync.'); return; }
+    if (cloudSession) { syncCloud(); if (cloudOfflineEdits.current && !cloudSession.provider.synced) throw new Error(t('Reconnect before leaving this board so your offline edits can sync.')); return; }
     clearTimeout(saveTimer.current);
     if (saving.current) { await saving.current; if (dirty.current) return saveNow(); return; }
     if (!dirty.current) return;
@@ -845,7 +924,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
           mergeRemote(error.value.graph);
         }
       }
-      if (dirty.current) throw new Error('Canvas is changing too quickly to save. Try again in a moment.');
+      if (dirty.current) throw new Error(t('Canvas is changing too quickly to save. Try again in a moment.'));
     };
     saving.current = save();
     try { await saving.current; } finally { saving.current = null; }
@@ -871,8 +950,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   useEffect(() => {
     if (cloudSession) {
       cloudSession.flush = syncCloud;
+      cloudSession.follow = peerId => latest.current.followPeer(peerId);
       cloudSession.leave = callback => {
-        if (uploads.current || quitState.current.starting) { notify('Wait for the current transfer to finish before leaving this board.'); return; }
+        if (uploads.current || quitState.current.starting) { notify(t('Wait for the current transfer to finish before leaving this board.')); return; }
         pendingIntent.current = null;
         saveNow().then(callback).catch(error => notify(error.message));
       };
@@ -953,8 +1033,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       events.addEventListener('limits-changed', () => setLimitsVersion(version => version + 1));
       events.addEventListener('login', event => {
         const result = JSON.parse(event.data); setLogin(null);
-        if (result.success) notify('Signed in to ChatGPT.');
-        else if (result.reason !== 'cancelled') notify('Sign-in did not complete. Try again.');
+        if (result.success) notify(t('Signed in to ChatGPT.'));
+        else if (result.reason !== 'cancelled') notify(t('Sign-in did not complete. Try again.'));
       });
       events.addEventListener('graph', event => {
         if (mcpEnabled && !editorReady.current) { synchronize(); return; }
@@ -964,7 +1044,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         const run = JSON.parse(event.data);
         effects.observeRun(run, feedbackLive);
         setRuns(current => { const old = current.find(r => r.id === run.id); return old ? current.map(r => r.id === run.id ? { ...r, ...run } : r) : [...current, run]; });
-        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify('Some images have generic labels. Click a label to edit it.');
+        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify(t('Some images have generic labels. Click a label to edit it.'));
       });
       events.addEventListener('templates', refreshTemplates);
       events.addEventListener('mcp-prepare', async event => {
@@ -1078,19 +1158,34 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     };
   }, []);
 
-  const addText = (position, text = '', template = null) => {
+  const addText = (position, text = '', template = null, extra = {}) => {
     checkpoint();
-    const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || freeSpot(pageGraph(), flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 })), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}) } });
+    const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || freeSpot(pageGraph(), flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 })), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}), ...extra } });
     effects.createNodes([node.id]);
     putNodes(current => [...current.map(deselected), { ...node, selected: true }]); markDirty();
     focusNode(node.id); guide.report({ type: 'prompt' });
     return node;
   };
+  // From a folded slideshow a new prompt goes beside the card, not beside the hidden image.
+  const promptSpot = sourceId => {
+    const graph = pageGraph(), folded = graph.groups.find(group => group.collapsed && group.slideshow && group.nodeIds.includes(sourceId)), box = folded && frameBox(folded, graph.nodes);
+    return box ? freeSpot(graph, { x: box.x + box.width + 90, y: box.y }) : freePromptPosition(graph, sourceId);
+  };
+  // A describe node fed by the given images; from the sidebar, by the selected ones.
+  const addDescribe = (sourceIds = pageGraph().nodes.filter(node => node.selected && node.type === 'image').map(node => node.id)) => {
+    if (mcpLocked.current || !loaded || switchingRef.current) return;
+    try {
+      const sources = sourceIds.slice(0, 10), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, { task: describeTask });
+      if (!sources.length) return;
+      const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+      putEdges(current => [...current, ...added]); markDirty();
+    } catch (error) { notify(error.message); }
+  };
   const promptFrom = sourceId => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === sourceId)?.type)) return;
     try {
-      const node = addText(freePromptPosition(pageGraph(), sourceId));
+      const node = addText(promptSpot(sourceId));
       const edge = { id: id(), source: sourceId, target: node.id }; effects.createEdges([edge.id], [edge.target]);
       putEdges(current => [...current, edge]); markDirty();
       guide.report({ type: 'variation' });
@@ -1101,7 +1196,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const node = nodeRef.current.find(item => item.id === nodeId);
     const template = templateId ? templates.find(item => item.id === templateId) : null;
     if (!node || node.type !== 'text') return;
-    if (templateId && !template) { notify('Custom node no longer exists.'); return; }
+    if (templateId && !template) { notify(t('Custom node no longer exists.')); return; }
     if (!template && !node.data.template) return;
     checkpoint();
     putNodes(current => current.map(item => item.id === nodeId ? switchNodeTemplate(item, template) : item));
@@ -1126,6 +1221,18 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     setTemplates(current => current.filter(item => item.id !== existing.id));
     setTemplateForm(null);
   };
+  // Sidebar items can be dragged onto the board as well as clicked; what is dropped lands under the pointer.
+  const toolDrag = value => ({ draggable: true, onDragStart: event => { event.dataTransfer.setData(toolType, JSON.stringify(value)); event.dataTransfer.effectAllowed = 'copy'; } });
+  const dropTool = (raw, point) => {
+    let value;
+    try { value = JSON.parse(raw); } catch { return; }
+    const at = { x: point.x - 155, y: point.y - 40 };
+    if (value?.kind === 'text') addText(at);
+    else if (value?.kind === 'describe') addText(at, '', null, { task: describeTask });
+    else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template); }
+    // Images still come from a file; they are placed where the item was dropped.
+    else if (value?.kind === 'image') { imageDrop.current = point; fileInput.current.click(); }
+  };
   const addImages = async (files, position) => {
     if (readOnlyRef.current) return;
     checkpoint(); uploads.current++; setUploading(true);
@@ -1145,7 +1252,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try { copied = cloneSelection(selection, position, duplicate ? { nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, pages: pagesRef.current } : selection); }
     catch (error) { notify(error.message); return; }
     const copiedSections = (copied.sections || []).map(placeOnPage);
-    if (sectionRef.current.length + copiedSections.length > maxSections) { notify(`A board can have at most ${maxSections} sections.`); return; }
+    if (sectionRef.current.length + copiedSections.length > maxSections) { notify(t('A board can have at most {count} sections.', { count: maxSections })); return; }
     copied = { ...copied, nodes: stackOnTop(nodeRef.current, copied.nodes).map(placeOnPage) };
     checkpoint();
     effects.createNodes(copied.nodes.map(node => node.id)); effects.createEdges(copied.edges.map(edge => edge.id), copied.edges.map(edge => edge.target));
@@ -1164,7 +1271,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const known = new Set(sectionRef.current.map(section => section.id)), sectionIds = new Set(ids.filter(id => known.has(id)));
     const held = sectionIds.size ? sectionContents(pageGraph(), sectionIds, measureView(viewCache.current)) : null;
     const removed = new Set([...ids, ...(held ? [...held.nodeIds, ...held.sectionIds] : [])]);
-    const next = reconcileStampAttachments(nodeRef.current, nodeRef.current.filter(node => !removed.has(node.id)));
+    const next = detachArrows(nodeRef.current, reconcileStampAttachments(nodeRef.current, nodeRef.current.filter(node => !removed.has(node.id))), measureView(viewCache.current));
     const retained = new Set(next.map(node => node.id));
     for (const node of nodeRef.current) if (!retained.has(node.id)) removed.add(node.id);
     effects.remove([...removed]); putNodes(next);
@@ -1213,13 +1320,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     putGroups(current => current.map(group => {
       if (group.id !== groupId) return group;
       const next = { ...group, ...patch };
-      if (next.color === undefined) delete next.color;
+      for (const key of Object.keys(patch)) if (next[key] === undefined) delete next[key];
       return next;
     })); markDirty();
   };
   const addSection = rect => {
     if (mcpLocked.current || !loaded || switchingRef.current) return null;
-    if (sectionRef.current.length >= maxSections) { notify(`A board can have at most ${maxSections} sections.`); return null; }
+    if (sectionRef.current.length >= maxSections) { notify(t('A board can have at most {count} sections.', { count: maxSections })); return null; }
     const section = placeOnPage({ id: id(), name: nextSectionName(sectionRef.current), x: rect.x, y: rect.y, width: Math.max(sectionMinimum.width, rect.width), height: Math.max(sectionMinimum.height, rect.height), selected: true });
     checkpoint();
     putNodes(current => current.some(node => node.selected) ? current.map(deselected) : current); putGroups(current => current.map(deselected));
@@ -1263,15 +1370,22 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (!isAnnotation(node)) return;
     checkpoint(); putNodes(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node)); markDirty();
   };
+  // Moves one end of an arrow; on a node it holds on to that node, elsewhere it stays where it was dropped.
+  const setArrowEnd = (arrowId, end, value) => {
+    const node = nodeRef.current.find(item => item.id === arrowId);
+    if (mcpLocked.current || node?.type !== 'arrow') return;
+    const data = { ...node.data, [end]: value.node === arrowId ? { x: value.x, y: value.y } : value };
+    checkpoint(); putNodes(current => current.map(item => item.id === arrowId ? { ...item, position: arrowPosition(data.from, data.to), data } : item)); markDirty();
+  };
   const addAnnotation = value => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
-    if (nodeRef.current.length >= maxNodes) { notify('Canvas is too large.'); return; }
+    if (nodeRef.current.length >= maxNodes) { notify(t('Canvas is too large.')); return; }
     const author = value.type !== 'drawing' && boardAuthor(cloudSession?.user);
     const node = placeOnPage({ ...value, id: id(), z: nextLayer(nodeRef.current), selected: true, data: { ...value.data, createdAt: new Date().toISOString(), ...(author ? { author } : {}) } });
     checkpoint();
     putNodes(current => [...current.map(deselected), node]);
     putGroups(current => current.map(deselected)); deselectSections(); markDirty();
-    if (node.type === 'sticky') { setFocusControl('sticky'); setFocusId(node.id); }
+    if (['sticky', 'shape'].includes(node.type)) { setFocusControl('sticky'); setFocusId(node.id); }
   };
   // Menu actions on an unselected node arrange only that node, like Figma's right-click selection.
   const arrange = (action, nodeId) => {
@@ -1292,9 +1406,15 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     } else if (toolRef.current === 'sticky') {
       finishBoardEdit();
       addAnnotation({ type: 'sticky', position: { x: position.x - 100, y: position.y - 100 }, data: { text: '', color: stickyColor } }); chooseTool('select');
-    } else if (toolRef.current === 'section') {
+    } else if (toolRef.current === 'section' || toolRef.current === 'shape') {
       finishBoardEdit(); moving.current = true;
-      sectionDraft.current = { pointerId: event.pointerId, start: position, screen: { x: event.clientX, y: event.clientY } };
+      sectionDraft.current = { pointerId: event.pointerId, start: position, screen: { x: event.clientX, y: event.clientY }, tool: toolRef.current };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } else if (toolRef.current === 'arrow') {
+      // FigJam's connector: press on a thing (or anywhere), drag, release on another thing; ends hold on to what they touch.
+      finishBoardEdit(); moving.current = true;
+      const node = arrowTargetAt(flow.getNodes(), position);
+      arrowDraft.current = { pointerId: event.pointerId, from: { x: position.x, y: position.y, ...(node ? { node } : {}) }, screen: { x: event.clientX, y: event.clientY } };
       event.currentTarget.setPointerCapture(event.pointerId);
     } else {
       const attachedTo = stampTargetAt(flow.getNodes(), position);
@@ -1308,6 +1428,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const annotationMove = event => {
     const draft = sectionDraft.current;
     if (draft?.pointerId === event.pointerId) { event.stopPropagation(); sectionPreview.current?.show(draftRect(draft, event)); return; }
+    const line = arrowDraft.current;
+    if (line?.pointerId === event.pointerId) {
+      event.stopPropagation();
+      const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      strokePreview.current?.show([[line.from.x, line.from.y], [point.x, point.y]], { color: arrowColor, width: 2.5 });
+      return;
+    }
     const current = stroke.current;
     if (!current || current.pointerId !== event.pointerId) return;
     event.stopPropagation();
@@ -1326,11 +1453,26 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       event.stopPropagation(); moving.current = false; sectionDraft.current = null; sectionPreview.current?.show(null);
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       if (cancelled) return;
-      // A click, or a drag of only a few pixels, makes a default-size section with its corner there.
+      // A click, or a drag of only a few pixels, makes a default-size section (or shape, centred there) with its corner there.
       const dragged = Math.hypot(event.clientX - draft.screen.x, event.clientY - draft.screen.y) >= 6;
-      addSection(dragged ? draftRect(draft, event) : { ...draft.start, ...sectionDefault });
-      // Back to Select after the click this release produces, so that click cannot deselect the new section.
-      setTimeout(() => { if (toolRef.current === 'section') chooseTool('select'); });
+      if (draft.tool === 'shape') {
+        const rect = dragged ? draftRect(draft, event) : { x: draft.start.x - shapeDefault.width / 2, y: draft.start.y - shapeDefault.height / 2, ...shapeDefault };
+        addAnnotation({ type: 'shape', position: { x: rect.x, y: rect.y }, data: { shape: shape.kind, width: Math.min(4000, Math.max(40, rect.width)), height: Math.min(4000, Math.max(40, rect.height)), color: shape.color, text: '' } });
+      } else addSection(dragged ? draftRect(draft, event) : { ...draft.start, ...sectionDefault });
+      // Back to Select after the click this release produces, so that click cannot deselect the new item.
+      setTimeout(() => { if (['section', 'shape'].includes(toolRef.current)) chooseTool('select'); });
+      return;
+    }
+    const line = arrowDraft.current;
+    if (line?.pointerId === event.pointerId) {
+      event.stopPropagation(); moving.current = false; arrowDraft.current = null; strokePreview.current?.show([]);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      if (cancelled) return;
+      const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), node = arrowTargetAt(flow.getNodes(), point);
+      // A click draws a short arrow to the right; a drag that ends on its own start node does too.
+      const short = Math.hypot(event.clientX - line.screen.x, event.clientY - line.screen.y) < 8 || (node && node === line.from.node);
+      const to = short ? { x: line.from.x + 160, y: line.from.y } : { x: point.x, y: point.y, ...(node ? { node } : {}) };
+      addAnnotation({ type: 'arrow', position: arrowPosition(line.from, to), data: { from: line.from, to, color: arrowColor } });
       return;
     }
     const current = stroke.current;
@@ -1344,6 +1486,19 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const annotationClick = event => {
     if (toolRef.current !== 'select' && event.target.closest('.react-flow')) { event.preventDefault(); event.stopPropagation(); }
+  };
+  // Show all on a cut-off prompt: the card grows to its whole text (its bottom edge can still be dragged back up).
+  const setPromptHeight = (nodeId, height) => {
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (mcpLocked.current || node?.type !== 'text') return;
+    checkpoint(); putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, height: Math.round(Math.min(4000, Math.max(80, height))) } } : item)); markDirty();
+  };
+  const setVariants = (nodeId, count) => {
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (mcpLocked.current || node?.type !== 'text' || (node.data.variants || 1) === count) return;
+    checkpoint();
+    putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (count > 1) data.variants = count; else delete data.variants; return { ...item, data }; }));
+    markDirty();
   };
   const setGenerator = (nodeId, generator) => {
     const node = nodeRef.current.find(item => item.id === nodeId);
@@ -1366,6 +1521,22 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     putGroups(current => current.map(group => group.id === groupId ? { ...group, collapsed: !group.collapsed } : group)); markDirty();
   };
   const ungroup = groupId => { checkpoint(); putGroups(current => current.filter(group => group.id !== groupId)); markDirty(); };
+  const toggleSlideshow = groupId => { const group = groupRef.current.find(item => item.id === groupId); if (group) editGroup(groupId, group.slideshow ? { slideshow: undefined, slide: undefined } : { slideshow: true }); };
+  // The arrows of a folded slideshow step through its images. A viewer's choice stays on their screen and is never written.
+  const showSlide = (groupId, step) => {
+    if (mcpLocked.current) return;
+    const group = groupRef.current.find(item => item.id === groupId), byId = new Map(nodeRef.current.map(node => [node.id, node]));
+    if (!group) return;
+    if (readOnlyRef.current) { setViewerSlides(current => new Map(current).set(groupId, steppedSlide({ ...group, slide: current.get(groupId) ?? group.slide }, byId, step))); return; }
+    const slide = steppedSlide(group, byId, step);
+    if (!slide || slide === group.slide) return;
+    checkpoint(); putGroups(current => current.map(item => item.id === groupId ? { ...item, slide } : item)); markDirty();
+  };
+  // A connection dragged from a folded slideshow starts at the image it shows.
+  const slideSource = nodeId => {
+    const group = groupRef.current.find(item => item.id === nodeId);
+    return group?.slideshow && group.collapsed ? slideshowState(group, new Map(nodeRef.current.map(node => [node.id, node]))).node?.id : nodeId;
+  };
   const autoAlign = () => {
     const scoped = pageGraph(), ids = alignIds(scoped), next = alignSelection(scoped.nodes, scoped.edges, scoped.groups, ids);
     if (next === scoped.nodes) return;
@@ -1375,7 +1546,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const addPage = () => {
     if (mcpLocked.current || !loaded || switchingRef.current) return null;
-    if (pagesRef.current.length >= maxPages) { notify(`A board can have at most ${maxPages} pages.`); return null; }
+    if (pagesRef.current.length >= maxPages) { notify(t('A board can have at most {count} pages.', { count: maxPages })); return null; }
     checkpoint();
     const page = { id: id(), name: nextPageName(pagesRef.current) };
     putPages(current => [...current, page]); markDirty(); showPage(page.id);
@@ -1393,16 +1564,16 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (mcpLocked.current) return;
     const page = pagesRef.current.find(item => item.id === pageId);
     if (!page) return;
-    if (pagesRef.current.length < 2) { notify('A board needs at least one page.'); return; }
-    if (pageBusy(pageId)) { notify('Wait for generation on this page to finish before deleting it.'); return; }
+    if (pagesRef.current.length < 2) { notify(t('A board needs at least one page.')); return; }
+    if (pageBusy(pageId)) { notify(t('Wait for generation on this page to finish before deleting it.')); return; }
     setPageDelete({ id: page.id, name: page.name, count: nodeRef.current.filter(node => nodePage(node, pagesRef.current) === pageId).length, returnFocus: document.activeElement });
   };
   const deletePage = pageId => {
     if (mcpLocked.current || pagesRef.current.length < 2 || !pagesRef.current.some(page => page.id === pageId)) return;
-    if (pageBusy(pageId)) { notify('Wait for generation on this page to finish before deleting it.'); return; }
+    if (pageBusy(pageId)) { notify(t('Wait for generation on this page to finish before deleting it.')); return; }
     checkpoint();
     const list = pagesRef.current, index = list.findIndex(page => page.id === pageId), removed = new Set(nodeRef.current.filter(node => nodePage(node, list) === pageId).map(node => node.id));
-    const next = reconcileStampAttachments(nodeRef.current, nodeRef.current.filter(node => !removed.has(node.id)));
+    const next = detachArrows(nodeRef.current, reconcileStampAttachments(nodeRef.current, nodeRef.current.filter(node => !removed.has(node.id))), measureView(viewCache.current));
     effects.remove([...removed]); putNodes(next);
     putEdges(current => current.filter(edge => !removed.has(edge.source) && !removed.has(edge.target)));
     putGroups(pruneGroups(groupRef.current, next));
@@ -1420,6 +1591,36 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (targets.length) flow.fitView({ nodes: targets, duration: 350, padding: .25, minZoom: fitFloor(), maxZoom: 1 });
     });
   };
+  // FigJam selection: the box picks what it touches, Shift flips that against the selection the drag started from, and a
+  // Shift-click on empty canvas keeps the selection. React Flow's box would pick whole bounding boxes and always start
+  // afresh, so while the box is out the board's pick (`ids`, see the store subscription) overrules each of React Flow's.
+  // Its picks are applied first rather than dropped: React Flow has already marked them in its own copy of the cards,
+  // which only a changed card brings back in step.
+  const marquee = useRef(null), shiftGrab = useRef(null), nodeDragged = useRef(false);
+  const marqueeDown = event => {
+    const onPane = toolRef.current === 'select' && event.button === 0 && event.target.classList?.contains('react-flow__pane');
+    const base = onPane && event.shiftKey ? new Set([...nodeRef.current, ...groupRef.current, ...sectionRef.current].filter(item => item.selected).map(item => item.id)) : null;
+    marquee.current = onPane ? { base, ids: base } : null;
+    // The click's own modifiers decide, even when the window missed the key press (it had no focus yet).
+    if (toolRef.current === 'select') flowStore.setState({ multiSelectionActive: event.shiftKey || event.metaKey });
+    // React Flow drops a selected card that a Shift or ⌘ drag starts on; FigJam keeps it and moves the whole selection.
+    shiftGrab.current = (event.shiftKey || event.metaKey) && event.target.closest?.('.react-flow__node.selected')?.dataset.id;
+    nodeDragged.current = false;
+  };
+  const boxSelect = () => {
+    const ids = marquee.current?.ids, { nodeLookup, edgeLookup } = flowStore.getState();
+    if (!ids) return;
+    // Connections follow their cards, as React Flow's box does.
+    const edgeIds = new Set([...edgeLookup.values()].filter(edge => ids.has(edge.source) || ids.has(edge.target)).map(edge => edge.id));
+    for (const [list, put, picked, scope] of [[nodeRef, putNodes, ids, nodeLookup], [groupRef, putGroups, ids, nodeLookup], [sectionRef, putSections, ids, nodeLookup], [edgeRef, putEdges, edgeIds, edgeLookup]]) {
+      const next = reselect(list.current, picked, scope);
+      if (next !== list.current) put(next);
+    }
+  };
+  // A plain click (a drag moves them all) on one of several selected items leaves just that one selected, as in FigJam.
+  const nodeClick = (event, node) => { if (!nodeDragged.current && !event.shiftKey && !event.metaKey && node.selected && [...flowStore.getState().nodeLookup.values()].some(item => item.selected && item.id !== node.id)) flowStore.getState().addSelectedNodes([node.id]); };
+  // Shift-click in a text field extends its text selection; it must not also add or remove the card.
+  const shiftTextClick = event => { if (event.shiftKey && event.target.closest?.('textarea,input,[contenteditable="true"]')) event.stopPropagation(); };
   const nodesChanged = changes => {
     if (mcpLocked.current && changes.some(change => ['position', 'remove', 'add', 'replace', 'select'].includes(change.type) || (change.type === 'dimensions' && change.resizing !== undefined))) return;
     const groupIds = new Set(groupRef.current.map(group => group.id)), sectionIds = new Set(sectionRef.current.map(section => section.id)), moved = new Set();
@@ -1451,15 +1652,23 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       }
       if (list !== sectionRef.current) putSections(list);
     }
-    putNodes(reconcileStampAttachments(before, applyNodeChanges(changes.filter(change => !groupIds.has(change.id) && !sectionIds.has(change.id) && !(change.type === 'position' && moved.has(change.id))), next)));
+    // A shape's resize handles change its stored size, and a prompt's bottom edge its stored height; cards are drawn from these.
+    const resizedShapes = changes.filter(change => change.type === 'dimensions' && change.dimensions && (change.resizing !== undefined || change.setAttributes) && ['shape', 'text'].includes(before.find(node => node.id === change.id)?.type));
+    if (resizedShapes.length) {
+      const sizes = new Map(resizedShapes.map(change => [change.id, change.dimensions])), fit = (value, min) => Math.round(Math.min(4000, Math.max(min, value)));
+      next = next.map(node => !sizes.has(node.id) ? node : node.type === 'text' ? { ...node, data: { ...node.data, height: fit(sizes.get(node.id).height, textHeights.min) } }
+        : { ...node, data: { ...node.data, width: fit(sizes.get(node.id).width, 40), height: fit(sizes.get(node.id).height, 40) } });
+    }
+    putNodes(reconcileArrows(before, reconcileStampAttachments(before, applyNodeChanges(changes.filter(change => !groupIds.has(change.id) && !sectionIds.has(change.id) && !resizedShapes.includes(change) && !(change.type === 'position' && moved.has(change.id))), next))));
     if (changes.some(change => change.type === 'remove')) {
       const retained = new Set(nodeRef.current.map(node => node.id));
       effects.remove(before.filter(node => !retained.has(node.id)).map(node => node.id));
       putEdges(current => current.filter(edge => retained.has(edge.source) && retained.has(edge.target)));
       putGroups(pruneGroups(groupRef.current, nodeRef.current));
     }
-    const resized = sectionChanges.some(change => change.type === 'dimensions' && change.resizing !== undefined);
+    const resized = resizedShapes.length > 0 || sectionChanges.some(change => change.type === 'dimensions' && change.resizing !== undefined);
     if (resized || changes.some(change => change.type === 'position' || change.type === 'remove')) markDirty(cloud && changes.every(change => change.type !== 'remove') && changes.some(change => change.dragging || change.resizing));
+    if (marquee.current?.ids) boxSelect();
   };
 
   const nodeDragStopped = (event, node) => {
@@ -1478,8 +1687,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (!node || mcpLocked.current) return;
     try {
       const copied = copyImageToClipboard(request(`/assets/${node.data.asset}`));
-      Promise.resolve(copied).then(() => notify('Image copied.')).catch(error => notify(error.message || 'Could not copy the image.'));
-    } catch (error) { notify(error.message || 'Could not copy the image.'); }
+      Promise.resolve(copied).then(() => notify(t('Image copied.'))).catch(error => notify(error.message || t('Could not copy the image.')));
+    } catch (error) { notify(error.message || t('Could not copy the image.')); }
   };
   // The open page's selection for copying; a selected section brings what it holds.
   const boardSelection = () => { const scoped = pageGraph(); return selectedGraph(scoped.nodes, scoped.edges, { sections: scoped.sections, groups: scoped.groups, measure: measureView(viewCache.current) }); };
@@ -1490,12 +1699,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const field = document.createElement('textarea');
       field.value = text; field.style.position = 'fixed'; field.style.opacity = '0'; document.body.appendChild(field); field.select();
       const ok = document.execCommand('copy'); field.remove();
-      if (!ok) throw new Error('Could not copy the ID.');
+      if (!ok) throw new Error(t('Could not copy the ID.'));
     };
     try {
-      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => notify('ID copied.')).catch(() => { try { fallback(); notify('ID copied.'); } catch { notify('Could not copy the ID.'); } });
-      else { fallback(); notify('ID copied.'); }
-    } catch { notify('Could not copy the ID.'); }
+      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => notify(t('ID copied.'))).catch(() => { try { fallback(); notify(t('ID copied.')); } catch { notify(t('Could not copy the ID.')); } });
+      else { fallback(); notify(t('ID copied.')); }
+    } catch { notify(t('Could not copy the ID.')); }
   };
 
   useEffect(() => {
@@ -1514,7 +1723,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         try {
           await Promise.all(assets.map(async asset => {
             const response = await request(`/assets/${asset}`, { method: cloud ? 'GET' : 'HEAD' });
-            if (!response.ok) throw new Error('A copied image is unavailable in this app installation.');
+            if (!response.ok) throw new Error(t('A copied image is unavailable in this app installation.'));
             if (cloud) response.body?.cancel().catch(() => {});
           }));
           insertSelection(selection, position);
@@ -1556,7 +1765,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const layer = layerShortcut(event);
       if (layer) { event.preventDefault(); arrange(layer); return; }
       if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        const tool = { v: 'select', p: 'pen', s: 'sticky', e: 'stamp' }[event.key.toLowerCase()];
+        const key = event.key.toLowerCase(), tool = { v: 'select', p: 'pen', s: 'sticky', e: 'stamp', r: 'shape', o: 'shape', l: 'arrow', x: 'arrow' }[key];
+        if (key === 'r' || key === 'o') setShape(current => ({ ...current, kind: key === 'r' ? 'rectangle' : 'ellipse' }));
         if (tool) { event.preventDefault(); chooseTool(tool); return; }
       }
       // FigJam's Shift S: wrap the selection in a section, or pick the Section tool. The physical key also works on layouts such as Ukrainian.
@@ -1581,8 +1791,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try { requested = generationIntent(currentGraph(), boardId, nodeId); }
     catch (error) { notify(error.message); return; }
     if (starting || generationStarting.current) return;
-    const nanoRun = cloud && usesNano(nodeRef.current.find(node => node.id === nodeId)?.data);
-    if (nanoRun && !nanoRef.current.ready) { notify(nanoRef.current.note); cloudSession.refreshNano?.(); return; }
+    const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesNano(runNode?.data);
+    if (nanoRun && !(isDescribe(runNode) ? nanoRef.current.selectable : nanoRef.current.ready)) { notify(nanoRef.current.note); cloudSession.refreshNano?.(); return; }
     if (!nanoRun && readinessRef.current.key !== 'ready') {
       pendingIntent.current = requested; fixReadiness();
       return;
@@ -1592,7 +1802,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     setStarting(nodeId);
     try {
       await saveNow();
-      if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); notify('Prompt changed — review and click Generate'); return; }
+      if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); notify(t('Prompt changed — review and click Generate')); return; }
       if (nanoRun) { await cloudSession.jobs.startNano(nodeId); cloudSession.refreshNano?.(); return; }
       if (cloudSession) { await cloudSession.jobs.start(nodeId, readinessRef.current.delegate); return; }
       const options = jsonOptions('POST', { nodeId, revision: base.current.revision });
@@ -1613,15 +1823,36 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     finally { generationStarting.current = false; setStarting(null); }
   };
   runAction.current = run;
+  // An agent the person connected over MCP generates through this tab, on whatever Codex Generate would use. Nothing opens
+  // here: what Generate would ask the person to fix goes back to the agent instead.
+  const agentRun = async nodeId => {
+    if (!alive.current || readOnlyRef.current) throw new Error('This board is view-only in the open tab.');
+    generationIntent(currentGraph(), boardId, nodeId);
+    const fix = { helper: 'Connect the Concept Graph helper on the open board first.', install: 'Install Codex from the open board first.', signin: 'Sign in to Codex on the open board first.' }[readinessRef.current.key];
+    if (readinessRef.current.key !== 'ready') throw new Error(fix || 'Codex is not ready on this computer. Check its connection on the open board.');
+    if (pairing || mcpLocked.current || generationStarting.current) throw new Error('Another generation is starting on the open board. Try again in a moment.');
+    effects.start(nodeId);
+    generationStarting.current = true; setStarting(nodeId);
+    try {
+      await saveNow();
+      const runId = await cloudSession.jobs.start(nodeId, readinessRef.current.delegate);
+      if (runId) notify(t('Your agent started a generation'));
+      return runId;
+    } catch (error) { effects.failedStart(); throw error; }
+    finally { generationStarting.current = false; setStarting(null); }
+  };
+  const agentRunRef = useRef(agentRun); agentRunRef.current = agentRun;
   const cancel = async runId => { pendingIntent.current = null; try { if (cloudSession) { if (!cloudSession.paired && !cloudSession.jobs.remote(runId)) return cloudSession.openPair(() => cancel(runId)); await cloudSession.jobs.cancel(runId); } else await api(`${boardPath}/runs/${runId}/cancel`, { method: 'POST' }); } catch (error) { notify(error.message); } };
   const connect = connection => {
     if (mcpLocked.current) return;
+    const source = slideSource(connection.source);
+    if (source !== connection.source) connection = { ...connection, source, sourceHandle: null };
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === connection.source)?.type)) return;
-    if (nodeRef.current.find(n => n.id === connection.target)?.type !== 'text') { notify('Connect inputs to a text prompt. Run creates image connections automatically.'); return; }
+    if (nodeRef.current.find(n => n.id === connection.target)?.type !== 'text') { notify(t('Connect inputs to a text prompt. Run creates image connections automatically.')); return; }
     const reachable = new Set();
     const walk = nodeId => { if (reachable.has(nodeId)) return; reachable.add(nodeId); edgeRef.current.filter(e => e.source === nodeId).forEach(e => walk(e.target)); };
     walk(connection.target);
-    if (reachable.has(connection.source)) { notify('That connection would create a loop. Branch into a new prompt instead.'); return; }
+    if (reachable.has(connection.source)) { notify(t('That connection would create a loop. Branch into a new prompt instead.')); return; }
     checkpoint();
     const next = addEdge({ ...connection, id: id() }, edgeRef.current);
     const added = next.filter(edge => !edgeRef.current.some(item => item.id === edge.id));
@@ -1633,17 +1864,18 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (mcpLocked.current) return;
     const pointer = 'changedTouches' in event ? event.changedTouches[0] : event;
     const onPane = pointer && document.elementFromPoint(pointer.clientX, pointer.clientY)?.classList.contains('react-flow__pane');
-    if (!edgeDropCreatesPrompt(state, onPane)) return;
+    const from = state.fromNode && slideSource(state.fromNode.id), fromNode = from === state.fromNode?.id ? state.fromNode : nodeRef.current.find(node => node.id === from);
+    if (!edgeDropCreatesPrompt({ ...state, fromNode }, onPane)) return;
     const position = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
     const node = addText({ x: position.x, y: position.y - 40 });
-    const edge = { id: id(), source: state.fromNode.id, target: node.id }; effects.createEdges([edge.id], [edge.target]);
+    const edge = { id: id(), source: fromNode.id, target: node.id }; effects.createEdges([edge.id], [edge.target]);
     putEdges(current => [...current, edge]); setFocusId(node.id); markDirty();
-    if (state.fromNode.type === 'image') guide.report({ type: 'variation' });
+    if (fromNode.type === 'image') guide.report({ type: 'variation' });
   };
   const downloadImage = async asset => {
     try {
       const response = await request(`/assets/${asset}`);
-      if (!response.ok) throw new Error('Could not download image.');
+      if (!response.ok) throw new Error(t('Could not download image.'));
       const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
       link.href = url; link.download = asset;
       document.body.appendChild(link); link.click(); link.remove();
@@ -1656,7 +1888,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try {
       await saveNow();
       const response = await request(boardPath + '/export');
-      if (!response.ok) throw new Error((await response.json()).error || 'Could not export board.');
+      if (!response.ok) throw new Error((await response.json()).error || t('Could not export board.'));
       const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
       link.href = url; link.download = currentBoard.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_') + '.conceptgraph';
       document.body.appendChild(link); link.click(); link.remove();
@@ -1669,7 +1901,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     pendingIntent.current = null;
     switchingRef.current = true; setTransfer('import');
     try {
-      if (file.size > 512 * 1024 * 1024) throw new Error('Choose a .conceptgraph file no larger than 512 MB.');
+      if (file.size > 512 * 1024 * 1024) throw new Error(t('Choose a .conceptgraph file no larger than 512 MB.'));
       await saveNow();
       const { board } = await api('/api/boards/import', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
       updateBoards(current => current.some(item => item.id === board.id) ? current : [...current, board]);
@@ -1703,6 +1935,24 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       setBoardForm(null);
     } catch (error) { notify(error.message); }
   };
+  // Only the owner sees this; the name must be typed exactly, and the server checks it again.
+  const deleteBoard = async event => {
+    event.preventDefault();
+    const name = currentBoard?.name;
+    if (!name || deleteName !== name || switchingRef.current || uploads.current || starting) return;
+    pendingIntent.current = null; switchingRef.current = true; setSwitching(true);
+    try {
+      if (!cloud) await saveNow();
+      if (cloud) cloudSession.deleting = true;
+      const result = await api(cloud ? `/api/cloud/boards/${boardId}` : boardPath, jsonOptions('DELETE', { confirmName: name }));
+      setBoardForm(null);
+      if (cloud) { cloudSession.deleted?.(); return; }
+      updateBoards(result.boards);
+      selectBoard(result.defaultBoardId);
+      notify(t('Deleted “{name}”', { name }));
+    } catch (error) { if (cloud) cloudSession.deleting = false; notify(error.message); }
+    finally { switchingRef.current = false; setSwitching(false); }
+  };
   const startLogin = async () => {
     if (loginBusy || login) return;
     setLoginBusy(true);
@@ -1716,7 +1966,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const next = await api('/api/status', { method: 'POST', helper: cloud });
       setStatus(next);
       setHelperOffline(false);
-      if (desktopMode && !next.connected) notify('Codex could not connect. Use Set Up Codex… on Mac or Codex → Set Up Compatible Codex… on Windows to install a compatible copy.');
+      if (desktopMode && !next.connected) notify(t('Codex could not connect. Use Set Up Codex… on Mac or Codex → Set Up Compatible Codex… on Windows to install a compatible copy.'));
     } catch (error) { if (cloudSession && error.status === 403) { cloudSession.unpair(); cloudSession.openPair(); } notify(error.message); }
   };
   const cancelLogin = async () => {
@@ -1746,11 +1996,20 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (step === 'variation') {
       const nodes = pageGraph().nodes, image = nodes.find(node => node.selected && node.type === 'image') || [...nodes].reverse().find(node => node.type === 'image');
       if (image) focusNode(image.id, 'variation');
-      else { notify('Generate an image first, then choose + Prompt from this.'); gettingStartedStep('generate'); }
+      else { notify(t('Generate an image first, then choose + Prompt from this.')); gettingStartedStep('generate'); }
     }
   };
   const viewCache = useRef(null); viewCache.current ||= createViewCache();
-  const view = useMemo(() => canvasView(scoped.nodes, scoped.edges, scoped.groups, viewCache.current, scoped.sections), [scoped]);
+  const shownGroups = useMemo(() => viewerSlides.size ? scoped.groups.map(group => viewerSlides.has(group.id) ? { ...group, slide: viewerSlides.get(group.id) } : group) : scoped.groups, [scoped.groups, viewerSlides]);
+  const view = useMemo(() => { viewCache.current.aspects = learnedAspects; return canvasView(scoped.nodes, scoped.edges, shownGroups, viewCache.current, scoped.sections); }, [scoped, shownGroups, learnedAspects]);
+  const extent = useMemo(() => boardExtent(scoped, measureView(viewCache.current)), [scoped]);
+  // Gestures stop at 0.15 (light cards), but never before the zoom that shows the whole page, as opening the board does.
+  const minZoom = useMemo(() => {
+    const box = canvasElement.current?.getBoundingClientRect(), [[left, top], [right, bottom]] = boardExtent(scoped, measureView(viewCache.current), 0);
+    if (!box?.width || right <= left) return .15;
+    const fit = Math.min(box.width / ((right - left) * 1.36), box.height / ((bottom - top) * 1.36));
+    return Math.max(fitFloor(), Math.min(.15, fit * .9));
+  }, [scoped]);
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
   const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
@@ -1767,10 +2026,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const lookups = useMemo(() => runLookups(runs), [runs]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
   const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
-  const edgesChanged = changes => { if (mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (changes.some(c => c.type !== 'select')) markDirty(); };
-  const connectStart = (_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === params.nodeId)?.type || 'text'); };
+  const edgesChanged = changes => { if (mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
+  const connectStart = (_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === slideSource(params.nodeId))?.type || 'text'); };
   const nodeDragStart = (event, node, dragged = [node]) => {
     if (mcpLocked.current) return;
+    nodeDragged.current = true;
+    if (shiftGrab.current === node.id) flowStore.getState().addSelectedNodes([node.id]);
     effects.dragStart(event, node); moving.current = true; checkpoint();
     const sectionIds = dragged.filter(item => item.type === 'section').map(item => item.id);
     sectionMoves.current.clear();
@@ -1783,7 +2044,21 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     // A canvas gesture keeps ownership when the pointer crosses an editor.
     if (document.activeElement?.matches('.text-node textarea')) document.activeElement.blur();
   };
+  // Glides to where a teammate is: their pointer, or the middle of what they see, switching page first if needed.
+  const followPeer = peerId => {
+    const peer = cloudSession.cursorStore.get().find(item => item.id === peerId), spot = peer?.cursor || peer?.view;
+    if (!peer) return;
+    if (!Number.isFinite(spot?.x) || !Number.isFinite(spot?.y)) { notify(t('{name} isn’t looking at the board right now.', { name: peer.user.name })); return; }
+    showPage(peer.page, false);
+    flow.setCenter(spot.x, spot.y, { zoom: flow.getZoom(), duration: 900 });
+  };
+  useEffect(() => { if (cloudSession?.connection === 'live') shareView(flow.getViewport()); }, [cloudSession?.connection]);
+  const shareView = viewport => {
+    const box = canvasElement.current?.getBoundingClientRect();
+    if (cloudSession && box?.width) cloudSession.view?.({ x: (box.width / 2 - viewport.x) / viewport.zoom, y: (box.height / 2 - viewport.y) / viewport.zoom });
+  };
   const moveEnd = (_, next) => {
+    shareView(next);
     moving.current = false; if (mcpLocked.current) return;
     if (openingViewDone.current) { pagePreference.current.viewports[activePageRef.current] = next; rememberPage(); }
     // The board's saved viewport remains the first page's fallback.
@@ -1793,11 +2068,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), toggleNodeCollapsed, toggleGroup, ungroup,
+  latest.current = { renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
-    nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null) };
+    nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
+    marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
@@ -1819,6 +2095,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     follow(flowStore.getState());
     return flowStore.subscribe(follow);
   }, []);
+  // While the selection box is out, the board selects what it touches (see marqueeDown).
+  useLayoutEffect(() => flowStore.subscribe(({ userSelectionActive, userSelectionRect: box, transform: [x, y, zoom], nodeLookup }, previous) => {
+    if (!userSelectionActive || !box || box === previous.userSelectionRect || !marquee.current || mcpLocked.current) return;
+    const area = { x: (box.x - x) / zoom, y: (box.y - y) / zoom, width: box.width / zoom, height: box.height / zoom };
+    marquee.current.ids = boxSelection(boxTouches(nodeLookup.values(), area, { x: box.startX, y: box.startY }), marquee.current.base);
+    boxSelect();
+  }), []);
   // An output that lands off screen, inside a folded group or on a far zoomed-out crowded board is never drawn,
   // so its arrival cannot wait for the image to decode.
   useEffect(() => {
@@ -1830,61 +2113,71 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
   return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
-    <header className="app-header"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? 'Live' : cloudSession.connection === 'offline' ? 'Offline · edits kept in this tab' : 'Connecting…' : transfer === 'export' ? 'Exporting board…' : transfer === 'import' ? 'Importing board…' : switching ? 'Switching board…' : saved}{readOnly && <span className="view-only-badge">View only</span>}</div><div className="header-right">{cloudSession?.toolbar}{desktopMode && <button className="mcp-connect-button" type="button" aria-label="Connect MCP" onClick={() => setAgentConnect(true)} data-tooltip="Connect MCP"><Icon name="branch" size={15}/><span>Connect MCP</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={`Sounds ${effects.sounds ? 'on' : 'off'}`} aria-pressed={effects.sounds} data-tooltip={`Sounds ${effects.sounds ? 'on' : 'off'}`} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><button className="getting-started-help" type="button" aria-label="Getting started" data-tooltip="Getting started and canvas tips" onClick={guide.reopen}>?</button><button className="theme-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} data-tooltip={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || 'Check Codex connection'}><span/>{status.connected && status.signedIn && status.imageGeneration ? 'Codex connected' : desktopMode && status.connected && !status.signedIn ? 'Sign in with ChatGPT' : cloud && !cloudSession.paired ? 'Pair helper' : 'Check Codex'}</button>}</div></header>
+    <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
     <aside className="sidebar" inert={!!transfer || switching ? true : undefined}>
-      <div className="board-heading"><span className="eyebrow">YOUR BOARDS</span><div className="board-picker"><select data-tooltip="Switch board" aria-label="Board" value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip="Rename board" aria-label="Rename board" className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}</div><button className="new-board" data-tooltip="Create a new board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> New board</button>{!cloud && <div className="board-transfer"><button data-tooltip="Save this board with its images" aria-label="Export board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> Export</button><button data-tooltip="Import a .conceptgraph file as a new board" aria-label="Import board" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> Import</button></div>}</div>
+      <div className="board-heading"><span className="eyebrow">{t('YOUR BOARDS')}</span><div className="board-picker"><select data-tooltip={t('Switch board')} aria-label={t('Board')} value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip={t('Rename board')} aria-label={t('Rename board')} className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}{canRename && <button data-tooltip={t('Delete board')} aria-label={t('Delete board')} className="icon-button board-delete" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setDeleteName(''); setBoardForm('delete'); }}><Icon name="trash" size={15}/></button>}</div><button className="new-board" data-tooltip={t('Create a new board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> {t('New board')}</button>{!cloud && <div className="board-transfer"><button data-tooltip={t('Save this board with its images')} aria-label={t('Export board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> {t('Export')}</button><button data-tooltip={t('Import a .conceptgraph file as a new board')} aria-label={t('Import board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> {t('Import')}</button></div>}</div>
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
-      <div className="sidebar-tabs"><button data-tooltip="Show creation tools" className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>Create</button><button data-tooltip="View generation history" className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History <small>{runs.length}</small></button></div>
-      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip="Add text prompt · T" aria-label="Add text prompt" className="add-prompt-tool" onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>+ Add text prompt</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip="Upload reference images" aria-label="Add reference image" onClick={() => fileInput.current.click()}><span className="tool-icon image"><Icon name="image"/></span><span>Reference image</span></button></div>}<section className="custom-nodes" aria-label="Custom nodes"><div className="custom-nodes-heading"><span className="eyebrow">CUSTOM NODES</span>{!readOnly && <button type="button" className="icon-button" aria-label="Create custom node" data-tooltip="Create custom node" disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button>}</div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} Retry</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" onClick={() => readOnly ? setTemplateDetails(template) : addText(undefined, '', template)} data-tooltip={readOnly ? 'View this custom node' : 'Add custom node to board'}><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button>{!readOnly && <button className="icon-button custom-node-edit" type="button" aria-label={`Edit ${template.name}`} data-tooltip="Edit custom node" onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button>}</div>)}</div> : <p className="custom-nodes-empty">{readOnly ? 'This board has no custom nodes.' : 'Save instructions and images to use again.'}</p>}</section>{readOnly ? <p className="paste-hint">You can view this board. Ask its owner for edit access to change it.</p> : <p className="paste-hint"><kbd>⌘ V</kbd> Paste text or an image.<br/>Drag a node’s output into empty space to add a prompt.<br/>Select nodes, then group them with the bottom toolbar.</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">Generations on this board will appear here.</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
-      <div className="sidebar-bottom"><span className="legend-text"/> Text <span className="legend-image"/> Image</div>
+      <div className="sidebar-tabs"><button data-tooltip={t('Show creation tools')} className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>{t('Create')}</button><button data-tooltip={t('View generation history')} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>{t('History')} <small>{runs.length}</small></button></div>
+      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button></div>}<section className="custom-nodes" aria-label={t('Custom nodes')}><div className="custom-nodes-heading"><span className="eyebrow">{t('CUSTOM NODES')}</span>{!readOnly && <button type="button" className="icon-button" aria-label={t('Create custom node')} data-tooltip={t('Create custom node')} disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button>}</div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} {t('Retry')}</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" {...(readOnly ? {} : toolDrag({ kind: 'template', id: template.id }))} onClick={() => readOnly ? setTemplateDetails(template) : addText(undefined, '', template)} data-tooltip={readOnly ? t('View this custom node') : t('Add custom node to board')}><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button>{!readOnly && <button className="icon-button custom-node-edit" type="button" aria-label={t('Edit {name}', { name: template.name })} data-tooltip={t('Edit custom node')} onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button>}</div>)}</div> : <p className="custom-nodes-empty">{readOnly ? t('This board has no custom nodes.') : t('Save instructions and images to use again.')}</p>}</section>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
+      <div className="sidebar-bottom"><span className="legend-text"/> {t('Text')} <span className="legend-image"/> {t('Image')}</div>
     </aside>
-    <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (!mcpLocked.current && !readOnly && [...event.dataTransfer.types].includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (!mcpLocked.current) addImages([...event.dataTransfer.files], flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })); }}>
+    <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addImages([...event.dataTransfer.files], position); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} onCancel={cancel} onFocus={showRun}/>}</div>
-      <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} minZoom={.15} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} panOnDrag={panButtons} selectionKeyCode="Shift" multiSelectionKeyCode="Meta" proOptions={proOptions}>
+      <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
         <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
-      {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">ONE IDEA. MANY DIRECTIONS.</span>{readOnly ? <><h2>This page is empty</h2><p>You can view this board but not change it.</p></> : <><h2>What are you imagining?</h2><p>Describe an image, then click Generate.</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> Add text prompt</button></>}</div>}
+      {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
+      {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}
+      {tool === 'stamp' && <StampCursor emoji={stamps[stamp]} area={canvasElement} start={mouse.current}/>}
       {!readOnly && <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} ready={readiness.key === 'ready'} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>}
-      <div className="canvas-bottom"><div className="canvas-controls">{!readOnly && <><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp}/><i/><button data-tooltip="Undo · ⌘ Z" aria-label="Undo" onClick={() => undo()}><Icon name="undo" size={17}/></button><button data-tooltip="Redo · ⌘ Shift Z" aria-label="Redo" onClick={() => undo(true)}><Icon name="redo" size={17}/></button><i/></>}<button data-tooltip="Zoom out" aria-label="Zoom out" onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={16}/></button><button data-tooltip={fitNodes.length ? "Fit selected nodes in view" : "Fit all nodes in view"} aria-label="Fit canvas" onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={16}/></button><button data-tooltip="Zoom in" aria-label="Zoom in" onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={16}/></button>{!readOnly && <><i/><button data-tooltip={canAlign ? "Align selected nodes left to right" : "Select nodes to align them"} aria-label="Auto-align selected nodes" disabled={!canAlign} onClick={autoAlign}><Icon name="align" size={18}/></button><button data-tooltip={canGroup ? "Group selected nodes" : "Select 2+ ungrouped nodes"} aria-label="Group selected nodes" disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={18}/></button>{selectedCount > 0 && <><i/><button data-tooltip="Delete selected" aria-label="Delete selected" onClick={removeSelected}><Icon name="trash" size={16}/></button></>}</>}</div><span className="canvas-stats">{scoped.nodes.length} nodes <i/> {scoped.edges.length} connections</span></div>
-    </main><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addImages([...event.target.files]); event.target.value = ''; }}/>
-    {!cloud && <input ref={boardFileInput} type="file" accept=".conceptgraph,.zip" aria-label="Board archive file" hidden onChange={event => { const file = event.target.files[0]; event.target.value = ''; importBoard(file); }}/>}
-    {boardForm && <div className="board-modal" role="dialog" aria-modal="true" aria-label={boardForm === 'create' ? 'Create board' : 'Rename board'}><form onSubmit={submitBoard}><h2>{boardForm === 'create' ? 'New board' : 'Rename board'}</h2><label htmlFor="board-name">Board name</label><input id="board-name" aria-label="Board name" autoFocus maxLength={80} value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="A new direction" disabled={switching}/><div><button data-tooltip="Cancel" type="button" onClick={() => setBoardForm(null)} disabled={switching}>Cancel</button><button className="primary-button" data-tooltip={boardForm === 'create' ? 'Create board' : 'Save board name'} type="submit" disabled={switching || !nameDraft.trim()}>{boardForm === 'create' ? 'Create board' : 'Save name'}</button></div></form></div>}
-    {pageDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="page-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="page-delete-title">Delete “{pageDelete.name}”?</h2><p>{pageDelete.count ? `Its ${pageDelete.count} node${pageDelete.count === 1 ? '' : 's'} will be deleted with it.` : 'This page is empty.'} Generation history and image files stay. You can undo this.</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { id: pageId } = pageDelete; setPageDelete(null); deletePage(pageId); }}>Delete page</button><button type="button" onClick={() => { setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); }}>Cancel</button></div></div>}
+      <div className="canvas-bottom"><span className="canvas-stats">{plural(scoped.nodes.length, '{count} node', '{count} nodes')} <i/> {plural(scoped.edges.length, '{count} connection', '{count} connections')}</span>
+        {!readOnly && <div className="board-toolbar" role="toolbar" aria-label={t('Board tools')}><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp} shape={shape} setShape={setShape} arrowColor={arrowColor} setArrowColor={setArrowColor}/><i className="toolbar-divider"/>
+          <div className="toolbar-group"><button className="tool-button" data-tooltip={t('Undo · ⌘ Z')} aria-label={t('Undo')} onClick={() => undo()}><Icon name="undo" size={19}/></button><button className="tool-button" data-tooltip={t('Redo · ⌘ Shift Z')} aria-label={t('Redo')} onClick={() => undo(true)}><Icon name="redo" size={19}/></button>
+            <button className="tool-button" data-tooltip={canAlign ? t('Align selected nodes left to right') : t('Select nodes to align them')} aria-label={t('Auto-align selected nodes')} disabled={!canAlign} onClick={autoAlign}><Icon name="align" size={20}/></button><button className="tool-button" data-tooltip={canGroup ? t('Group selected nodes') : t('Select 2+ ungrouped nodes')} aria-label={t('Group selected nodes')} disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={20}/></button>{selectedCount > 0 && <button className="tool-button" data-tooltip={t('Delete selected')} aria-label={t('Delete selected')} onClick={removeSelected}><Icon name="trash" size={18}/></button>}</div></div>}
+        <div className="zoom-controls" role="group" aria-label={t('Zoom')}><button data-tooltip={t('Zoom out')} aria-label={t('Zoom out')} onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={18}/></button><i/><button data-tooltip={fitNodes.length ? t('Fit selected nodes in view') : t('Fit all nodes in view')} aria-label={t('Fit canvas')} onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={17}/></button><i/><button data-tooltip={t('Zoom in')} aria-label={t('Zoom in')} onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={18}/></button></div></div>
+    </main><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addImages([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>
+    {!cloud && <input ref={boardFileInput} type="file" accept=".conceptgraph,.zip" aria-label={t('Board archive file')} hidden onChange={event => { const file = event.target.files[0]; event.target.value = ''; importBoard(file); }}/>}
+    {boardForm === 'delete' && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-delete-title"><form onSubmit={deleteBoard}><h2 id="board-delete-title">{t('Delete “{name}”?', { name: currentBoard?.name ?? '' })}</h2>
+      <p className="board-delete-warning">{cloud ? t('The board, its pages and its history are removed for everyone who has access. This can’t be undone.') : t('The board, its pages and its history are removed from this computer. This can’t be undone; export it first to keep a copy.')}</p>
+      <label htmlFor="board-delete-name">{t('Type the board name to confirm')}</label><input id="board-delete-name" autoFocus autoComplete="off" maxLength={80} value={deleteName} onChange={event => setDeleteName(event.target.value)} placeholder={currentBoard?.name} disabled={switching}/>
+      <div><button type="button" onClick={() => setBoardForm(null)} disabled={switching}>{t('Cancel')}</button><button className="danger-button" type="submit" disabled={switching || deleteName !== currentBoard?.name}>{switching ? t('Deleting…') : t('Delete board')}</button></div></form></div>}
+    {boardForm && boardForm !== 'delete' && <div className="board-modal" role="dialog" aria-modal="true" aria-label={boardForm === 'create' ? t('Create board') : t('Rename board')}><form onSubmit={submitBoard}><h2>{boardForm === 'create' ? t('New board') : t('Rename board')}</h2><label htmlFor="board-name">{t('Board name')}</label><input id="board-name" aria-label={t('Board name')} autoFocus maxLength={80} value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder={t('A new direction')} disabled={switching}/><div><button data-tooltip={t('Cancel')} type="button" onClick={() => setBoardForm(null)} disabled={switching}>{t('Cancel')}</button><button className="primary-button" data-tooltip={boardForm === 'create' ? t('Create board') : t('Save board name')} type="submit" disabled={switching || !nameDraft.trim()}>{boardForm === 'create' ? t('Create board') : t('Save name')}</button></div></form></div>}
+    {pageDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="page-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="page-delete-title">{t('Delete “{name}”?', { name: pageDelete.name })}</h2><p>{pageDelete.count ? plural(pageDelete.count, 'Its {count} node will be deleted with it.', 'Its {count} nodes will be deleted with it.') : t('This page is empty.')} {t('Generation history and image files stay. You can undo this.')}</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { id: pageId } = pageDelete; setPageDelete(null); deletePage(pageId); }}>{t('Delete page')}</button><button type="button" onClick={() => { setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); }}>{t('Cancel')}</button></div></div>}
     {diagnosticsId && runs.find(run => run.id === diagnosticsId) && <RunDiagnostics run={runs.find(run => run.id === diagnosticsId)} loadRun={loadDiagnosticRun} returnFocus={diagnosticsReturnFocus} onClose={() => setDiagnosticsId(null)}/>}
     {templateForm && <TemplateEditor templates={templates} template={templateForm.template} initial={templateForm.initial || templateForm.template} onClose={() => setTemplateForm(null)} onSave={saveTemplate} onDelete={deleteTemplate} onBusyChange={setTemplateBusy}/>}
     {templateDetails && <TemplateDetails template={templateDetails} library={templates.includes(templateDetails)} onClose={() => setTemplateDetails(null)}/>}
-    {agentConnect && <AgentConnect onClose={() => setAgentConnect(false)}/>}
+    {agentConnect && <AgentConnect cloud={cloud} onClose={() => setAgentConnect(false)}/>}
     {installCodex && <InstallCodex onClose={() => setInstallCodex(false)} onDone={async () => {
       const next = await api('/api/status', { method: 'POST', helper: cloud });
       setStatus(next); setHelperOffline(false);
-      if (!next.connected) throw new Error(next.error || 'Codex could not connect after installation.');
+      if (!next.connected) throw new Error(next.error || t('Codex could not connect after installation.'));
       setInstallCodex(false);
       if (!next.signedIn) await startLogin();
     }}/>}
-    {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">Connect your ChatGPT account</h2><p>Sign in to generate images with your Codex account. Your boards and images stay on this computer.</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>Sign in with ChatGPT</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>Not now</button></div></div>}
-    {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">Sign in with ChatGPT</h2><p>Continue in your browser to connect your account. Return here when you finish.</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">Continue in browser</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>Cancel</button></div></div>}
-    {toast && <div className="toast" role="status">{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
-    {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image details" onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
-      <button className="lightbox-close icon-button" autoFocus aria-label="Close image" onClick={() => setViewId(null)}><Icon name="close"/></button>
-      <div className="lightbox-image"><img src={assetUrl(viewNode.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || 'Concept image'} onLoad={event => setViewSize({ asset: viewNode.data.asset, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}/></div>
-      <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? 'GENERATED CONCEPT' : 'UPLOADED REFERENCE'}</span>
-        {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? 'Generated by' : 'Added by'}</span><AuthorBadge author={viewInfo.author}/></div>}
+    {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">{t('Connect your ChatGPT account')}</h2><p>{t('Sign in to generate images with your Codex account. Your boards and images stay on this computer.')}</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>{t('Sign in with ChatGPT')}</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>{t('Not now')}</button></div></div>}
+    {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">{t('Sign in with ChatGPT')}</h2><p>{t('Continue in your browser to connect your account. Return here when you finish.')}</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">{t('Continue in browser')}</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>{t('Cancel')}</button></div></div>}
+    {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
+    {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
+      <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
+      <div className="lightbox-image"><img src={assetUrl(viewNode.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || t('Concept image')} onLoad={event => setViewSize({ asset: viewNode.data.asset, width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}/></div>
+      <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span>
+        {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? t('Generated by') : t('Added by')}</span><AuthorBadge author={viewInfo.author}/></div>}
         {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}
         {viewInfo.rows.length > 0 && <dl className="image-info">{viewInfo.rows.map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}{row.note && <small>{row.note}</small>}</dd></div>)}</dl>}
-        {viewRun && <>{viewInfo.prompt && <><span className="detail-label">{cloud ? 'Prompt' : 'Original prompt'}</span><p className="prompt-snapshot">{viewInfo.prompt}</p></>}
-          {!cloud && <><span className="detail-label">Inputs at the time of this run</span>
+        {viewRun && <>{viewInfo.prompt && <><span className="detail-label">{cloud ? t('Prompt') : t('Original prompt')}</span><p className="prompt-snapshot">{viewInfo.prompt}</p></>}
+          {!cloud && <><span className="detail-label">{t('Inputs at the time of this run')}</span>
           <div className="run-inputs">{viewInputs.length ? viewInputs.map((node, index) => node.type === 'image'
-            ? <img key={node.id} src={assetUrl(node.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`Input image ${index + 1}`} loading="lazy"/>
-            : <p key={node.id}>{node.data.text}</p>) : <p>No connected inputs</p>}</div></>}
+            ? <img key={node.id} src={assetUrl(node.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('Input image {number}', { number: index + 1 })} loading="lazy"/>
+            : <p key={node.id}>{node.data.text}</p>) : <p>{t('No connected inputs')}</p>}</div></>}
           {viewRun.snapshot?.filter(node => node.type === 'text' && node.data.template).map(node => <div className="run-template" key={node.id}>
-            <span className="detail-label">Custom node: {node.data.template.name}</span>
+            <span className="detail-label">{t('Custom node: {name}', { name: node.data.template.name })}</span>
             {node.data.template.instructions && <p>{node.data.template.instructions}</p>}
-            {node.data.template.assets?.length > 0 && <div className="run-inputs">{node.data.template.assets.map((asset, index) => <img key={`${asset}-${index}`} src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={`${node.data.template.name} reference ${index + 1}`} loading="lazy"/>)}</div>}
+            {node.data.template.assets?.length > 0 && <div className="run-inputs">{node.data.template.assets.map((asset, index) => <img key={`${asset}-${index}`} src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('{name} reference {number}', { name: node.data.template.name, number: index + 1 })} loading="lazy"/>)}</div>}
           </div>)}</>}
-        <div className="lightbox-actions"><button data-tooltip="Download original image" onClick={() => downloadImage(viewNode.data.asset)}><Icon name="download" size={17}/> Download original</button></div>
+        <div className="lightbox-actions"><button data-tooltip={t('Download original image')} onClick={() => downloadImage(viewNode.data.asset)}><Icon name="download" size={17}/> {t('Download original')}</button></div>
       </div>
     </div></div>}
-  </div>{mcpBusy && <div className="toast" role="status">Synchronizing the board with the agent…</div>}<ButtonHelp/></CanvasContext.Provider>;
+  </div>{mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [
@@ -1892,7 +2185,7 @@ const helperBuilds = [
   { id: 'macos-x64', label: 'Mac with Intel', detail: 'Intel processor · preview', family: 'macos' },
   { id: 'windows-x64', label: 'Windows x64', detail: '64-bit Intel or AMD · preview', family: 'windows' },
 ];
-const formatHelperSize = bytes => Number.isSafeInteger(bytes) && bytes > 0 ? `${(bytes / 1_000_000).toFixed(1)} MB` : null;
+const formatHelperSize = bytes => Number.isSafeInteger(bytes) && bytes > 0 ? t('{size} MB', { size: (bytes / 1_000_000).toFixed(1) }) : null;
 
 function useHelperDownloads(cloudMode) {
   const [detection, setDetection] = useState(null), [manifest, setManifest] = useState(null), [manifestError, setManifestError] = useState(false);
@@ -1947,12 +2240,12 @@ function InstallCodex({ onClose, onDone }) {
   const working = busy || ['downloading', 'installing', 'done'].includes(progress?.state);
   const percent = progress?.total ? Math.min(100, Math.floor(progress.received / progress.total * 100)) : null;
   return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-install-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
-    <div className="login-card codex-install-card"><h2 id="codex-install-title">Install Codex</h2>
-      <p>Codex isn’t installed on this computer. Concept Graph can download and install it for you from OpenAI’s official GitHub release (up to 155 MiB). Then you just sign in with ChatGPT.</p>
-      {working && <div className="codex-install-progress" role="status"><p>{progress?.state === 'installing' ? 'Installing…' : progress?.state === 'done' ? 'Connecting to Codex…' : `Downloading…${percent === null ? '' : ` ${percent}%`}`}</p><progress aria-label="Codex installation" max="100" value={progress?.state === 'downloading' ? percent ?? undefined : undefined}/></div>}
+    <div className="login-card codex-install-card"><h2 id="codex-install-title">{t('Install Codex')}</h2>
+      <p>{t('Codex isn’t installed on this computer. Concept Graph can download and install it for you from OpenAI’s official GitHub release (up to 155 MiB). Then you just sign in with ChatGPT.')}</p>
+      {working && <div className="codex-install-progress" role="status"><p>{progress?.state === 'installing' ? t('Installing…') : progress?.state === 'done' ? t('Connecting to Codex…') : `${t('Downloading…')}${percent === null ? '' : ` ${percent}%`}`}</p><progress aria-label={t('Codex installation')} max="100" value={progress?.state === 'downloading' ? percent ?? undefined : undefined}/></div>}
       {(error || progress?.error) && <p className="codex-install-error" role="alert">{error || progress.error}</p>}
-      <button className="primary-button" type="button" autoFocus disabled={!progress?.supported || working} onClick={install}>{progress?.state === 'error' ? 'Retry' : 'Install'}</button>
-      <button type="button" onClick={onClose}>{working ? 'Back to board' : 'Not now'}</button>
+      <button className="primary-button" type="button" autoFocus disabled={!progress?.supported || working} onClick={install}>{progress?.state === 'error' ? t('Retry') : t('Install')}</button>
+      <button type="button" onClick={onClose}>{working ? t('Back to board') : t('Not now')}</button>
     </div>
   </div>;
 }
@@ -1983,37 +2276,40 @@ function HelperConnection({ effects, readiness, status, paired, onSetup, onDownl
     if (event.key === 'Escape') { event.preventDefault(); close(); }
     event.stopPropagation();
   }}>
-    <button ref={trigger} className={`connection ${readiness.key === 'ready' ? 'connected' : ''} ${outdated ? 'helper-update' : ''}`} type="button" aria-expanded={open && paired} aria-haspopup={paired ? 'dialog' : undefined} aria-controls={open && paired ? 'helper-connection-details' : undefined} onClick={() => paired ? setOpen(value => !value) : onSetup()} data-tooltip={status.error || readiness.label}>{connected ? <svg className="feel-check" aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : <span/>}{outdated ? 'Update helper' : readiness.label}</button>
-    {open && paired && <div ref={panel} id="helper-connection-details" className="helper-connection-panel" role="dialog" aria-label="Helper connection" tabIndex={-1}>
-      <strong>Helper connected</strong>
-      <p>Codex: {status.codexMissing ? 'not installed' : !status.connected ? 'not ready' : status.signedIn ? 'signed in' : 'sign-in needed'}</p>
-      <p>Helper version: <span className="helper-version">{status.helperVersion || (status.helperVersion === null ? 'source' : 'unknown')}</span></p>
-      {outdated && <p className="helper-update-note">A newer helper is available. Download it, quit the old helper, then open the new one and paste its new code.</p>}
+    <button ref={trigger} className={`connection ${readiness.key === 'ready' ? 'connected' : ''} ${outdated ? 'helper-update' : ''}`} type="button" aria-expanded={open && paired} aria-haspopup={paired ? 'dialog' : undefined} aria-controls={open && paired ? 'helper-connection-details' : undefined} onClick={() => paired ? setOpen(value => !value) : onSetup()} data-tooltip={status.error || readiness.label}>{connected ? <svg className="feel-check" aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : <span/>}{outdated ? t('Update helper') : readiness.label}</button>
+    {open && paired && <div ref={panel} id="helper-connection-details" className="helper-connection-panel" role="dialog" aria-label={t('Helper connection')} tabIndex={-1}>
+      <strong>{t('Helper connected')}</strong>
+      <p>{t('Codex: {state}', { state: status.codexMissing ? t('not installed') : !status.connected ? t('not ready') : status.signedIn ? t('signed in') : t('sign-in needed') })}</p>
+      <p>{t('Helper version:')} <span className="helper-version">{status.helperVersion || (status.helperVersion === null ? t('source') : t('unknown'))}</span></p>
+      {outdated && <p className="helper-update-note">{t('A newer helper is available. Download it, quit the old helper, then open the new one and paste its new code.')}</p>}
       {(readiness.own || readiness).key !== 'ready' && <button type="button" disabled={loginBusy} onClick={() => { close(); onFix(); }}>{(readiness.own || readiness).action}</button>}
-      {download ? <a href={download.url} download={download.file} onClick={close}>Download helper</a> : <button type="button" onClick={() => { close(); onDownloads(); }}>Download helper</button>}
-      {cloud && (manifestError || (manifest && detection?.packageId && !download)) && <p>Download unavailable. Check other versions or try again later.</p>}
-      <button type="button" onClick={() => { close(); onDownloads(); }}>Other versions</button>
-      {onDisconnect && <button type="button" onClick={() => { close(); onDisconnect(); }}>Disconnect</button>}
+      {download ? <a href={download.url} download={download.file} onClick={close}>{t('Download helper')}</a> : <button type="button" onClick={() => { close(); onDownloads(); }}>{t('Download helper')}</button>}
+      {cloud && (manifestError || (manifest && detection?.packageId && !download)) && <p>{t('Download unavailable. Check other versions or try again later.')}</p>}
+      <button type="button" onClick={() => { close(); onDownloads(); }}>{t('Other versions')}</button>
+      {onDisconnect && <button type="button" onClick={() => { close(); onDisconnect(); }}>{t('Disconnect')}</button>}
     </div>}
   </div>;
 }
 
-function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = false, showAllBuilds = false, teammates = null }) {
+// With onClose, the screen sits over a board: Escape, a click on the empty space around the panel, the panel's close
+// button and Back to board all return to it.
+function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = false, showAllBuilds = false, teammates = null, onClose }) {
   const { detection, manifest, manifestError } = useHelperDownloads(cloudMode);
   const [selected, setSelected] = useState(''), [showBuilds, setShowBuilds] = useState(showAllBuilds);
   const [downloading, setDownloading] = useState(''), [downloadError, setDownloadError] = useState(''), [downloaded, setDownloaded] = useState(false);
   const officialSite = cloudMode || location.origin === 'https://concept-graph-local.knifest.chatgpt.site';
   useEffect(() => { if (detection?.packageId) setSelected(current => current || detection.packageId); }, [detection]);
   const downloadHelper = async platform => {
-    setDownloading('Preparing download…'); setDownloadError(''); setDownloaded(false);
+    setDownloading(t('Preparing download…')); setDownloadError(''); setDownloaded(false);
     try {
-      const blob = await fetchHelperArchive(platform, setDownloading);
+      // The download module is shared with the build scripts, so its progress text is translated here.
+      const blob = await fetchHelperArchive(platform, message => { const part = /^Downloading part (\d+) of (\d+)…$/.exec(message); setDownloading(part ? t('Downloading part {part} of {parts}…', { part: part[1], parts: part[2] }) : t(message)); });
       const url = URL.createObjectURL(blob), link = document.createElement('a');
       link.href = url; link.download = `concept-graph-helper-${platform}.zip`;
       document.body.appendChild(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       setDownloaded(true);
-    } catch (failure) { setDownloadError(failure.message || 'Could not download the helper.'); }
+    } catch (failure) { setDownloadError(t(failure.message || 'Could not download the helper.')); }
     finally { setDownloading(''); }
   };
   const selectedBuild = helperBuilds.find(build => build.id === selected);
@@ -2023,24 +2319,24 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
   const orderedBuilds = matchingFamily ? [...helperBuilds].sort((a, b) => Number(b.family === matchingFamily) - Number(a.family === matchingFamily)) : helperBuilds;
   const sizeLabel = build => {
     const item = manifest?.[build.id];
-    if (cloudMode && !cloudHelperDownload(build.id, item)) return manifest || manifestError ? 'Download unavailable' : 'Checking size…';
+    if (cloudMode && !cloudHelperDownload(build.id, item)) return manifest || manifestError ? t('Download unavailable') : t('Checking size…');
     const download = formatHelperSize(item?.size), unpacked = formatHelperSize(item?.unpackedSize);
-    if (!download) return manifest || manifestError ? 'Size unavailable' : 'Checking size…';
-    return `${download} download${unpacked ? ` · ${unpacked} ${cloudMode && build.family === 'windows' ? 'installed' : 'unpacked'}` : ''}`;
+    if (!download) return manifest || manifestError ? t('Size unavailable') : t('Checking size…');
+    return `${t('{size} download', { size: download })}${unpacked ? ` · ${cloudMode && build.family === 'windows' ? t('{size} installed', { size: unpacked }) : t('{size} unpacked', { size: unpacked })}` : ''}`;
   };
-  const platformMessage = !detection ? 'Checking your device…'
+  const platformMessage = t(!detection ? 'Checking your device…'
     : detection.platform === 'macos' && !detection.packageId ? 'Mac detected · choose your processor'
     : detection.platform === 'windows' && detection.architecture === 'arm64' ? 'Windows on ARM detected · no native build yet'
     : detection.platform === 'windows' && detection.architecture === 'x86' ? '32-bit Windows detected · no compatible build'
     : detection.platform === 'windows' && !detection.packageId ? 'Windows detected · choose a compatible build'
     : detection.platform === 'linux' ? 'Linux detected · no build available yet'
     : detection.platform === 'mobile' ? 'Open this page on your computer to get started'
-    : detection.packageId ? 'Detected for this device' : 'Choose a build for your computer';
-  const openHint = cloudMode ? selectedBuild?.family === 'macos' ? <>Open the downloaded file, drag <strong>Concept Graph Helper</strong> to Applications, then open it.</>
-    : selectedBuild?.family === 'windows' ? <>Run the installer. If Windows warns you, choose <strong>More info → Run anyway</strong>.</>
-    : <>Choose your computer’s version, then open the downloaded helper.</>
-    : manifest?.[selected]?.kind === 'app' ? <>Unzip it and open <strong>Concept Graph Helper.app</strong>.</>
-    : <>Unzip it and run <strong>{selectedBuild?.family === 'windows' ? 'Start Concept Graph.cmd' : 'Start Concept Graph.command'}</strong>.</>;
+    : detection.packageId ? 'Detected for this device' : 'Choose a build for your computer');
+  const openHint = cloudMode ? selectedBuild?.family === 'macos' ? rich('Open the downloaded file, drag {app} to Applications, then open it.', { app: <strong>Concept Graph Helper</strong> })
+    : selectedBuild?.family === 'windows' ? rich('Run the installer. If Windows warns you, choose {choice}.', { choice: <strong>{t('More info → Run anyway')}</strong> })
+    : t('Choose your computer’s version, then open the downloaded helper.')
+    : manifest?.[selected]?.kind === 'app' ? rich('Unzip it and open {app}.', { app: <strong>Concept Graph Helper.app</strong> })
+    : rich('Unzip it and run {file}.', { file: <strong>{selectedBuild?.family === 'windows' ? 'Start Concept Graph.cmd' : 'Start Concept Graph.command'}</strong> });
   const codeInput = useRef(null), connectRef = useRef(connect);
   connectRef.current = connect;
   const pasted = value => { const text = value.trim(); setCode(text); if (/^[\da-f]{64}$/i.test(text) && officialSite) connectRef.current(text); };
@@ -2050,43 +2346,52 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
     window.addEventListener('paste', paste);
     return () => window.removeEventListener('paste', paste);
   }, []);
-  return <main className="helper-startup">
+  const closeRef = useRef(onClose), pressedOutside = useRef(false); closeRef.current = onClose;
+  useEffect(() => {
+    if (!onClose) return;
+    const key = event => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closeRef.current?.(); } };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [!onClose]);
+  // A press that starts in the panel (selecting text, say) and ends outside it does not close.
+  const outside = event => !event.target.closest?.('.helper-panel');
+  return <main className="helper-startup" onPointerDown={event => { pressedOutside.current = !!onClose && outside(event); }} onClick={event => { if (pressedOutside.current && outside(event)) onClose(); pressedOutside.current = false; }}>
     <section className="helper-panel" aria-labelledby="helper-title">
-      <header className="helper-panel-head"><div className="helper-brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><h2 id="helper-title">Connect Codex to generate images</h2><p>{cloudMode ? 'Images are generated by Codex on your computer. A small helper app links it to this board.' : 'A small helper app links this canvas to Codex on your computer.'}</p></header>
+      <header className="helper-panel-head">{onClose && <button type="button" className="helper-panel-close icon-button" aria-label={t('Back to board')} data-tooltip={t('Back to board')} onClick={onClose}><Icon name="close" size={18}/></button>}<div className="helper-brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><h2 id="helper-title">{t('Connect Codex to generate images')}</h2><p>{cloudMode ? t('Images are generated by Codex on your computer. A small helper app links it to this board.') : t('A small helper app links this canvas to Codex on your computer.')}</p></header>
       {teammates}
-      {!officialSite && <p className="helper-error" role="alert">Open this app at its official site address to connect your local helper.</p>}
+      {!officialSite && <p className="helper-error" role="alert">{t('Open this app at its official site address to connect your local helper.')}</p>}
       <form onSubmit={event => { event.preventDefault(); connect(code); }}>
         <div className="helper-step">
           <div className="helper-step-marker">1</div>
           <div className="helper-step-content">
-            <h3>Download and open the helper</h3>
+            <h3>{t('Download and open the helper')}</h3>
             {(!detection || !detection.packageId) && <div className="helper-device-status"><span className="helper-status-dot"/>{platformMessage}</div>}
             {selectedBuild && <div className="helper-selected">
-              <div className="helper-selected-info"><span className="helper-device-icon"><Icon name="download" size={17}/></span><span><strong>{selectedBuild.label}</strong><small>{sizeLabel(selectedBuild)}{isRecommended ? ' · recommended' : ''}</small></span></div>
-              {cloudMode ? directDownload && officialSite ? <a className="helper-primary" href={directDownload.url} download={directDownload.file}><Icon name="download" size={16}/> Download</a> : <button className="helper-primary" type="button" disabled><Icon name="download" size={16}/> Download</button> : <button className="helper-primary" type="button" disabled={!!downloading || !officialSite} onClick={() => downloadHelper(selectedBuild.id)}><Icon name="download" size={16}/> Download</button>}
+              <div className="helper-selected-info"><span className="helper-device-icon"><Icon name="download" size={17}/></span><span><strong>{t(selectedBuild.label)}</strong><small>{sizeLabel(selectedBuild)}{isRecommended ? ` · ${t('recommended')}` : ''}</small></span></div>
+              {cloudMode ? directDownload && officialSite ? <a className="helper-primary" href={directDownload.url} download={directDownload.file}><Icon name="download" size={16}/> {t('Download')}</a> : <button className="helper-primary" type="button" disabled><Icon name="download" size={16}/> {t('Download')}</button> : <button className="helper-primary" type="button" disabled={!!downloading || !officialSite} onClick={() => downloadHelper(selectedBuild.id)}><Icon name="download" size={16}/> {t('Download')}</button>}
             </div>}
-            {(!selectedBuild || showBuilds) && <div className="helper-build-list" aria-label="Available helper versions">
-              {orderedBuilds.map(build => <button key={build.id} type="button" className={`helper-build-option ${selected === build.id ? 'selected' : ''}`} onClick={() => { setSelected(build.id); setShowBuilds(false); setDownloaded(false); setDownloadError(''); }}><span><strong>{build.label}</strong><small>{build.detail}</small></span><span className="helper-build-size">{sizeLabel(build)}</span></button>)}
+            {(!selectedBuild || showBuilds) && <div className="helper-build-list" aria-label={t('Available helper versions')}>
+              {orderedBuilds.map(build => <button key={build.id} type="button" className={`helper-build-option ${selected === build.id ? 'selected' : ''}`} onClick={() => { setSelected(build.id); setShowBuilds(false); setDownloaded(false); setDownloadError(''); }}><span><strong>{t(build.label)}</strong><small>{t(build.detail)}</small></span><span className="helper-build-size">{sizeLabel(build)}</span></button>)}
             </div>}
-            <p className="helper-open-hint">{openHint} Already installed? Just open it.{selectedBuild && <> <button type="button" className="helper-change" aria-expanded={showBuilds} onClick={() => setShowBuilds(value => !value)}>{showBuilds ? 'Hide other versions' : 'Other versions'}</button></>}</p>
-            {detection?.platform === 'macos' && !detection.packageId && (!selectedBuild || showBuilds) && <p className="helper-space-note">Not sure which Mac you have? Apple menu → About This Mac → Chip.</p>}
-            {selectedBuild && selectedBuild.id !== 'macos-arm64' && <p className="helper-space-note">This build is a preview and has not yet been tested on its platform.</p>}
-            {cloudMode && manifestError && <p className="helper-space-note">Start the helper for this site with <code>CONCEPT_GRAPH_SITE={location.origin} npm run helper</code> from the project folder.</p>}
+            <p className="helper-open-hint">{openHint} {t('Already installed? Just open it.')}{selectedBuild && <> <button type="button" className="helper-change" aria-expanded={showBuilds} onClick={() => setShowBuilds(value => !value)}>{showBuilds ? t('Hide other versions') : t('Other versions')}</button></>}</p>
+            {detection?.platform === 'macos' && !detection.packageId && (!selectedBuild || showBuilds) && <p className="helper-space-note">{t('Not sure which Mac you have? Apple menu → About This Mac → Chip.')}</p>}
+            {selectedBuild && selectedBuild.id !== 'macos-arm64' && <p className="helper-space-note">{t('This build is a preview and has not yet been tested on its platform.')}</p>}
+            {cloudMode && manifestError && <p className="helper-space-note">{rich('Start the helper for this site with {command} from the project folder.', { command: <code>CONCEPT_GRAPH_SITE={location.origin} npm run helper</code> })}</p>}
             {downloading && <p className="helper-download-status" role="status">{downloading}</p>}
-            {downloaded && <p className="helper-download-status" role="status">Download started. Check your Downloads folder.</p>}
+            {downloaded && <p className="helper-download-status" role="status">{t('Download started. Check your Downloads folder.')}</p>}
             {downloadError && <p className="helper-error" role="alert">{downloadError}</p>}
           </div>
         </div>
         <div className="helper-step helper-step-last">
           <div className="helper-step-marker">2</div>
           <div className="helper-step-content">
-            <h3>Paste the code from the helper window</h3>
+            <h3>{t('Paste the code from the helper window')}</h3>
             <div className="helper-code-box">
-              <label className="helper-input-label" htmlFor="helper-code">The helper shows a pairing code. Copy it and paste it here.</label>
-              <div className="helper-connect"><input ref={codeInput} id="helper-code" type="password" autoComplete="off" spellCheck="false" value={code} onChange={event => setCode(event.target.value)} onPaste={event => { const text = event.clipboardData.getData('text'); if (text.trim()) { event.preventDefault(); pasted(text); } }} placeholder="Paste pairing code" required/><button className="helper-primary" type="submit" disabled={connecting || !code.trim() || !officialSite}>{connecting ? 'Connecting…' : 'Connect'} <Icon name="arrow" size={15}/></button></div>
+              <label className="helper-input-label" htmlFor="helper-code">{t('The helper shows a pairing code. Copy it and paste it here.')}</label>
+              <div className="helper-connect"><input ref={codeInput} id="helper-code" type="password" autoComplete="off" spellCheck="false" value={code} onChange={event => setCode(event.target.value)} onPaste={event => { const text = event.clipboardData.getData('text'); if (text.trim()) { event.preventDefault(); pasted(text); } }} placeholder={t('Paste pairing code')} required/><button className="helper-primary" type="submit" disabled={connecting || !code.trim() || !officialSite}>{connecting ? t('Connecting…') : t('Connect')} <Icon name="arrow" size={15}/></button></div>
               {error && <p className="helper-error" role="alert">{error}</p>}
             </div>
-            <p className="helper-step-note">If your browser asks about local network access, allow it. Next you’ll be guided to install Codex if needed and sign in with ChatGPT.</p>
+            <p className="helper-step-note">{t('If your browser asks about local network access, allow it. Next you’ll be guided to install Codex if needed and sign in with ChatGPT.')}</p>
           </div>
         </div>
       </form>
@@ -2133,7 +2438,7 @@ function Workspace() {
     } catch (failure) {
       if (hosted) {
         helperToken = previousToken;
-        setError(failure.status === 403 ? 'The pairing code was not accepted. Check the terminal and try again.' : 'Could not reach the local helper. Start it, allow local network access if prompted, and try again.');
+        setError(failure.status === 403 ? t('The pairing code was not accepted. Check the terminal and try again.') : t('Could not reach the local helper. Start it, allow local network access if prompted, and try again.'));
       } else setError(failure.message);
     } finally { setConnecting(false); }
   };
@@ -2162,9 +2467,9 @@ function Workspace() {
     setTheme(next);
   };
   if (!boardId && hosted) return <HelperSetup code={code} setCode={setCode} connecting={connecting} error={error} connect={openWorkspace}/>;
-  if (!boardId) return <div className="startup">{error || 'Opening your boards…'}</div>;
+  if (!boardId) return <div className="startup">{error || t('Opening your boards…')}</div>;
   return <><ReactFlowProvider key={boardId}><App boardId={boardId} boards={boards} updateBoards={setBoards} selectBoard={selectBoard} theme={theme} toggleTheme={toggleTheme} waitForPreferences={() => preferenceWrites.current} desktopMode={!!desktopPreferences.current} mcpEnabled={mcpEnabled} editorReadyCallback={editorReadyCallback} helperSession={hosted ? helperSession.current : undefined}/></ReactFlowProvider>
-    {hosted && pairing && <div className="helper-pair-overlay" role="dialog" aria-modal="true" aria-label="Connect local helper" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') closePair(); }}><button className="helper-pair-close" autoFocus onClick={closePair}>Back to board</button><HelperSetup showAllBuilds={showAllBuilds} code={code} setCode={setCode} connecting={connecting} error={error} connect={openWorkspace}/></div>}
+    {hosted && pairing && <div className="helper-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Connect local helper')} onKeyDown={keepDialogFocus}><button className="helper-pair-close" autoFocus onClick={closePair}><Icon name="back" size={16}/>{t('Back to board')}</button><HelperSetup showAllBuilds={showAllBuilds} code={code} setCode={setCode} connecting={connecting} error={error} connect={openWorkspace} onClose={closePair}/></div>}
   </>;
 }
 const cloudServices = {
@@ -2182,4 +2487,4 @@ const cloudServices = {
     } catch (error) { helperToken = previous; throw error; }
   },
 };
-createRoot(document.getElementById('root')).render(cloud ? <React.Suspense fallback={<div className="startup">Opening cloud workspace…</div>}><CloudWorkspace Editor={App} HelperSetup={HelperSetup} services={cloudServices}/></React.Suspense> : <Workspace/>);
+createRoot(document.getElementById('root')).render(cloud ? <React.Suspense fallback={<div className="startup">{t('Opening cloud workspace…')}</div>}><CloudWorkspace Editor={App} HelperSetup={HelperSetup} services={cloudServices}/></React.Suspense> : <Workspace/>);

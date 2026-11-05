@@ -142,6 +142,8 @@ export async function googleSignIn(request, env) {
   return authRedirect(target.href, [oauthCookie(await signPayload(state, env.SESSION_SECRET), url)]);
 }
 
+const withError = (next, value) => `${next}${next.includes('?') ? '&' : '?'}auth_error=${value}`;
+
 export async function googleCallback(request, env) {
   const url = new URL(request.url), cookies = [oauthCookie('', url)];
   if (!googleConfigured(env)) return authRedirect('/?auth_error=unavailable', cookies);
@@ -152,7 +154,7 @@ export async function googleCallback(request, env) {
       || ![state.state, state.nonce, state.verifier].every(value => typeof value === 'string' && /^[\w-]{43}$/.test(value))) throw new Error('Invalid sign-in state.');
     next = signInReturn(state.next);
     if (url.searchParams.has('error')) console.error('Google sign-in returned an error:', String(url.searchParams.get('error')).slice(0, 64));
-    if (url.searchParams.has('error')) return authRedirect(`${next}?auth_error=${url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'}`, cookies);
+    if (url.searchParams.has('error')) return authRedirect(withError(next, url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'failed'), cookies);
     const code = url.searchParams.get('code');
     if (!code || code.length > 4096) throw new Error('Missing code.');
     const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -185,7 +187,7 @@ export async function googleCallback(request, env) {
     return authRedirect(next, cookies);
   } catch (cause) {
     console.error('Google sign-in failed:', cause.message);
-    return authRedirect(`${next}?auth_error=failed`, cookies);
+    return authRedirect(withError(next, 'failed'), cookies);
   }
 }
 

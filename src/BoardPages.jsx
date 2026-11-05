@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { authorInitials, boardAuthor, contrastColor, validColor } from './annotations.mjs';
 import { maxPages, peersOnPage } from './pages.mjs';
+import { plural, t } from './i18n.mjs';
 import './node-context-menu.css';
 import './pages.css';
 
@@ -26,16 +27,16 @@ function PageMenu({ menu, canDelete, onRename, onDelete, onClose }) {
     const buttons = [...element.current.querySelectorAll('button:not(:disabled)')], index = buttons.indexOf(document.activeElement);
     buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
   };
-  return createPortal(<div ref={element} className="node-context-menu" role="menu" aria-label={`${menu.page.name} options`} onContextMenu={event => event.preventDefault()} onKeyDown={key}>
-    <button type="button" role="menuitem" onClick={onRename}>Rename</button>
-    <button type="button" role="menuitem" disabled={!canDelete} title={canDelete ? undefined : 'A board needs at least one page'} onClick={onDelete}>Delete page</button>
+  return createPortal(<div ref={element} className="node-context-menu" role="menu" aria-label={t('{name} options', { name: menu.page.name })} onContextMenu={event => event.preventDefault()} onKeyDown={key}>
+    <button type="button" role="menuitem" onClick={onRename}>{t('Rename')}</button>
+    <button type="button" role="menuitem" disabled={!canDelete} title={canDelete ? undefined : t('A board needs at least one page')} onClick={onDelete}>{t('Delete page')}</button>
   </div>, document.body);
 }
 
 function PagePeople({ peers }) {
   if (!peers.length) return null;
   const shown = peers.slice(0, 3);
-  return <span className="board-page-people" aria-label={`${peers.length} ${peers.length === 1 ? 'person' : 'people'} here: ${peers.map(peer => peer.user.name).join(', ')}`}>
+  return <span className="board-page-people" aria-label={plural(peers.length, '{count} person here: {names}', '{count} people here: {names}', { names: peers.map(peer => peer.user.name).join(', ') })}>
     {shown.map(peer => { const author = boardAuthor(peer.user) || { name: '?' }, color = validColor(peer.user.color) ? peer.user.color : '#787891';
       return <span key={peer.id} className="board-page-person" title={author.name} style={{ background: color, color: contrastColor(color) }}>{authorInitials(author)}</span>; })}
     {peers.length > shown.length && <span className="board-page-person more">+{peers.length - shown.length}</span>}
@@ -55,10 +56,10 @@ export function BoardPages({ pages, active, peers = [], disabled, readOnly = fal
   };
   const add = () => { const page = onAdd(); if (page) startEdit(page); };
   const closeMenu = restore => { const id = menu?.page.id; setMenu(null); if (restore && id) list.current?.querySelector(`[data-page-id="${CSS.escape(id)}"]`)?.focus(); };
-  return <section className="board-pages" aria-label="Pages">
-    <div className="board-pages-heading"><span className="eyebrow">PAGES</span>{!readOnly && <button type="button" className="icon-button" aria-label="Add page" data-tooltip="Add page" disabled={disabled || pages.length >= maxPages} onClick={add}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>}</div>
+  return <section className="board-pages" aria-label={t('Pages')}>
+    <div className="board-pages-heading"><span className="eyebrow">{t('PAGES')}</span>{!readOnly && <button type="button" className="icon-button" aria-label={t('Add page')} data-tooltip={t('Add page')} disabled={disabled || pages.length >= maxPages} onClick={add}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>}</div>
     <ul ref={list} className="board-pages-list">{pages.map(page => <li key={page.id}>
-      {editing === page.id ? <input className="board-page-input" autoFocus aria-label="Page name" maxLength={80} value={draft} onFocus={event => event.target.select()} onChange={event => setDraft(event.target.value)} onBlur={finishEdit}
+      {editing === page.id ? <input className="board-page-input" autoFocus aria-label={t('Page name')} maxLength={80} value={draft} onFocus={event => event.target.select()} onChange={event => setDraft(event.target.value)} onBlur={finishEdit}
         onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelled.current = true; event.currentTarget.blur(); } }}/>
         : <button type="button" data-page-id={page.id} className={`board-page${page.id === active ? ' active' : ''}`} aria-current={page.id === active ? 'page' : undefined} disabled={disabled} title={page.name}
           onClick={() => onSelect(page.id)} onDoubleClick={() => startEdit(page)} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); startEdit(page); } }}

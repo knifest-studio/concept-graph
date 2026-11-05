@@ -1,4 +1,4 @@
-import { isAnnotation, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
+import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
 import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
 import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
 import { validateSections } from './src/sections.mjs';
@@ -7,8 +7,17 @@ const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
 // A prompt without `generator` uses Codex; cloud prompts can pick server-side Nano Banana instead.
 export const generators = Object.freeze({ nanoBanana: 'nano-banana' });
+// A describe node is a text node whose run writes a description of its connected images into a new text node.
+export const describeTask = 'describe';
+export const isDescribe = node => node?.type === 'text' && node.data?.task === describeTask;
+export const maxDescription = 20000;
+// A Nano Banana prompt can ask for up to this many variants: separate images generated side by side.
+export const maxVariants = 4;
+export const promptVariants = node => Number.isInteger(node?.data?.variants) && node.data.variants >= 2 && node.data.variants <= maxVariants ? node.data.variants : 1;
 export const nanoModel = 'gemini-nano-banana-2.1';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1' });
+// Describe nodes without Codex use a small Gemini model with image input on the same site key.
+export const describeModel = 'gemini-3.5-flash-lite';
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [describeModel]: 'Gemini 3.5 Flash-Lite' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -49,7 +58,7 @@ export function validateGraph(value) {
   for (const node of value.nodes) {
     if (!node || typeof node.id !== 'string' || node.id.length > 120 || ids.has(node.id)) throw new Error('Invalid or duplicate node.');
     ids.add(node.id);
-    if (!['text', 'image', 'drawing', 'sticky', 'stamp'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
+    if (!['text', 'image', 'drawing', 'sticky', 'stamp', 'shape', 'arrow'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
       || !node.data || typeof node.data !== 'object' || Array.isArray(node.data)) throw new Error('Invalid node.');
     if (node.page !== undefined && !validPageId(node.page)) throw new Error('Invalid node page.');
     if (node.z !== undefined && !validLayer(node.z)) throw new Error('Invalid node layer.');
@@ -63,6 +72,9 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.template !== undefined) validateTemplate(node.data.template);
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && node.data.generator !== generators.nanoBanana) throw new Error('Invalid image generator.');
+    if (node.type === 'text' && node.data.task !== undefined && node.data.task !== describeTask) throw new Error('Invalid node task.');
+    if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
+    if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
     if (node.type === 'image' && !assetPattern.test(node.data?.asset || '')) throw new Error('Invalid image asset.');
     if (node.type === 'image' && node.data.caption !== undefined && (typeof node.data.caption !== 'string' || node.data.caption.length > 120)) throw new Error('Invalid image caption.');
     if (node.type === 'image' && node.data.aspect !== undefined && (!Number.isFinite(node.data.aspect) || node.data.aspect < 0.1 || node.data.aspect > 10)) throw new Error('Invalid image aspect.');
@@ -86,6 +98,8 @@ export function validateGraph(value) {
       if (!group || typeof group.id !== 'string' || !group.id || group.id.length > 120 || ids.has(group.id) || groupIds.has(group.id)
         || typeof group.name !== 'string' || !group.name.trim() || group.name.length > 80 || typeof group.collapsed !== 'boolean'
         || (group.color !== undefined && !validColor(group.color))
+        || (group.slideshow !== undefined && typeof group.slideshow !== 'boolean')
+        || (group.slide !== undefined && (typeof group.slide !== 'string' || !group.slide || group.slide.length > 120))
         || !Array.isArray(group.nodeIds) || !group.nodeIds.length) throw new Error('Invalid group.');
       groupIds.add(group.id);
       for (const id of group.nodeIds) {
@@ -128,6 +142,11 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
       if (ids.has(data.attachedTo)) data.attachedTo = ids.get(data.attachedTo);
       else delete data.attachedTo;
     }
+    // A copied arrow moves with its copy and holds on to copied nodes only; other ends stay where they were drawn.
+    if (node.type === 'arrow') {
+      Object.assign(data, shiftArrow(data, offset.x, offset.y));
+      for (const end of [data.from, data.to]) { if (end.node !== undefined && ids.has(end.node)) end.node = ids.get(end.node); else delete end.node; }
+    }
     return { id: ids.get(id), type: node.type, position: { x: node.position.x + offset.x, y: node.position.y + offset.y }, data, ...(node.page === undefined ? {} : { page: node.page }), z: Math.min(maxLayer, top + rank.get(id)) };
   });
   const edges = graph.edges.filter(edge => ids.has(edge.target)).map(edge => {
@@ -147,12 +166,14 @@ export function runInputs(graph, nodeId) {
   validateGraph(graph);
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const target = nodes.get(nodeId);
-  if (target?.type !== 'text' || (!target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
+  if (target?.type !== 'text' || (!isDescribe(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
   const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: node.data.caption || node.data.label || 'Reference image' }]
     : (node.data.template?.assets || []).map(asset => ({ asset, label: `${node.data.template.name} reference` })));
   if (images.length > 10) throw new Error('Use at most 10 connected reference images per run.');
-  const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && (node.data.text.trim() || node.data.template?.instructions.trim()));
+  if (isDescribe(target) && !images.length) throw new Error('Connect an image to describe.');
+  // A describe node's text only steers its own description; the prompts it feeds never see it.
+  const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && !isDescribe(node) && (node.data.text.trim() || node.data.template?.instructions.trim()));
   return { target, ordered, images, context };
 }
 
@@ -160,6 +181,7 @@ export const promptText = node => [node.data.template?.instructions.trim() ? `Cu
 
 export function collectInputs(graph, nodeId) {
   const { target, ordered, images, context } = runInputs(graph, nodeId);
+  if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
     ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
@@ -169,6 +191,26 @@ export function collectInputs(graph, nodeId) {
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
   return { prompt, images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target) };
+}
+
+function describePrompt(target, images, context) {
+  return [
+    'Describe the attached images in detail, so the description could be used as a prompt to recreate them.',
+    ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
+    'Attached images, in order:\n' + images.map((image, i) => `Image ${i + 1}: ${image.label}`).join('\n'),
+    promptText(target) ? `FOCUS:\n${promptText(target)}` : '',
+    'Cover the subject, composition and framing, pose, materials and textures, colours, lighting, style, mood and background. Describe each image separately when there are several. Reply with the description only, in plain prose: no preamble, headings or questions. Do not generate images.',
+  ].filter(Boolean).join('\n\n');
+}
+
+// The description lands in an ordinary prompt beside its describe node, ready to edit or generate from.
+export function descriptionNode(run, text) {
+  const author = boardAuthor(run.by);
+  return {
+    id: crypto.randomUUID(), type: 'text',
+    position: { x: run.target.position.x + 390, y: run.target.position.y },
+    data: { text: text.trim().slice(0, maxDescription), runId: run.id, createdAt: new Date().toISOString(), ...(author ? { author } : {}) },
+  };
 }
 
 export function imageNode(run, asset, index, dimensions) {
@@ -216,7 +258,8 @@ export function groupRunOutputs(graph, run, newOutputId) {
   const names = new Set(groups.map(group => group.name));
   let number = 1; while (names.has(`Group ${number}`)) number++;
   const id = crypto.randomUUID();
-  groups.push({ id, name: `Group ${number}`, nodeIds: outputs, collapsed: false });
+  // One run's images fold into a slideshow that shows one of them at a time.
+  groups.push({ id, name: `Group ${number}`, nodeIds: outputs, collapsed: false, slideshow: true });
   run.autoGroupId = id;
   graph.revision++;
   return true;
@@ -224,7 +267,7 @@ export function groupRunOutputs(graph, run, newOutputId) {
 
 export const captionHeight = node => node.type === 'image' && !node.data?.collapsed && node.data?.caption?.trim() ? 24 : 0;
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
-  : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? 80 : 310 * (node.data?.aspect || 1)) };
+  : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
 // Outputs stay on the page frozen when the run was submitted, or the first page if it is gone.
 export const runOutputPage = (graph, run) => resolvePage(boardPages(graph), run.page ?? defaultPageId);

@@ -1,9 +1,13 @@
 import { boardAuthor } from './annotations.mjs';
+import { t } from './i18n.mjs';
 
-// Teammate Codex access lives only in board presence: it ends when either person leaves the board.
+// Teammate Codex access lives in board presence. Each side also remembers it by person (account name and colour) for
+// `remember` ms after they last saw each other, so a reload or a rejoin picks it up again without a new request.
 export const delegateLimit = 3;
 // A brief reconnect keeps access; a newly connected client waits for presence before judging absence.
-export const sharingGrace = { join: 10000, leave: 10000 };
+export const sharingGrace = { join: 10000, leave: 10000, remember: 10 * 60 * 1000 };
+const person = state => { const user = boardAuthor(state?.user); return user ? `${user.name}\u0000${user.color || ''}` : null; };
+const noMemory = { read: () => ({}), write: () => {} };
 
 const validRequest = value => typeof value === 'string' && /^[\w-]{8,64}$/.test(value);
 const validClient = value => Number.isSafeInteger(value) && value >= 0;
@@ -51,8 +55,9 @@ export function delegateAction(run, { me, states, gone = () => false, active = 0
 }
 
 export class CodexSharing {
-  constructor(awareness, now = () => Date.now()) {
-    Object.assign(this, { awareness, now, me: awareness.clientID, known: new Map(), liveSince: null, granted: new Set() });
+  // `memory` keeps { granted: [{ key, until }], access: { key, until } } across reloads, e.g. in localStorage per board.
+  constructor(awareness, now = () => Date.now(), memory = noMemory) {
+    Object.assign(this, { awareness, now, memory, me: awareness.clientID, known: new Map(), liveSince: null, granted: new Set(), resumed: new Set() });
     this.observe = ({ added = [], updated = [], removed = [] }) => {
       const time = this.now(), states = awareness.getStates();
       for (const id of [...added, ...updated]) if (states.get(id)) this.known.set(id, { state: states.get(id), left: null });
@@ -83,10 +88,28 @@ export class CodexSharing {
   }
   setReady(ready) { this.set({ codex: !!ready }); }
   request(owner) { if (validClient(owner) && owner !== this.me) this.set({ codexRequest: { to: owner, id: crypto.randomUUID() } }); }
-  withdraw() { this.set({ codexRequest: null }); }
-  allow(id) { const local = this.local(); this.set({ codexGrants: [...codexGrants(local).filter(item => item !== id), id], codexDeclines: codexDeclines(local).filter(item => item !== id) }); }
+  // Stopping on purpose also forgets the access; a teammate who only left keeps it for a while.
+  withdraw(forget = true) { if (forget) this.remember({ access: null }); this.set({ codexRequest: null }); }
+  allow(id) {
+    const local = this.local(), key = person(this.requester(id));
+    this.set({ codexGrants: [...codexGrants(local).filter(item => item !== id), id], codexDeclines: codexDeclines(local).filter(item => item !== id) });
+    if (key) this.remember({ granted: [...this.recall().granted.filter(item => item.key !== key), { key, until: this.now() + sharingGrace.remember }] });
+  }
   // Declining a pending request and revoking a grant are the same signal; the requester knows which it was.
-  decline(id) { const local = this.local(); this.set({ codexGrants: codexGrants(local).filter(item => item !== id), codexDeclines: [...codexDeclines(local).filter(item => item !== id), id] }); }
+  decline(id) {
+    const local = this.local(), key = person(this.requester(id));
+    this.set({ codexGrants: codexGrants(local).filter(item => item !== id), codexDeclines: [...codexDeclines(local).filter(item => item !== id), id] });
+    if (key) this.remember({ granted: this.recall().granted.filter(item => item.key !== key) });
+  }
+  requester(id) { return [...this.states()].find(([client, state]) => client !== this.me && codexRequest(state)?.id === id)?.[1]; }
+  // Unexpired memory only; a damaged or foreign value reads as empty.
+  recall() {
+    let value = {};
+    try { value = this.memory.read() || {}; } catch {}
+    const time = this.now(), fresh = item => item && typeof item.key === 'string' && Number.isFinite(item.until) && item.until > time;
+    return { granted: Array.isArray(value.granted) ? value.granted.filter(fresh).slice(0, 50) : [], access: fresh(value.access) ? value.access : null };
+  }
+  remember(fields) { try { this.memory.write({ ...this.recall(), ...fields }); } catch {} }
   view(runs) { return sharingView(this.states(), this.me, runs); }
   // The owner this client may generate through right now, if any.
   using() {
@@ -96,24 +119,39 @@ export class CodexSharing {
   // Prunes stale grants and reports what changed for this person; call on presence changes and periodically.
   maintain() {
     if (this.liveSince === null) return [];
-    const states = this.states(), events = [];
+    const states = this.states(), events = [], time = this.now(), memory = this.recall();
+    // Owner: a teammate granted recently gets access again when they ask from a new tab or session.
+    const asking = [...states].flatMap(([id, state]) => { const request = codexRequest(state); return id !== this.me && request?.to === this.me ? [{ request, key: person(state) }] : []; });
+    const remembered = new Set(memory.granted.map(item => item.key));
+    for (const { request, key } of asking) if (remembered.has(key) && !codexGrants(this.local()).includes(request.id) && !codexDeclines(this.local()).includes(request.id)) this.allow(request.id);
+    const present = new Set(asking.filter(({ request }) => codexGrants(this.local()).includes(request.id)).map(({ key }) => key));
+    if (memory.granted.some(item => present.has(item.key))) this.remember({ granted: memory.granted.map(item => present.has(item.key) ? { ...item, until: time + sharingGrace.remember } : item) });
     if (this.settled()) {
-      const asked = new Set([...states].flatMap(([id, state]) => { const request = codexRequest(state); return id !== this.me && request?.to === this.me ? [request.id] : []; }));
+      const asked = new Set(asking.map(({ request }) => request.id));
       const grants = codexGrants(this.local()), declines = codexDeclines(this.local()), keptGrants = grants.filter(id => asked.has(id)), keptDeclines = declines.filter(id => asked.has(id));
       if (keptGrants.length !== grants.length || keptDeclines.length !== declines.length) this.set({ codexGrants: keptGrants, codexDeclines: keptDeclines });
     }
     const request = codexRequest(this.local());
-    if (!request) return events;
+    // Requester: ask again, silently, the teammate whose Codex this person was using before a reload or a rejoin.
+    if (!request) {
+      const owner = memory.access && [...states].find(([id, state]) => id !== this.me && state.codex === true && person(state) === memory.access.key);
+      if (owner) { this.request(owner[0]); this.resumed.add(codexRequest(this.local()).id); }
+      return events;
+    }
     const owner = states.get(request.to), user = boardAuthor((owner || this.known.get(request.to)?.state)?.user) || { name: 'Your teammate' };
     if (codexDeclines(owner).includes(request.id)) { events.push({ type: this.granted.has(request.id) ? 'revoked' : 'declined', user }); this.withdraw(); }
-    else if (!owner && this.gone(request.to)) { events.push({ type: 'left', user }); this.withdraw(); }
-    else if (codexGrants(owner).includes(request.id) && !this.granted.has(request.id)) { this.granted.add(request.id); events.push({ type: 'granted', user }); }
+    else if (!owner && this.gone(request.to)) { events.push({ type: 'left', user }); this.withdraw(false); }
+    else if (codexGrants(owner).includes(request.id)) {
+      if (!this.granted.has(request.id)) { this.granted.add(request.id); events.push({ type: this.resumed.has(request.id) ? 'resumed' : 'granted', user }); }
+      this.remember({ access: { key: person(owner), until: time + sharingGrace.remember } });
+    }
     return events;
   }
 }
 
 export function sharingMessage({ type, user }) {
-  const name = user?.name || 'Your teammate';
-  return { granted: `${name} allowed you to generate with their Codex on this board.`, declined: `${name} declined your request to use their Codex.`,
-    revoked: `${name} stopped sharing their Codex with you.`, left: `${name} left the board, so their Codex is no longer available.` }[type];
+  const name = user?.name || t('Your teammate'), text = { granted: '{name} allowed you to generate with their Codex on this board.', declined: '{name} declined your request to use their Codex.',
+    revoked: '{name} stopped sharing their Codex with you.', left: '{name} left the board. Their Codex comes back if they return within 10 minutes.',
+    resumed: 'You can generate with {name}’s Codex again.' }[type];
+  return text && t(text, { name });
 }

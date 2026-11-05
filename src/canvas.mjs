@@ -1,5 +1,5 @@
 import { nodeSize, captionHeight } from '../graph.mjs';
-import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
+import { isAnnotation, canAttachStamp, canAttachArrow, arrowPad, arrowPosition, reconcileStampAttachments } from './annotations.mjs';
 import { layerIndex, sameShape } from './layers.mjs';
 import { sectionMinimum, sectionPadding } from './sections.mjs';
 
@@ -66,7 +66,7 @@ export function mergeAddedGroups(local, remote, base, nodes) {
       const index = result.findIndex(item => item.id === group.id);
       // A local ungroup is intentional; accept only newly arrived members.
       if (index < 0) continue;
-      for (const key of ['name', 'color', 'collapsed']) {
+      for (const key of ['name', 'color', 'collapsed', 'slideshow', 'slide']) {
         if (result[index][key] !== known.get(group.id)[key] || group[key] === known.get(group.id)[key]) continue;
         const updated = { ...result[index] };
         if (group[key] === undefined) delete updated[key]; else updated[key] = group[key];
@@ -110,7 +110,9 @@ export function edgeDropCreatesPrompt(state, onPane) {
   return onPane && !state.isValid && !state.toNode && state.fromHandle?.type === 'source' && ['text', 'image'].includes(state.fromNode?.type);
 }
 
-export const cleanGroups = groups => groups.map(({ id, name, nodeIds, collapsed, color }) => ({ id, name, nodeIds, collapsed, ...(color === undefined ? {} : { color }) }));
+// A slide whose image left the group is dropped; the slideshow then shows its first image.
+export const cleanGroups = groups => groups.map(({ id, name, nodeIds, collapsed, color, slideshow, slide }) => ({ id, name, nodeIds, collapsed, ...(color === undefined ? {} : { color }),
+  ...(slideshow === undefined ? {} : { slideshow }), ...(slide !== undefined && nodeIds.includes(slide) ? { slide } : {}) }));
 export function pruneGroups(groups, nodes) {
   const ids = new Set(nodes.map(node => node.id));
   return groups.map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => ids.has(id)) })).filter(group => group.nodeIds.length);
@@ -131,16 +133,85 @@ export function groupBounds(group, nodes, byId, measure = size) {
   return { x, y, width: right - x + 24, height: bottom - y + 24 };
 }
 
+// Where a line toward `toward` leaves a node's outline (a shape's own outline; a box for anything else), 6px out.
+function outlinePoint(box, toward) {
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2, dx = toward.x - cx, dy = toward.y - cy, hw = box.width / 2, hh = box.height / 2;
+  const length = Math.hypot(dx, dy);
+  if (length < 1e-6) return { x: cx, y: cy };
+  const rx = Math.abs(dx) / hw, ry = Math.abs(dy) / hh;
+  const scale = box.kind === 'ellipse' ? 1 / Math.hypot(rx, ry) : box.kind === 'diamond' ? 1 / (rx + ry) : 1 / Math.max(rx, ry);
+  const t = Math.min(1, scale) + (scale < 1 ? 6 / length : 0);
+  return { x: cx + dx * t, y: cy + dy * t };
+}
+
+// An arrow's two points as drawn: an attached end sits on its node's outline, facing the other end; a free end, or one
+// whose node is gone, at its stored point.
+export const arrowTargetAt = (nodes, point, except) => stampTargetAt(nodes, point, except, canAttachArrow);
+
+export function arrowEnds(arrow, byId, measure = estimatedSize) {
+  const box = end => {
+    const node = end.node !== undefined && byId.get(end.node);
+    if (!canAttachArrow(node)) return null;
+    const { width, height } = measure(node), caption = captionHeight(node);
+    return { x: node.position.x, y: node.position.y - caption, width, height: height + caption, kind: node.type === 'shape' ? node.data.shape : 'box', node };
+  };
+  const a = box(arrow.data.from), b = box(arrow.data.to), centre = (end, frame) => frame ? { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 } : { x: end.x, y: end.y };
+  const ca = centre(arrow.data.from, a), cb = centre(arrow.data.to, b);
+  return { from: a ? outlinePoint(a, cb) : ca, to: b ? outlinePoint(b, ca) : cb, attached: !!(a || b) };
+}
+
+// Arrows whose node was deleted keep that end where it was last drawn, as in FigJam.
+export function detachArrows(before, after, measure = estimatedSize) {
+  if (!after.some(node => node.type === 'arrow')) return after;
+  const kept = new Set(after.map(node => node.id)), byId = new Map(before.map(node => [node.id, node])), lost = end => end.node !== undefined && !kept.has(end.node);
+  return after.map(node => {
+    if (node.type !== 'arrow' || !(lost(node.data.from) || lost(node.data.to))) return node;
+    const ends = arrowEnds(node, byId, measure), free = (end, point) => lost(end) ? { x: point.x, y: point.y } : end;
+    const data = { ...node.data, from: free(node.data.from, ends.from), to: free(node.data.to, ends.to) };
+    return { ...node, position: arrowPosition(data.from, data.to), data };
+  });
+}
+
+function arrowView(node, byId, measure, zIndex, cache) {
+  const { from, to, attached } = arrowEnds(node, byId, measure), saved = cache.nodes.get(node);
+  if (saved && saved.zIndex === zIndex && saved.from.x === from.x && saved.from.y === from.y && saved.to.x === to.x && saved.to.y === to.y) return saved.view;
+  const x = Math.min(from.x, to.x) - arrowPad, y = Math.min(from.y, to.y) - arrowPad, width = Math.abs(to.x - from.x) + 2 * arrowPad, height = Math.abs(to.y - from.y) + 2 * arrowPad;
+  // An arrow held by a node follows it, so only a free arrow can be dragged on its own.
+  const view = { ...node, zIndex, position: { x, y }, width, height, measured: { width, height }, handles: [], draggable: !attached,
+    data: { ...node.data, line: { x1: from.x - x, y1: from.y - y, x2: to.x - x, y2: to.y - y }, attached } };
+  cache.nodes.set(node, { zIndex, from, to, view });
+  return view;
+}
+
+// A slideshow steps through its images; `slide` names the one shown, else (or once that image is gone) the first.
+export function slideshowState(group, byId) {
+  const images = [];
+  for (const id of group.nodeIds) { const node = byId.get(id); if (node?.type === 'image') images.push(node); }
+  const index = Math.max(0, images.findIndex(node => node.id === group.slide));
+  return { images, index, node: images[index] };
+}
+export const steppedSlide = (group, byId, step) => { const { images, index } = slideshowState(group, byId); return images.length ? images[(index + step + images.length) % images.length].id : undefined; };
+// A folded group is a 240×72 card. A folded slideshow shows its image under the 40px header, 310px wide like an image card.
+const foldedGroup = Object.freeze({ width: 240, height: 72 });
+// `aspects` holds proportions learned from loaded pictures, for images stored without them.
+const foldedSize = (slide, aspects) => slide ? { width: 310, height: 40 + Math.round(310 * (slide.data.aspect || aspects?.get(slide.data.asset) || 1)) } : foldedGroup;
+export const foldedFrame = (group, byId) => foldedSize(group.slideshow && slideshowState(group, byId).node);
+
 // An unmeasured prompt grows with its text (13px type, 22px lines, ~44 characters per line in a 310px card).
 // A light card's connection dot. React Flow measures connection points by their `source`/`target` class and reads the
 // side from data-handlepos; without it the links would leave from the bottom and enter from the top.
 export const lodHandleProps = type => ({ className: `lod-handle ${type}`, 'data-handlepos': type === 'source' ? 'right' : 'left' });
 
-// A prompt not drawn yet: header, text lines and, when something feeds it, the "Inputs" row, as the card will lay them out.
+// A prompt not drawn yet: header, text lines and, when something feeds it, the "Inputs" row, as the card will lay them out,
+// up to a square (the card scrolls past that), or the height its bottom edge was dragged to.
+export const promptSquare = 310;
+// Whether a prompt's text runs past its card, judged as estimatedSize lays it out (light cards cannot measure).
+export const promptOverflows = node => 58 + 22.1 * String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0) > (node.data?.height || promptSquare) + 4;
 export function estimatedSize(node, inputs = false) {
   if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
+  if (node.data?.height) return { width: 310, height: node.data.height };
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
-  return { width: 310, height: Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0)) };
+  return { width: 310, height: Math.min(promptSquare, Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0))) };
 }
 
 // React Flow draws a connection only between handles it knows. These match the CSS: 10px dots centred on the card's
@@ -153,7 +224,8 @@ export function nodeHandles(node, { width, height }) {
   return handles;
 }
 // Frames are not positioned, so their handles sit on the node box itself.
-const frameHandles = Object.freeze([{ id: null, type: 'target', position: 'left', x: -10, y: 31, width: 10, height: 10 }, { id: null, type: 'source', position: 'right', x: 240, y: 31, width: 10, height: 10 }]);
+const frameHandles = ({ width, height }) => [{ id: null, type: 'target', position: 'left', x: -10, y: height / 2 - 5, width: 10, height: 10 }, { id: null, type: 'source', position: 'right', x: width, y: height / 2 - 5, width: 10, height: 10 }];
+const groupHandles = Object.freeze(frameHandles(foldedGroup));
 const edgeStyles = { text: Object.freeze({ stroke: connectionColor('text'), strokeWidth: 2 }), image: Object.freeze({ stroke: connectionColor('image'), strokeWidth: 2 }) };
 
 // Per-editor memory for canvasView: unchanged inputs give back the same objects (and arrays), so React Flow skips them.
@@ -188,8 +260,10 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   // re-measures it on screen. Folded cards are always 72px square.
   const known = node => node.data?.collapsed === true ? folded : node.measured || cache.sizes.get(node.id);
   const fed = new Set(edges.map(edge => edge.target)), inputs = node => fed.has(node.id) || !!node.data?.template?.assets?.length;
-  const viewNodes = nodes.map(node => {
+  const arrows = [];
+  const viewNodes = nodes.map((node, index) => {
     byId.set(node.id, node);
+    if (node.type === 'arrow') { arrows.push(index); return null; }
     const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node);
     if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size && saved.input === input) return saved.view;
     if (node.measured && node.data?.collapsed !== true) cache.sizes.set(node.id, node.measured);
@@ -202,16 +276,20 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
     return view;
   });
   const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node, inputs(node));
+  // Arrows follow the nodes they hold, so they are placed once every node is known.
+  for (const index of arrows) viewNodes[index] = arrowView(nodes[index], byId, shown, layers.get(nodes[index].id), cache);
   const frames = groups.map(group => {
-    const bounds = groupBounds(group, nodes, byId, shown);
-    const width = group.collapsed ? 240 : bounds.width, height = group.collapsed ? 72 : bounds.height, saved = cache.frames.get(group);
-    if (saved && saved.x === bounds.x && saved.y === bounds.y && saved.width === width && saved.height === height) return saved.view;
+    const bounds = groupBounds(group, nodes, byId, shown), slides = group.slideshow ? slideshowState(group, byId) : null, slide = slides?.node;
+    const { width, height } = group.collapsed ? foldedSize(slide, cache.aspects) : bounds, saved = cache.frames.get(group);
+    if (saved && saved.x === bounds.x && saved.y === bounds.y && saved.width === width && saved.height === height && saved.slide === slide) return saved.view;
+    const images = slides ? slides.images.length : group.nodeIds.reduce((count, id) => count + (byId.get(id)?.type === 'image'), 0);
     // A stored group colour is kept for older boards but no longer drawn: groups only bundle and fold nodes.
     const view = { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
-      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed },
+      data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, images,
+        ...(slides ? { slideshow: true, index: slides.index, ...(slide ? { slide: { id: slide.id, asset: slide.data.asset, aspect: slide.data.aspect } } : {}) } : {}) },
       // Below the connections' layer (0), so a folded frame never hides the links between its members.
-      width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? frameHandles : [] };
-    cache.frames.set(group, { x: bounds.x, y: bounds.y, width, height, view });
+      width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? (slide ? frameHandles({ width, height }) : groupHandles) : [] };
+    cache.frames.set(group, { x: bounds.x, y: bounds.y, width, height, slide, view });
     return view;
   });
   const viewEdges = edges.map(edge => {
@@ -242,11 +320,15 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
 // Far out, titles of small neighbouring sections would pile up. Like labels on a map, the selected and larger sections
 // keep theirs and a title that would overlap one already placed waits until the board is closer. Sizes are screen
 // pixels and follow the CSS for .section-title: a pill inside the frame's top-left corner.
+// As in FigJam, a title keeps its screen size but never leaves its section: it is cut short to the section's width and
+// left out once the section is too small on screen to hold a few letters.
 export function visibleTitles(frames, zoom) {
   const size = 15, height = Math.ceil(size * 1.3) + 6, cell = 160, grid = new Map(), shown = new Set();
   const order = [...frames].sort((a, b) => b.selected - a.selected || b.width * b.height - a.width * a.height || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const frame of order) {
-    const width = Math.min(Math.max(frame.width * zoom, 360), String(frame.data.name).length * size * .62 + 28);
+    const room = frame.width * zoom - 16;
+    if (room < 56 || frame.height * zoom < height + 16) continue;
+    const width = Math.min(room, String(frame.data.name).length * size * .62 + 28);
     const left = frame.position.x * zoom + 6, top = frame.position.y * zoom + 6, box = { left, right: left + width, top, bottom: top + height };
     const cells = [];
     for (let x = Math.floor(box.left / cell); x <= Math.floor(box.right / cell); x++) for (let y = Math.floor(box.top / cell); y <= Math.floor(box.bottom / cell); y++) cells.push(`${x}:${y}`);
@@ -255,6 +337,17 @@ export function visibleTitles(frames, zoom) {
     shown.add(frame.id);
   }
   return shown;
+}
+
+// How far the canvas pans: the page's content plus `pad` on every side, so nobody scrolls off into empty space and
+// loses the board. It grows as content is added; an empty page keeps a square around the origin.
+export function boardExtent({ nodes, sections = [] }, measure = estimatedSize, pad = 2000) {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const add = (x, y, width, height) => { left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + width); bottom = Math.max(bottom, y + height); };
+  for (const node of nodes) { const { width, height } = measure(node); add(node.position.x, node.position.y - captionHeight(node), width, height + captionHeight(node)); }
+  for (const section of sections) add(section.x, section.y, section.width, section.height);
+  if (left === Infinity) return [[-pad, -pad], [pad, pad]];
+  return [[left - pad, top - pad], [right + pad, bottom + pad]];
 }
 
 export function moveGroup(nodes, group, position, moveStamps = true) {
@@ -272,7 +365,10 @@ const holds = (rect, point) => point.x >= rect.x && point.x <= rect.x + rect.wid
 const area = rect => rect.width * rect.height;
 // A section lies in another when its centre does and it is smaller; equal ones by ID, so two never hold each other.
 const nests = (inner, outer) => inner.id !== outer.id && holds(outer, centre(inner)) && (area(inner) < area(outer) || (area(inner) === area(outer) && inner.id > outer.id));
-export const frameBox = (group, nodes, byId, measure = size) => { const bounds = groupBounds(group, nodes, byId, measure); return group.collapsed ? { ...bounds, width: 240, height: 72 } : bounds; };
+export const frameBox = (group, nodes, byId, measure = size) => {
+  const bounds = groupBounds(group, nodes, byId, measure);
+  return group.collapsed ? { ...bounds, ...foldedFrame(group, byId || new Map(nodes.map(node => [node.id, node]))) } : bounds;
+};
 
 /**
  * What sections hold, like things dropped into a FigJam section: each node whose centre lies inside, each group whose
@@ -330,11 +426,13 @@ export function wrapBounds(page, ids, measure = estimatedSize) {
   return { x, y, width: Math.max(sectionMinimum.width, right - x), height: Math.max(sectionMinimum.height, bottom - y) };
 }
 
-export function stampTargetAt(nodes, point, stampId) {
+// The topmost node under `point` that a stamp (or, with `canAttach`, an arrow end) can hold on to; `nodes` as React Flow
+// draws them. Found by geometry, as drawing tools turn off pointer events on cards.
+export function stampTargetAt(nodes, point, stampId, canAttach = canAttachStamp) {
   let target, top = -Infinity;
   const layers = layerIndex(nodes);
   for (const node of nodes) {
-    if (node.id === stampId || node.hidden || !canAttachStamp(node)) continue;
+    if (node.id === stampId || node.hidden || !canAttach(node)) continue;
     const { width, height } = size(node), zIndex = node.zIndex ?? layers.get(node.id);
     if (point.x < node.position.x || point.x > node.position.x + width || point.y < node.position.y || point.y > node.position.y + height || zIndex < top) continue;
     target = node.id; top = zIndex;
@@ -392,9 +490,9 @@ export function alignNodes(nodes, edges, groups) {
     const left = age.get(a), right = age.get(b);
     return left.time === right.time ? left.index - right.index : left.time - right.time;
   };
+  const byId = new Map(nodes.map(node => [node.id, node]));
   for (const group of groups) {
-    const bounds = groupBounds(group, nodes);
-    units.set(group.id, { ...bounds, width: group.collapsed ? 240 : bounds.width, height: group.collapsed ? 72 : bounds.height });
+    units.set(group.id, frameBox(group, nodes, byId));
     age.set(group.id, age.get([...group.nodeIds].sort(chronological)[0]));
     for (const id of group.nodeIds) owners.set(id, group.id);
   }
@@ -492,4 +590,52 @@ export function alignNodes(nodes, edges, groups) {
     const owner = owners.get(node.id), before = units.get(owner), after = positions.get(owner);
     return { ...node, position: { x: after.x + (node.position.x - before.x), y: after.y + shift + (node.position.y - before.y) } };
   });
+}
+
+// FigJam's selection box takes whatever it touches. An arrow or a drawing counts only where its line runs, not across its
+// whole bounding box, and a section the box starts inside is the backdrop of the drag, not something it picked.
+// `nodes` are React Flow's (measured sizes); `box` and `start` are in flow coordinates.
+export function boxTouches(nodes, box, start) {
+  const touched = new Set(), right = box.x + box.width, bottom = box.y + box.height;
+  for (const node of nodes) {
+    if (node.hidden || node.selectable === false) continue;
+    const { x, y } = node.internals?.positionAbsolute || node.position, width = node.measured?.width ?? node.width ?? 0, height = node.measured?.height ?? node.height ?? 0;
+    if (x > right || y > bottom || x + width < box.x || y + height < box.y) continue;
+    if (node.type === 'section' && start.x > x && start.x < x + width && start.y > y && start.y < y + height) continue;
+    if (node.type === 'arrow') { const { x1, y1, x2, y2 } = node.data.line; if (!segmentTouches([x + x1, y + y1], [x + x2, y + y2], box)) continue; }
+    if (node.type === 'drawing') {
+      const pad = node.data.width / 2, wide = { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad }, points = node.data.points.map(([px, py]) => [x + px, y + py]);
+      if (!points.some((point, i) => segmentTouches(points[Math.max(0, i - 1)], point, wide))) continue;
+    }
+    touched.add(node.id);
+  }
+  return touched;
+}
+
+// Liang–Barsky clipping: whether the segment a→b passes through the rectangle (a single point when a equals b).
+function segmentTouches([ax, ay], [bx, by], box) {
+  const dx = bx - ax, dy = by - ay;
+  let enter = 0, leave = 1;
+  for (const [p, q] of [[-dx, ax - box.x], [dx, box.x + box.width - ax], [-dy, ay - box.y], [dy, box.y + box.height - ay]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    if (p < 0) enter = Math.max(enter, q / p); else leave = Math.min(leave, q / p);
+    if (enter > leave) return false;
+  }
+  return true;
+}
+
+// A plain box selects what it touches. With Shift it flips what it touches against the selection the drag started from,
+// so passing back off an item restores it, as in FigJam.
+export function boxSelection(touched, base) {
+  if (!base) return touched;
+  const ids = new Set(base);
+  for (const id of touched) if (!ids.delete(id)) ids.add(id);
+  return ids;
+}
+
+// Marks exactly `ids` selected among the items `scope` holds (the open page); the list keeps its identity when nothing changes.
+export function reselect(items, ids, scope) {
+  let changed = false;
+  const next = items.map(item => { if (!scope.has(item.id) || !!item.selected === ids.has(item.id)) return item; changed = true; return { ...item, selected: ids.has(item.id) }; });
+  return changed ? next : items;
 }

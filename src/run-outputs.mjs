@@ -1,11 +1,11 @@
-import { imageNode, positionRunOutput, groupRunOutputs } from '../graph.mjs';
+import { imageNode, descriptionNode, isDescribe, positionRunOutput, groupRunOutputs } from '../graph.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 export const terminalRun = status => ['completed', 'failed', 'cancelled'].includes(status);
 export const runOutputId = (runId, index) => `${runId}-output-${index}`;
 // What history shows for a run of this prompt: its page, a short label and the custom node it used.
-export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || 'Generation').slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
+export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || (isDescribe(target) ? 'Describe image' : 'Generation')).slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
 
 /**
  * One generated image joins a board the same way for every generator: a node beside its prompt (or below the run's
@@ -41,6 +41,26 @@ export function placeRunOutput(before, { runId, nodeId, run: current, author, fi
     graph.groups.find(group => group.id === run.autoGroupId).id = `${runId}-group`;
     run.autoGroupId = `${runId}-group`;
   }
+  graph.runs = [...graph.runs.filter(item => item.id !== runId), run];
+  return graph;
+}
+
+/**
+ * A finished description joins the board as one text node beside its describe node, connected from it. Every replica
+ * names it the same way, so concurrent placements cannot create two. Returns null when the run already shows it.
+ */
+export function placeRunText(before, { runId, nodeId, run: current, author, fields = {}, text }) {
+  const id = runOutputId(runId, 0);
+  if (terminalRun(current?.status) || current?.outputIds?.includes(id) || before.nodes.some(node => node.id === id)) return null;
+  const graph = { ...before, nodes: [...before.nodes], edges: [...before.edges], runs: [...before.runs] };
+  const target = graph.nodes.find(node => node.id === nodeId) || { position: { x: 0, y: 0 } };
+  const run = { ...(current || { id: runId, nodeId, label: 'Recovered description', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || author), ...fields, status: 'running', outputIds: [] };
+  const node = descriptionNode({ id: runId, target, by: run.by }, text);
+  node.id = id;
+  positionRunOutput(node, graph, run);
+  graph.nodes.push(node);
+  run.outputIds.push(id); run.count = 1;
+  if (samePage(graph, graph.nodes.find(item => item.id === nodeId), node)) graph.edges.push({ id: `${id}-edge`, source: nodeId, target: id });
   graph.runs = [...graph.runs.filter(item => item.id !== runId), run];
   return graph;
 }

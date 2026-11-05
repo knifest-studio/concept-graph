@@ -16,7 +16,7 @@ const nodeFields = (node, nodes) => {
   return { type: node.type, x: node.position.x, y: node.position.y, page: node.page, z: node.z,
     ...(canAttachStamp(parent) ? { stampAttachment: { nodeId: parent.id, x: node.position.x - parent.position.x, y: node.position.y - parent.position.y } } : {}) };
 };
-const groupFields = group => ({ name: group.name, collapsed: group.collapsed, nodeIds: group.nodeIds, color: group.color });
+const groupFields = group => ({ name: group.name, collapsed: group.collapsed, nodeIds: group.nodeIds, color: group.color, slideshow: group.slideshow, slide: group.slide });
 // One Y.Map per section, so a move, a resize and a rename by different people all survive.
 const sectionFields = section => ({ name: section.name, x: section.x, y: section.y, width: section.width, height: section.height, color: section.color, page: section.page });
 
@@ -146,6 +146,7 @@ function acceptedEdges(entries, nodes, samePage) {
   return accepted;
 }
 
+const optional = (map, key) => map.has(key) ? { [key]: map.get(key) } : {};
 // A node belongs to the first group (by ID) that lists it, and a group never spans pages.
 function groupValues(entries, nodes, samePage) {
   const occupied = new Set();
@@ -153,12 +154,12 @@ function groupValues(entries, nodes, samePage) {
     const members = (group.get('nodeIds') || []).filter(id => nodes.has(id) && !occupied.has(id));
     const nodeIds = members.filter(id => samePage(nodes.get(id), nodes.get(members[0])));
     nodeIds.forEach(id => occupied.add(id));
-    return { id, name: group.get('name'), collapsed: group.get('collapsed'), nodeIds, ...(group.has('color') ? { color: group.get('color') } : {}) };
+    return { id, name: group.get('name'), collapsed: group.get('collapsed'), nodeIds, ...optional(group, 'color'), ...optional(group, 'slideshow'), ...optional(group, 'slide') };
   }).filter(group => group.nodeIds.length);
 }
 
 const withLocalNode = (local, value) => { const { page, z, ...rest } = local || {}; return { ...rest, ...value }; };
-const withLocalGroup = (local, value) => { const { color, ...rest } = local || {}; return { ...rest, ...value }; };
+const withLocalGroup = (local, value) => { const { color, slideshow, slide, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalSection = (local, value) => { const { color, page, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalEdge = (local, id, edge) => ({ ...local, id, ...copy(edge) });
 
@@ -196,7 +197,7 @@ const sameList = (a, b) => a === b || (a?.length === b?.length && a.every((item,
 const showsNode = (local, value) => local.id === value.id && local.type === value.type && local.position?.x === value.position.x && local.position?.y === value.position.y && Object.keys(local.position).length === 2
   && local.page === value.page && ('page' in local) === ('page' in value) && local.z === value.z && ('z' in local) === ('z' in value) && same(local.data, value.data);
 const showsGroup = (local, value) => local.name === value.name && local.collapsed === value.collapsed && sameList(local.nodeIds, value.nodeIds)
-  && local.color === value.color && ('color' in local) === ('color' in value) && sameKeys(local, value);
+  && ['color', 'slideshow', 'slide'].every(key => local[key] === value[key] && (key in local) === (key in value)) && sameKeys(local, value);
 const showsEdge = (local, edge) => Object.keys(edge).every(key => same(local[key], edge[key]));
 const showsSection = (local, value) => local.name === value.name && local.x === value.x && local.y === value.y && local.width === value.width && local.height === value.height
   && local.color === value.color && ('color' in local) === ('color' in value) && local.page === value.page && ('page' in local) === ('page' in value) && sameKeys(local, value);

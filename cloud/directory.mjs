@@ -2,12 +2,20 @@ import { DurableObject } from 'cloudflare:workers';
 import { nextTemplateColor } from '../graph.mjs';
 import { accessModes, boardRole, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
+import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200;
+const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role });
 const email = value => { try { return normalizeEmail(value); } catch { return null; } };
+// An allowed entry: one email, or a whole domain written @example.com (a bare domain is read as one).
+const accessEntry = value => {
+  if (typeof value !== 'string') return null;
+  const entry = value.trim().toLowerCase(), domain = entry.startsWith('@') ? entry.slice(1) : entry.includes('@') ? null : entry;
+  if (domain === null) return email(entry);
+  return /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain) ? `@${domain}` : null;
+};
 
 export class Directory extends DurableObject {
   constructor(ctx, env) {
@@ -30,6 +38,59 @@ export class Directory extends DurableObject {
     // Nano Banana usage: one row per Generate, open (a reservation) until the room settles it with what the call returned.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_usage (id TEXT PRIMARY KEY, email TEXT NOT NULL, day TEXT NOT NULL, month TEXT NOT NULL, images INTEGER NOT NULL, usd REAL NOT NULL, open INTEGER NOT NULL, createdAt INTEGER NOT NULL)');
     ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS nano_usage_month ON nano_usage (month, email, day)');
+    // Who may use the site's Gemini key (emails and @domains), and the admins who decide it. The list used to be the
+    // NANO_BANANA_ALLOWED variable: it is copied in once, and from then on admins keep it on the site.
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_admins (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'nanoImported'").toArray().length) {
+      const now = new Date().toISOString(), entries = String(env?.NANO_BANANA_ALLOWED || '').split(/[\s,;]+/).map(accessEntry).filter(Boolean);
+      for (const entry of entries) ctx.storage.sql.exec('INSERT OR IGNORE INTO nano_access (entry, addedBy, addedAt) VALUES (?, NULL, ?)', entry, now);
+      ctx.storage.sql.exec("INSERT INTO site_settings (key, value) VALUES ('nanoImported', ?)", JSON.stringify({ at: now, entries: entries.length }));
+    }
+  }
+
+  // The site owner, named by the SITE_OWNER_EMAIL secret, is always an admin and the only one who appoints others.
+  siteRole(person) {
+    const address = email(person);
+    if (!address) return null;
+    if (address === email(this.env?.SITE_OWNER_EMAIL)) return 'owner';
+    return this.ctx.storage.sql.exec('SELECT 1 FROM site_admins WHERE email = ?', address).toArray().length ? 'admin' : null;
+  }
+
+  nanoEntries() { return this.ctx.storage.sql.exec('SELECT entry, addedBy, addedAt FROM nano_access ORDER BY entry').toArray().map(row => ({ ...row })); }
+  nanoAllowed(person) { return nanoAllowed(person, this.nanoEntries().map(row => row.entry).join(',')); }
+
+  // What admins see: who may use Nano Banana, who the admins are, and each person's images today.
+  teamAccess(person, now = Date.now()) {
+    const role = this.siteRole(person);
+    if (!role) return null;
+    const day = new Date(now).toISOString().slice(0, 10), imported = JSON.parse(this.ctx.storage.sql.exec("SELECT value FROM site_settings WHERE key = 'nanoImported'").toArray()[0]?.value || '{}');
+    const usage = this.ctx.storage.sql.exec('SELECT email, SUM(images) AS images FROM nano_usage WHERE day = ? AND (open = 0 OR createdAt > ?) GROUP BY email', day, now - nanoReservationTtl).toArray();
+    return { role, owner: email(this.env?.SITE_OWNER_EMAIL), admins: this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM site_admins ORDER BY email').toArray().map(row => ({ ...row })),
+      nano: this.nanoEntries(), usedToday: Object.fromEntries(usage.map(row => [row.email, row.images])), imported };
+  }
+
+  // Admins grant and revoke Nano Banana; only the owner appoints and removes admins.
+  changeTeamAccess(person, { nano, admin } = {}) {
+    const role = this.siteRole(person), now = new Date().toISOString();
+    if (!role) return { error: 'Only site admins can change who may use Nano Banana.', status: 403 };
+    if (nano !== undefined) {
+      const entry = accessEntry(nano?.entry);
+      if (!entry || typeof nano.allowed !== 'boolean') return { error: 'Enter an email address or a domain such as @example.com.', status: 400 };
+      if (nano.allowed && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM nano_access').toArray()[0].count >= maxNanoEntries) return { error: `At most ${maxNanoEntries} people and domains can use Nano Banana.`, status: 400 };
+      if (nano.allowed) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO nano_access (entry, addedBy, addedAt) VALUES (?, ?, ?)', entry, email(person), now);
+      else this.ctx.storage.sql.exec('DELETE FROM nano_access WHERE entry = ?', entry);
+    }
+    if (admin !== undefined) {
+      const address = email(admin?.email);
+      if (role !== 'owner') return { error: 'Only the site owner can choose admins.', status: 403 };
+      if (!address || typeof admin.admin !== 'boolean') return { error: 'Enter the admin’s email address.', status: 400 };
+      if (address === email(this.env?.SITE_OWNER_EMAIL)) return { error: 'The site owner is always an admin.', status: 400 };
+      if (admin.admin) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO site_admins (email, addedBy, addedAt) VALUES (?, ?, ?)', address, email(person), now);
+      else this.ctx.storage.sql.exec('DELETE FROM site_admins WHERE email = ?', address);
+    }
+    return { access: this.teamAccess(person) };
   }
 
   // Days and months are UTC. A reservation that was never settled (its room stopped mid-call) stops counting against
@@ -42,12 +103,13 @@ export class Directory extends DurableObject {
   }
 
   // Checks and reserves in one step, so two Generates at once cannot both pass a nearly used limit.
-  reserveNano(email, { dailyImages, monthlyUsd, estimateUsd }, now = Date.now()) {
+  // `images` is 0 for a description: it counts against the team's month, not the person's daily images.
+  reserveNano(email, { dailyImages, monthlyUsd, estimateUsd, images = 1 }, now = Date.now()) {
     const { usedToday, teamSpentUsd } = this.nanoUsage(email, now);
-    if (usedToday + 1 > dailyImages) return { error: `Daily limit reached (${Math.min(usedToday, dailyImages)}/${dailyImages}).`, status: 429 };
+    if (images && usedToday + images > dailyImages) return { error: `Daily limit reached (${Math.min(usedToday, dailyImages)}/${dailyImages}).`, status: 429 };
     if (teamSpentUsd + estimateUsd > monthlyUsd) return { error: 'Team budget for this month is used up.', status: 429 };
     const id = crypto.randomUUID(), day = new Date(now).toISOString().slice(0, 10);
-    this.ctx.storage.sql.exec('INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt) VALUES (?, ?, ?, ?, 1, ?, 1, ?)', id, email, day, day.slice(0, 7), estimateUsd, now);
+    this.ctx.storage.sql.exec('INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', id, email, day, day.slice(0, 7), images ? 1 : 0, estimateUsd, now);
     return { reservation: id };
   }
 
@@ -144,6 +206,11 @@ export class Directory extends DurableObject {
   renameBoard(id, name) {
     this.ctx.storage.sql.exec('UPDATE boards SET name = ? WHERE id = ?', name, id);
     return this.getBoard(id);
+  }
+  // The board leaves every list and stops admitting anyone; its room wipes the content. Images stay, as other boards may use them.
+  deleteBoard(id) {
+    this.ctx.storage.sql.exec('DELETE FROM boards WHERE id = ?', id);
+    this.ctx.storage.sql.exec('DELETE FROM board_people WHERE board = ?', id);
   }
 
   updateBoardStats(id, { updatedAt, imageCount, covers }) {

@@ -12,7 +12,7 @@ if (nodeModule.registerHooks) {
   const hooks = nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier !== 'cloudflare:workers') return nextResolve(specifier, context);
-      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
+      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
     }
   });
   try { ({ default: worker, BoardRoom, Directory } = await import('../cloud/worker.mjs')); }
@@ -94,8 +94,8 @@ runtimeTest('HTTP login, me, logout and protected routes enforce cookie sessions
   assert.equal(login.status, 200);
   assert.match(login.headers.get('Set-Cookie'), /HttpOnly; SameSite=Lax; Path=\//);
   const cookie = login.headers.get('Set-Cookie').split(';')[0];
-  assert.deepEqual(await login.json(), { user: sessionIdentity({ name: 'Artist', email: 'artist@example.com' }) });
-  assert.deepEqual(await (await request('/api/cloud/me', { cookie })).json(), { user: sessionIdentity({ name: 'Artist', email: 'artist@example.com' }) });
+  assert.deepEqual(await login.json(), { user: sessionIdentity({ name: 'Artist', email: 'artist@example.com' }), siteRole: null });
+  assert.deepEqual(await (await request('/api/cloud/me', { cookie })).json(), { user: sessionIdentity({ name: 'Artist', email: 'artist@example.com' }), siteRole: null });
   assert.equal((await request('/api/cloud/login', { method: 'POST', cookie, data: { code: 'old', name: 'Artist' } })).status, 404);
   const logout = await request('/api/cloud/logout', { method: 'POST', cookie });
   assert.equal(logout.status, 200);
@@ -240,7 +240,7 @@ runtimeTest('Google callback exchanges the code and PKCE verifier, creates a ses
   assert.match(cookies[1], new RegExp(`^cg_session=.+; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE}; Secure$`));
   const session = cookies[1].split(';')[0];
   assert.deepEqual(await (await request('/api/cloud/me', { cookie: session, origin })).json(), {
-    user: sessionIdentity({ name: 'Художник 🎨', email: 'artist@example.com' })
+    user: sessionIdentity({ name: 'Художник 🎨', email: 'artist@example.com' }), siteRole: null
   });
   assert.equal((await request('/api/cloud/boards', { cookie: session, origin, method: 'POST', data: { name: 'Anyone can edit' } })).status, 201);
   assert.equal(fetch.mock.callCount(), 1);

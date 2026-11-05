@@ -1,11 +1,14 @@
 import { getServerByName, routePartykitRequest } from 'partyserver';
+import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
 import { assetPattern, imageFormat, imageTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
-import { nanoAllowed, nanoSettings } from './nano-banana.mjs';
+import { nanoSettings, nanoStatus } from './nano-banana.mjs';
 import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
+import { mcpApi } from './mcp.mjs';
+import { agentScopes, authorize } from './oauth.mjs';
 
 export { BoardRoom } from './board-room.mjs';
 export { Directory } from './directory.mjs';
@@ -52,12 +55,24 @@ async function refreshRoom(env, id) {
   catch (cause) { console.error('Could not update access on the open board:', cause); }
 }
 
-// Usage figures are shown only to people who may use the site's Gemini key.
-async function nanoStatus(user, env) {
-  const settings = nanoSettings(env), allowed = nanoAllowed(user.email, env.NANO_BANANA_ALLOWED);
-  if (!settings.configured || !allowed) return { configured: settings.configured, allowed };
-  const { usedToday, teamSpentUsd } = await directory(env).nanoUsage(user.email);
-  return { configured: true, allowed: true, dailyImages: settings.dailyImages, usedToday, monthlyUsd: settings.monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
+// Everyone who has signed in, most recent first, so admins can grant access without typing addresses.
+async function signedIn(env) {
+  try { return ((await env.DB.prepare('SELECT email, name, last_login_at AS lastLoginAt FROM users ORDER BY last_login_at DESC LIMIT 1000').all()).results || []).map(({ email, name, lastLoginAt }) => ({ email, name, lastLoginAt })); }
+  catch { return []; }
+}
+
+// Site admins choose who may use the site's Gemini key; the site owner also chooses the admins.
+async function teamRoute(request, env, user, url) {
+  const store = directory(env), shown = async access => json({ access: { ...access, people: await signedIn(env) } });
+  if (request.method === 'GET') {
+    const access = await store.teamAccess(user.email);
+    return access ? shown(access) : error('Only site admins can see who may use Nano Banana.', 403);
+  }
+  if (request.method !== 'PATCH') return error('Method not allowed.', 405);
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, admin: input.admin });
+  return result.error ? error(result.error, result.status) : shown(result.access);
 }
 
 // Generation runs in the board's room, which holds the board; the Worker only checks who may spend the site's key.
@@ -74,7 +89,7 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
     return result.error ? error(result.error, result.status) : json({ ok: true });
   }
   if (!nanoSettings(env).configured) return error('Nano Banana isn’t set up on this site.', 503);
-  if (!nanoAllowed(user.email, env.NANO_BANANA_ALLOWED)) return error('Nano Banana is not available for your account.', 403);
+  if (!await directory(env).nanoAllowed(user.email)) return error('Nano Banana is not available for your account. Ask a site admin for access.', 403);
   const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
   const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
@@ -103,6 +118,7 @@ async function route(request, env) {
   }
   // Board links load the app, which signs the person in and then opens the board.
   if (/^\/b\/[^/]+\/?$/.test(path)) return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
+  if (path === '/oauth/authorize') return authorize(request, env);
   if (path === '/api/auth/google') return method === 'GET' ? googleSignIn(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/google/callback') return method === 'GET' ? googleCallback(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/config') return method === 'GET' ? json({ devLogin: devLoginEnabled(request, env) }) : error('Method not allowed.', 405);
@@ -118,14 +134,15 @@ async function route(request, env) {
     catch (cause) { return error(cause.message, 400); }
     const cookie = sessionCookie(await signSession(user, env.SESSION_SECRET), url);
     await recordLogin(user, env);
-    return json({ user }, 200, { 'Set-Cookie': cookie });
+    return json({ user, siteRole: await directory(env).siteRole(user.email) }, 200, { 'Set-Cookie': cookie });
   }
   const protectedPath = path.startsWith('/api/') || path.startsWith('/assets/') || path.startsWith('/downloads/') || path.startsWith('/parties/');
   const user = protectedPath ? await sessionUser(request, env.SESSION_SECRET) : null;
   if (protectedPath && !user) return error('Sign in required.', 401);
   if (path === '/api/cloud/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url) });
-  if (path === '/api/cloud/me' && method === 'GET') return json({ user });
-  if (path === '/api/nano') return method === 'GET' ? json(await nanoStatus(user, env)) : error('Method not allowed.', 405);
+  if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
+  if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
+  if (path === '/api/nano') return method === 'GET' ? json(await nanoStatus(user, env, directory(env))) : error('Method not allowed.', 405);
   const nanoMatch = path.match(/^\/api\/boards\/([^/]+)\/nano(?:\/([^/]+)\/cancel)?$/);
   if (nanoMatch) return nanoRoute(request, env, user, url, nanoMatch[1], nanoMatch[2]);
   if (path === '/api/templates') {
@@ -173,10 +190,20 @@ async function route(request, env) {
       const result = await store.openBoard(id, user);
       return result.error ? json({ error: result.error, ...(result.owner ? { owner: result.owner } : {}) }, result.status) : json(result);
     }
-    if (method !== 'PATCH') return error('Method not allowed.', 405);
+    if (!['PATCH', 'DELETE'].includes(method)) return error('Method not allowed.', 405);
     const board = await store.boardFor(id, user.email);
     if (!board) return error('Board not found.', 404);
-    if (board.role !== 'owner') return error(board.role ? 'Only the board’s owner can rename it.' : 'You don’t have access to this board.', 403);
+    if (board.role !== 'owner') return error(board.role ? `Only the board’s owner can ${method === 'DELETE' ? 'delete' : 'rename'} it.` : 'You don’t have access to this board.', 403);
+    if (method === 'DELETE') {
+      const origin = request.headers.get('Origin');
+      if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+      // The exact name, typed by the owner, guards against a stray or replayed request.
+      if ((await body(request)).confirmName !== board.name) return error('Type the board’s name to delete it.', 400);
+      await store.deleteBoard(id);
+      try { await (await getServerByName(env.BoardRoom, id)).destroy(); }
+      catch (cause) { console.error('Could not erase the deleted board:', cause); }
+      return json({ deleted: id });
+    }
     await store.renameBoard(id, name((await body(request)).name, 80));
     return json({ board: await store.boardFor(id, user.email) });
   }
@@ -266,7 +293,7 @@ async function route(request, env) {
   return env.ASSETS.fetch(request);
 }
 
-export default {
+const site = {
   async fetch(request, env) {
     try { return await route(request, env); }
     catch (cause) {
@@ -274,5 +301,32 @@ export default {
       console.error('Cloud request failed:', cause);
       return error('Cloud request failed.', 500);
     }
+  }
+};
+
+// Agents connect over MCP at /mcp with OAuth: the provider serves discovery, registration and tokens, and lets only
+// requests with a valid token reach the MCP handler. A token names its site address, so each address gets its own
+// provider; one it cannot serve (plain http off localhost) gets the site without agents.
+const providers = new Map();
+function providerFor(origin) {
+  if (!providers.has(origin)) {
+    let provider = null;
+    try {
+      provider = new OAuthProvider({
+        apiRoute: '/mcp', apiHandler: mcpApi, defaultHandler: site,
+        authorizeEndpoint: '/oauth/authorize', tokenEndpoint: '/oauth/token', clientRegistrationEndpoint: '/oauth/register',
+        scopesSupported: [...agentScopes, 'offline_access'], requiredScopes: agentScopes, clientIdMetadataDocumentEnabled: true,
+        resourceMetadata: { resource: `${origin}/mcp`, authorization_servers: [origin], resource_name: 'Concept Graph' }
+      });
+    } catch (cause) { console.error('Agents cannot connect at this address:', origin, cause.message); }
+    if (providers.size > 16) providers.clear();
+    providers.set(origin, provider);
+  }
+  return providers.get(origin);
+}
+
+export default {
+  fetch(request, env, ctx) {
+    return (providerFor(new URL(request.url).origin) || site).fetch(request, env, ctx);
   }
 };

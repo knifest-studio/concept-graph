@@ -227,3 +227,16 @@ test('parent deletion removes known cloud stamps while a concurrent late stamp d
   undo.redo(); exchange(a, b); assert.deepEqual(readCloudGraph(a).nodes.map(node => node.id), ['late-stamp', 'other']);
   undo.destroy(); a.destroy(); b.destroy();
 });
+
+test('slideshow fields sync between replicas and clear everywhere', () => {
+  const { a, b } = pair();
+  let before = readCloudGraph(a), next = structuredClone(before);
+  next.groups = [{ id: 'g', name: 'Run', collapsed: true, slideshow: true, slide: 'other', nodeIds: ['n', 'other'] }];
+  applyLocalGraph(a, next, before, 'seed'); exchange(a, b);
+  assert.deepEqual(readCloudGraph(b).groups[0], next.groups[0]);
+  before = readCloudGraph(b); next = structuredClone(before);
+  delete next.groups[0].slideshow; delete next.groups[0].slide;
+  applyLocalGraph(b, next, before, 'remote'); exchange(a, b);
+  const shown = readCloudGraph(a, { groups: [{ id: 'g', name: 'Run', collapsed: true, slideshow: true, slide: 'other', nodeIds: ['n', 'other'] }] }).groups[0];
+  assert.equal(Object.hasOwn(shown, 'slideshow'), false); assert.equal(Object.hasOwn(shown, 'slide'), false);
+});

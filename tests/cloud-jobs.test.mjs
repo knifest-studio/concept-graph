@@ -275,3 +275,15 @@ test('cloud job routes are unavailable without helper mode', { timeout: 10000 },
   assert.equal((await request('/api/cloud-jobs', 'POST', newJob())).status, 404);
   await assert.rejects(stat(path.join(directory, 'cloud-jobs')), { code: 'ENOENT' });
 });
+
+test('a helper describes images for the site and reports what it can run', { timeout: 30000 }, async t => {
+  const { call, request, wait } = await helperServer(t);
+  assert.ok((await call('/api/status', 'POST')).features.includes('describe'));
+  assert.equal((await request('/api/cloud-jobs', 'POST', newJob({ task: 'caption' }))).status, 400);
+  assert.equal((await request('/api/cloud-jobs', 'POST', newJob({ task: 'describe', images: [] }))).status, 400);
+  const job = newJob({ task: 'describe', prompt: 'WITH_INPUT Describe' });
+  await call('/api/cloud-jobs', 'POST', job);
+  const { jobs } = await wait('/api/cloud-jobs', value => value.jobs.some(item => item.id === job.jobId && item.status === 'completed'));
+  const done = jobs.find(item => item.id === job.jobId);
+  assert.deepEqual([done.task, done.text, done.progress, done.outputs], ['describe', 'A grey pixel.', 'Description written', []]);
+});

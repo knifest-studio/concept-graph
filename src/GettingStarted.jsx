@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { checklistEvent, checklistSteps, emptyChecklist, readChecklist, writeChecklist } from './onboarding.mjs';
+import { t } from './i18n.mjs';
 
 export function useGettingStarted(key) {
   const [state, setState] = useState(() => { try { return readChecklist(localStorage, key); } catch { return emptyChecklist(); } });
@@ -40,8 +41,8 @@ export function GettingStarted({ effects, guide, helperNeeded, ready, onStep, on
     return () => clearTimeout(timer);
   }, [done]);
   if (guide.state.dismissed || (!guide.reopened && done && hidden)) return null;
-  return <aside ref={card} className={`getting-started nodrag nopan${done && !guide.reopened ? ' feel-complete' : ''}`} aria-label="Getting started"><header><strong>Getting started</strong><button type="button" aria-label="Dismiss getting started" onClick={guide.dismiss}>×</button></header>
-    <ol>{steps.map((step, index) => <li key={step.id} data-step={step.id} className={completed.has(step.id) ? 'step-completed' : undefined}><button type="button" disabled={disabled || step.done} onClick={() => onStep(step.id)}><span aria-hidden="true">{step.done ? <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : index + 1}</span>{labels[step.id]}{step.done && <span className="sr-only"> · Done</span>}</button></li>)}</ol>
-    {guide.tips && <ul className="getting-started-tips">{helperNeeded && <li><button type="button" className="helper-download-link" onClick={onDownloadHelper}>Download helper</button></li>}<li>Connected nodes are references.</li><li>Drag an output dot to branch.</li><li>Cmd/Ctrl+D duplicates with connections.</li><li>Custom nodes save reusable instructions.</li><li>Collapse or group nodes to tidy.</li></ul>}
+  return <aside ref={card} className={`getting-started nodrag nopan${done && !guide.reopened ? ' feel-complete' : ''}`} aria-label={t('Getting started')}><header><strong>{t('Getting started')}</strong><button type="button" aria-label={t('Dismiss getting started')} onClick={guide.dismiss}>×</button></header>
+    <ol>{steps.map((step, index) => <li key={step.id} data-step={step.id} className={completed.has(step.id) ? 'step-completed' : undefined}><button type="button" disabled={disabled || step.done} onClick={() => onStep(step.id)}><span aria-hidden="true">{step.done ? <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : index + 1}</span>{t(labels[step.id])}{step.done && <span className="sr-only"> · {t('Done')}</span>}</button></li>)}</ol>
+    {guide.tips && <ul className="getting-started-tips">{helperNeeded && <li><button type="button" className="helper-download-link" onClick={onDownloadHelper}>{t('Download helper')}</button></li>}<li>{t('Connected nodes are references.')}</li><li>{t('Drag an output dot to branch.')}</li><li>{t('Cmd/Ctrl+D duplicates with connections.')}</li><li>{t('Custom nodes save reusable instructions.')}</li><li>{t('Collapse or group nodes to tidy.')}</li></ul>}
   </aside>;
 }

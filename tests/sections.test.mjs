@@ -117,8 +117,10 @@ test('sections draw behind group frames and connections, smaller ones above larg
   // Unchanged sections keep their view objects; without sections the view is as before.
   assert.equal(canvasView(nodes, [], groups, cache, sections).sections, view.sections);
   assert.deepEqual(canvasView(nodes, [], groups, createViewCache()).nodes.map(node => node.id), ['g', 'a', 'b']);
-  // Far out, titles that would overlap wait for the zoom: the selected and larger sections keep theirs.
-  assert.deepEqual([...visibleTitles(view.sections, .05)], ['small']);
+  // Zoomed out, titles that would overlap wait for the zoom: the selected and larger sections keep theirs. Further out, a
+  // section too small on screen shows none.
+  assert.deepEqual([...visibleTitles(view.sections, .3)], ['small']);
+  assert.deepEqual([...visibleTitles(view.sections, .05)], ['big']);
   assert.deepEqual([...visibleTitles(view.sections, 1)].sort(), ['big', 'small']);
 });
 

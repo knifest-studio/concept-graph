@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback } from '../src/canvas.mjs';
+import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback, boxTouches, boxSelection, reselect } from '../src/canvas.mjs';
 
 test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
   const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
@@ -367,8 +367,11 @@ test('a folded card is 72px square whatever it last measured, and unfolding uses
 
 test('zoomed-out section titles never overlap: the selected and larger sections keep theirs', () => {
   const frame = (id, x, y, width, height, selected = false, name = 'Section 12') => ({ id, position: { x, y }, width, height, selected, data: { name } });
-  const frames = [frame('small', 0, 0, 300, 300), frame('big', 100, 0, 2000, 900), frame('far', 0, 5000, 300, 300), frame('picked', 50, 10, 200, 200, true)];
-  assert.deepEqual([...visibleTitles(frames, .05)].sort(), ['far', 'picked']);
+  const frames = [frame('small', 0, 0, 300, 300), frame('big', 100, 0, 2000, 900), frame('far', 0, 5000, 300, 300), frame('picked', 50, 10, 400, 300, true)];
+  assert.deepEqual([...visibleTitles(frames, .3)].sort(), ['far', 'picked']);
+  // As in FigJam, a section too small on screen shows no title rather than one wider or taller than itself.
+  assert.deepEqual([...visibleTitles(frames, .05)].sort(), ['big']);
+  assert.deepEqual([...visibleTitles([frame('flat', 0, 0, 2000, 300)], .1)], []);
   // Close enough, every title fits.
   const apart = [frame('a', 0, 0, 1000, 600), frame('b', 1400, 0, 1000, 600), frame('c', 0, 1000, 1000, 600)];
   assert.deepEqual([...visibleTitles(apart, .3)].sort(), ['a', 'b', 'c']);
@@ -378,4 +381,94 @@ test('light cards expose connection dots on the same sides as full cards', () =>
   // React Flow reads the side from data-handlepos; a missing one bends links to the bottom and top when zoomed out.
   assert.deepEqual(lodHandleProps('source'), { className: 'lod-handle source', 'data-handlepos': 'right' });
   assert.deepEqual(lodHandleProps('target'), { className: 'lod-handle target', 'data-handlepos': 'left' });
+});
+
+test('a folded slideshow shows one image of the group, steps through its images and connects from the card', () => {
+  const tall = id => ({ ...image(id, 400, 100), data: { asset: '12345678-1234-1234-1234-123456789abc.png', aspect: 1.5 } });
+  const nodes = [text('prompt', 0, 0), tall('one'), { ...tall('two'), position: { x: 400, y: 600 } }, text('next', 900, 0)];
+  const edges = [edge('prompt', 'one'), edge('prompt', 'two'), edge('two', 'next')];
+  const show = { id: 'show', name: 'Group 1', nodeIds: ['one', 'two'], collapsed: true, slideshow: true, slide: 'two' };
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const frame = canvasView(nodes, edges, [show]).nodes.find(node => node.id === 'show');
+  assert.deepEqual({ width: frame.width, height: frame.height }, { width: 310, height: 40 + 465 });
+  assert.deepEqual(frame.data.slide, { id: 'two', asset: nodes[2].data.asset, aspect: 1.5 });
+  assert.equal(frame.data.index, 1); assert.equal(frame.data.images, 2);
+  assert.deepEqual(frame.handles.map(handle => [handle.x, handle.y]), [[-10, 505 / 2 - 5], [310, 505 / 2 - 5]]);
+  assert.deepEqual(frameBox(show, nodes), { ...groupBounds(show, nodes), width: 310, height: 505 });
+  assert.equal(steppedSlide(show, byId, 1), 'one'); assert.equal(steppedSlide(show, byId, -1), 'one');
+  // A slide that left the group falls back to the first image, and saving drops it.
+  const stale = { ...show, slide: 'gone' };
+  assert.equal(slideshowState(stale, byId).node.id, 'one');
+  assert.deepEqual(cleanGroups([stale]), [{ id: 'show', name: 'Group 1', nodeIds: ['one', 'two'], collapsed: true, slideshow: true }]);
+  assert.deepEqual(cleanGroups([show]), [{ ...show }]);
+  // An image stored without proportions takes those learned from its loaded picture, not a square.
+  const plain = nodes.map(node => node.id === 'two' ? { ...node, data: { asset: 'abcdef12-1234-1234-1234-123456789abc.png' } } : node), learned = createViewCache();
+  assert.equal(canvasView(plain, edges, [show], learned).nodes.find(node => node.id === 'show').height, 40 + 310);
+  learned.aspects = new Map([['abcdef12-1234-1234-1234-123456789abc.png', 1.25]]);
+  assert.equal(canvasView(plain, edges, [show], learned).nodes.find(node => node.id === 'show').height, 40 + Math.round(310 * 1.25));
+  // Without images, or expanded, it is drawn like any group.
+  assert.equal(canvasView(nodes, edges, [{ ...show, nodeIds: ['prompt', 'next'] }]).nodes.find(node => node.id === 'show').width, 240);
+  const open = canvasView(nodes, edges, [{ ...show, collapsed: false }]);
+  assert.equal(open.nodes.find(node => node.id === 'show').height, groupBounds(show, nodes).height);
+  assert.ok(open.nodes.every(node => !node.hidden));
+  // Folded, the members' links run to and from the card.
+  assert.equal(canvasView(nodes, edges, [show]).edges.find(item => item.id === 'two-next').source, 'show');
+  const board = groups => ({ revision: 1, nodes, edges, groups });
+  validateGraph(board([show]));
+  for (const bad of [{ slideshow: 'yes' }, { slide: 7 }, { slide: '' }]) assert.throws(() => validateGraph(board([{ ...show, ...bad }])), /Invalid group/);
+});
+
+test('the canvas pans only around the page content, with a margin that grows with it', () => {
+  assert.deepEqual(boardExtent({ nodes: [] }), [[-2000, -2000], [2000, 2000]]);
+  const nodes = [text('a', 0, 0), image('b', 1000, 500)];
+  assert.deepEqual(boardExtent({ nodes }, undefined, 100), [[-100, -100], [1410, 1220]]);
+  assert.deepEqual(boardExtent({ nodes, sections: [{ x: -500, y: -300, width: 200, height: 200 }] }, undefined, 100), [[-600, -400], [1410, 1220]]);
+});
+
+test('a prompt is drawn at most as a square unless its bottom edge was dragged to a height', () => {
+  const long = { id: 'long', type: 'text', position: { x: 0, y: 0 }, data: { text: 'word '.repeat(2000) } };
+  assert.deepEqual(estimatedSize(long), { width: 310, height: 310 });
+  assert.deepEqual(estimatedSize({ ...long, data: { ...long.data, height: 520 } }), { width: 310, height: 520 });
+  assert.equal(estimatedSize({ ...long, data: { text: 'Short' } }).height, 80);
+  validateGraph({ nodes: [{ ...long, data: { ...long.data, height: 520 } }], edges: [] });
+  for (const height of [10, 5000, '400']) assert.throws(() => validateGraph({ nodes: [{ ...long, data: { ...long.data, height } }], edges: [] }), /Invalid prompt height/);
+});
+
+test('the selection box takes what it touches, as in FigJam, but only the lines of arrows and drawings', () => {
+  const at = (id, type, x, y, width, height, extra = {}) => ({ id, type, position: { x, y }, measured: { width, height }, data: {}, ...extra });
+  const nodes = [at('card', 'text', 0, 0, 100, 100), at('far', 'image', 500, 500, 100, 100), at('folded', 'text', 40, 40, 50, 50, { hidden: true }),
+    at('arrow', 'arrow', 200, 0, 232, 232, { data: { line: { x1: 16, y1: 16, x2: 216, y2: 216 } } }),
+    at('drawing', 'drawing', 0, 200, 106, 106, { data: { width: 4, points: [[3, 3], [103, 103]] } })];
+  const touched = (x, y, width, height, start = { x, y }) => [...boxTouches(nodes, { x, y, width, height }, start)].sort();
+  assert.deepEqual(touched(90, 90, 20, 20), ['card'], 'a corner is enough; a folded card is never picked');
+  assert.deepEqual(touched(-50, -50, 300, 300), ['arrow', 'card', 'drawing'].sort());
+  // Inside the arrow's bounding box but off its line, and then across the line.
+  assert.deepEqual(touched(380, 20, 40, 40), []);
+  assert.deepEqual(touched(300, 90, 20, 20), ['arrow']);
+  // A drawing counts within half its stroke of the line, not across its bounding box.
+  assert.deepEqual(touched(70, 210, 20, 20), []);
+  assert.deepEqual(touched(55, 245, 10, 10), ['drawing']);
+  assert.deepEqual(touched(55, 230, 5, 5), [], 'beside the stroke');
+  assert.deepEqual(touched(60, 259, 1, .5), ['drawing'], 'off the centre line but within the stroke');
+});
+
+test('a section is picked when the box touches it, but not when the box starts inside it', () => {
+  const section = { id: 'section', type: 'section', position: { x: 0, y: 0 }, measured: { width: 400, height: 300 }, width: 400, height: 300 };
+  const sticky = { id: 'sticky', type: 'sticky', position: { x: 50, y: 50 }, measured: { width: 200, height: 200 } };
+  const touched = (box, start) => [...boxTouches([section, sticky], box, start)].sort();
+  assert.deepEqual(touched({ x: -50, y: -50, width: 120, height: 120 }, { x: -50, y: -50 }), ['section', 'sticky']);
+  assert.deepEqual(touched({ x: 20, y: 20, width: 60, height: 60 }, { x: 80, y: 80 }), ['sticky']);
+  assert.deepEqual(touched({ x: 300, y: 20, width: 200, height: 40 }, { x: 300, y: 60 }), [], 'leaving the section from inside');
+  assert.deepEqual(touched({ x: 300, y: 260, width: 50, height: 80 }, { x: 350, y: 340 }), ['section'], 'entering from below');
+});
+
+test('Shift flips what the box touches against the starting selection, and only the open page changes', () => {
+  assert.deepEqual([...boxSelection(new Set(['a', 'b']), null)], ['a', 'b']);
+  assert.deepEqual([...boxSelection(new Set(['b', 'c']), new Set(['a', 'b']))].sort(), ['a', 'c']);
+  assert.deepEqual([...boxSelection(new Set(), new Set(['a']))], ['a'], 'shrinking the box back restores the start');
+  const items = [{ id: 'a', selected: true }, { id: 'b' }, { id: 'elsewhere', selected: true }], page = new Set(['a', 'b']);
+  assert.equal(reselect(items, new Set(['a']), page), items, 'nothing to change keeps the list');
+  const next = reselect(items, new Set(['b']), page);
+  assert.deepEqual(next.map(item => !!item.selected), [false, true, true]);
+  assert.equal(next[2], items[2]);
 });

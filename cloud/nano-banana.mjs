@@ -1,15 +1,17 @@
-import { nanoModel, promptText, runInputs } from '../graph.mjs';
+import { collectInputs, describeModel, isDescribe, nanoModel, promptText, runInputs } from '../graph.mjs';
 import { imageFormat, imageTypes } from './assets.mjs';
 
 // Nano Banana 2.1 through the Gemini Interactions API, the request the image-generation guide documents (read 2026-11-04):
 // https://aistudio.google.com/docs/image-generation and, for the Interaction object (steps, usage, errors),
 // https://aistudio.google.com/api-reference/interactions-api/create-interaction and https://aistudio.google.com/docs/api-errors
-export { nanoModel };
+export { describeModel, nanoModel };
 const apiRevision = '2026-05-20', googleEndpoint = 'https://generativelanguage.googleapis.com';
 
 // Standard paid tier of gemini-nano-banana-2.1 in USD per 1M tokens, read 2026-11-04 from https://aistudio.google.com/docs/pricing.
 // A 1K output image is 1120 tokens ($0.0336); thinking is billed as text output; there is no free tier for image output.
 export const nanoPrices = Object.freeze({ readOn: '2026-11-04', input: 1.5, textOutput: 7.5, imageOutput: 30, imageTokens: 1120 });
+// Standard paid tier of gemini-3.5-flash-lite, same page and day: text and image input, then text and thinking output.
+export const describePrices = Object.freeze({ readOn: '2026-11-04', input: .3, output: 2.5 });
 export const nanoTimeout = 5 * 60 * 1000;
 export const maxReferenceBytes = 20 * 1024 * 1024;
 
@@ -45,6 +47,11 @@ export function nanoSettings(env) {
 
 // The inputs a Codex run would get (runInputs decides which), written for an image model instead of an agent.
 export function nanoPrompt(graph, nodeId) {
+  // A describe node asks for the same written description Codex would give, from a text model.
+  if (isDescribe(graph.nodes.find(node => node.id === nodeId))) {
+    const { prompt, images, target } = collectInputs(graph, nodeId);
+    return { prompt, images: images.map(asset => ({ asset })), target, describe: true };
+  }
   const { target, images, context } = runInputs(graph, nodeId);
   const prompt = [
     context.length ? 'Create an image for the request at the end. The earlier text is context for it, not separate requests.' : '',
@@ -56,6 +63,14 @@ export function nanoPrompt(graph, nodeId) {
   return { prompt, images, target };
 }
 
+// Usage figures are shown only to people who may use the site's Gemini key.
+export async function nanoStatus(user, env, directory) {
+  const settings = nanoSettings(env), allowed = await directory.nanoAllowed(user.email);
+  if (!settings.configured || !allowed) return { configured: settings.configured, allowed };
+  const { usedToday, teamSpentUsd } = await directory.nanoUsage(user.email);
+  return { configured: true, allowed: true, dailyImages: settings.dailyImages, usedToday, monthlyUsd: settings.monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
+}
+
 export function base64(bytes) {
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
@@ -63,11 +78,11 @@ export function base64(bytes) {
 }
 
 // One request per Generate. `references` are { mimeType, data (base64) } in prompt order.
-export function nanoRequest(prompt, references, { key, endpoint }) {
+export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel) {
   return { url: `${endpoint}/v1beta/interactions`, init: {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, 'Api-Revision': apiRevision },
     // Nothing needs a follow-up turn, so the interaction is not kept in Google's interaction history.
-    body: JSON.stringify({ model: nanoModel, input: [{ type: 'text', text: prompt }, ...references.map(image => ({ type: 'image', mime_type: image.mimeType, data: image.data }))], store: false }),
+    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.map(image => ({ type: 'image', mime_type: image.mimeType, data: image.data }))], store: false }),
   } };
 }
 
@@ -125,6 +140,33 @@ const tokens = value => Number.isFinite(value) && value > 0 ? value : 0;
 export function nanoEstimate({ promptLength = 0, references = 0, images = 1 } = {}) {
   const input = Math.ceil(promptLength / 3) + references * nanoPrices.imageTokens;
   return (input * nanoPrices.input + images * nanoPrices.imageTokens * nanoPrices.imageOutput + 4000 * nanoPrices.textOutput) / 1e6;
+}
+
+// A description's reserve: the prompt, each reference as a full tile set, and a generous answer with thinking.
+export function describeEstimate({ promptLength = 0, references = 0 } = {}) {
+  return ((Math.ceil(promptLength / 3) + references * 1500) * describePrices.input + 6000 * describePrices.output) / 1e6;
+}
+export function describeCost(usage, fallback) {
+  if (!usage || typeof usage !== 'object' || !(Number.isFinite(usage.total_input_tokens) || Number.isFinite(usage.total_output_tokens))) return describeEstimate(fallback);
+  return (tokens(usage.total_input_tokens) * describePrices.input + (tokens(usage.total_output_tokens) + tokens(usage.total_thought_tokens)) * describePrices.output) / 1e6;
+}
+
+// The written answer of a describe call; errors read like those of image calls.
+export function describeResult(status, body) {
+  if (status < 200 || status > 299) {
+    const error = body?.error;
+    throw nanoError(status, errorCode(typeof error?.code === 'string' ? error.code : error?.status), error?.message);
+  }
+  if (!body || typeof body !== 'object') throw new NanoError('upstream', 'Gemini returned an unreadable response. Try again.');
+  const blocks = [...(Array.isArray(body.steps) ? body.steps : []).filter(step => step?.type === 'model_output').flatMap(step => Array.isArray(step.content) ? step.content : []),
+    ...(Array.isArray(body.outputs) ? body.outputs : [])];
+  const text = blocks.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n\n').trim();
+  if (!text) {
+    const failure = Array.isArray(body.errors) ? body.errors[0] : undefined;
+    if (failure || ['failed', 'cancelled'].includes(body.status)) throw nanoError(0, errorCode(failure?.code), failure?.message);
+    throw new NanoError('no_text', 'Gemini returned no description. Try again.');
+  }
+  return { text, usage: body.usage };
 }
 
 // What the call cost, from the usage Google returned with it.

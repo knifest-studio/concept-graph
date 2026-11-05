@@ -17,7 +17,7 @@ if (nodeModule.registerHooks) {
   const hooks = nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier !== 'cloudflare:workers') return nextResolve(specifier, context);
-      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
+      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
     }
   });
   try { ({ default: worker, BoardRoom, Directory } = await import('../cloud/worker.mjs')); }
@@ -126,7 +126,7 @@ test('prompts may choose Nano Banana; any other generator value is rejected', ()
 test('the generator menu says what Nano Banana can do for this person', () => {
   assert.deepEqual(nanoState(undefined), { selectable: true, ready: true, note: 'Uses the site’s Gemini key', budget: '' });
   assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, note: 'Nano Banana isn’t set up on this site', budget: '' });
-  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, note: 'Not available for your account', budget: '' });
+  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, note: 'Not available for your account. Ask a site admin for access.', budget: '' });
   const status = { configured: true, allowed: true, dailyImages: 50, usedToday: 12, monthlyUsd: 50, teamSpentUsd: 3.2 };
   assert.deepEqual(nanoState(status), { selectable: true, ready: true, note: '38 of 50 left today', budget: 'Team: $3.20 of $50 this month' });
   assert.deepEqual(nanoState({ ...status, usedToday: 51 }), { selectable: true, ready: false, note: 'Daily limit reached (50/50)', budget: 'Team: $3.20 of $50 this month' });
@@ -146,7 +146,7 @@ test('one shared step places each output beside its prompt, captions and groups 
   const [a, b] = ['run-output-0', 'run-output-1'].map(id => second.nodes.find(node => node.id === id));
   assert.deepEqual([a.data.caption, b.data.caption], ['Image 1', 'Image 2']);
   assert.deepEqual(b.position, { x: 470, y: 40 + 155 + 30 + 24 });
-  assert.deepEqual(second.groups, [{ id: 'run-group', name: 'Group 1', nodeIds: ['run-output-0', 'run-output-1'], collapsed: false }]);
+  assert.deepEqual(second.groups, [{ id: 'run-group', name: 'Group 1', nodeIds: ['run-output-0', 'run-output-1'], collapsed: false, slideshow: true }]);
   assert.equal(second.runs.at(-1).autoGroupId, 'run-group'); assert.equal(first.nodes.find(node => node.id === 'run-output-0').data.caption, undefined);
   assert.equal(placeRunOutput(second, { runId: 'run', nodeId: 'p', run: second.runs.at(-1), author: user, output: { index: 1 }, asset: reference }), null);
   assert.equal(placeRunOutput(second, { runId: 'run', nodeId: 'p', run: { ...second.runs.at(-1), status: 'cancelled' }, author: user, output: { index: 2 }, asset: reference }), null);
@@ -183,7 +183,8 @@ function cloudSetup(t, extra = {}) {
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
-  const directory = new Directory({ storage: { sql } }, {}), files = new Map(), waits = [], rooms = new Map();
+  const files = new Map(), waits = [], rooms = new Map();
+  let directory;
   const env = {
     SESSION_SECRET: 'session-test', GEMINI_API_KEY: 'test-gemini-key', NANO_BANANA_ALLOWED: '@studio.example, solo@mail.example',
     Directory: { idFromName: name => name, get: () => directory },
@@ -195,6 +196,8 @@ function cloudSetup(t, extra = {}) {
     },
     ASSETS: { fetch: async () => new Response('static') }, ...extra,
   };
+  // The directory copies NANO_BANANA_ALLOWED into its own list when it first starts.
+  directory = new Directory({ storage: { sql } }, env);
   // One room per board, as Durable Objects are; `values` is the room's own storage.
   const room = (name, values = new Map(), { save = false } = {}) => {
     const storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) }, transactionSync: callback => callback(),
@@ -266,7 +269,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);
   assert.equal((await request(`/api/boards/${crypto.randomUUID()}/nano`, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 404);
   const refused = await request(path, { method: 'POST', cookie: outsider, data: { nodeId: 'p' } });
-  assert.equal(refused.status, 403); assert.deepEqual(await refused.json(), { error: 'Nano Banana is not available for your account.' });
+  assert.equal(refused.status, 403); assert.deepEqual(await refused.json(), { error: 'Nano Banana is not available for your account. Ask a site admin for access.' });
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: '' } })).status, 400);
   const notPrompt = await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'i' } });
   assert.equal(notPrompt.status, 400); assert.deepEqual(await notPrompt.json(), { error: 'Write an image prompt first.' });
@@ -316,7 +319,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   const shape = item => ({ ...item, data: { ...item.data, asset: undefined, createdAt: undefined } });
   for (const outputId of run.outputIds) assert.deepEqual(shape(graph.nodes.find(node => node.id === outputId)), shape(expected.nodes.find(node => node.id === outputId)));
   assert.deepEqual(graph.edges.filter(edge => edge.source === 'p'), expected.edges.filter(edge => edge.source === 'p'));
-  assert.deepEqual(graph.groups, [{ id: `${id}-group`, name: 'Group 1', collapsed: false, nodeIds: run.outputIds }]);
+  assert.deepEqual(graph.groups, [{ id: `${id}-group`, name: 'Group 1', collapsed: false, slideshow: true, nodeIds: run.outputIds }]);
   for (const outputId of run.outputIds) {
     const asset = graph.nodes.find(node => node.id === outputId).data.asset;
     assert.match(asset, /^[\da-f-]{36}\.png$/); assert.equal(files.get(`assets/${asset}`).httpMetadata.contentType, 'image/png');
@@ -438,4 +441,64 @@ runtimeTest('the room waits for the requester’s latest edit before reading the
   assert.equal(boardRoom.document.getMap('runs').get(result.run.id).label, 'A courier robot at noon');
   assert.match(calls[0].body.input[0].text, /A courier robot at noon/);
   assert.equal(await boardRoom.caughtUp(client.clientID, clock + 5, 10), false);
+});
+
+runtimeTest('variants start that many calls at once into one run and slideshow, each counted on its own', async t => {
+  const variants = (room, count) => { const before = readCloudGraph(room.document), next = structuredClone(before); next.nodes.find(node => node.id === 'p').data.variants = count; applyLocalGraph(room.document, next, before, 'edit'); };
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t);
+  variants(boardRoom, 3);
+  const held = gate();
+  const calls = fakeGemini(t, async (init, count) => { await held.promise; return count === 2 ? Response.json({ error: { code: 'invalid_argument', message: 'Bad request' } }, { status: 400 }) : Response.json(interaction([png(100, 150)])); });
+  const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('lead@studio.example'), data: { nodeId: 'p' } });
+  assert.equal(response.status, 202);
+  const { run: { id } } = await response.json();
+  held.open(); await settle();
+  const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
+  assert.equal(calls.length, 3);
+  assert.deepEqual([run.status, run.count, run.variants], ['completed', 2, 3]);
+  assert.match(run.error, /^1 of 3 variants failed: Nano Banana could not use this request/);
+  assert.deepEqual(run.outputIds, [`${id}-output-0`, `${id}-output-1`]);
+  assert.deepEqual(graph.groups.map(group => [group.slideshow, group.nodeIds]), [[true, run.outputIds]]);
+  assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 2);
+  validateGraph(graph);
+});
+
+runtimeTest('variants that do not all fit the daily limit start nothing and hold nothing back', async t => {
+  const { request, cookie, board, boardRoom, directory } = cloudSetup(t, { NANO_BANANA_DAILY_IMAGES: '2' });
+  const before = readCloudGraph(boardRoom.document), next = structuredClone(before);
+  next.nodes.find(node => node.id === 'p').data.variants = 3; applyLocalGraph(boardRoom.document, next, before, 'edit');
+  const calls = fakeGemini(t, async () => Response.json(interaction([png(100, 100)])));
+  const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('lead@studio.example'), data: { nodeId: 'p' } });
+  assert.equal(response.status, 429);
+  assert.match((await response.json()).error, /Only 2 of 3 variants fit; choose fewer\.$/);
+  assert.equal(calls.length, 0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 0);
+  assert.equal(readCloudGraph(boardRoom.document).runs.length, 0);
+  for (const bad of [1, 5, 2.5]) assert.throws(() => validateGraph({ nodes: [{ id: 'q', type: 'text', position: { x: 0, y: 0 }, data: { text: 'x', variants: bad } }], edges: [] }), /Invalid number of variants/);
+});
+
+runtimeTest('a describe node can use Gemini on the site key: one text call, a description prompt, no daily images', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t, { NANO_BANANA_DAILY_IMAGES: '1' });
+  const before = readCloudGraph(boardRoom.document), next = structuredClone(before);
+  next.nodes.push({ id: 'd', type: 'text', position: { x: 80, y: 400 }, data: { text: 'Only the lighting', task: 'describe', generator: 'nano-banana' } });
+  next.edges.push({ id: 'e4', source: 'i', target: 'd' });
+  applyLocalGraph(boardRoom.document, next, before, 'edit');
+  // A day's image already used must not stop a description.
+  directory.settleNano(directory.reserveNano('lead@studio.example', { dailyImages: 1, monthlyUsd: 50, estimateUsd: .03 }).reservation, { images: 1, usd: .03 });
+  const calls = fakeGemini(t, async () => Response.json({ ...interaction([]), model: 'gemini-3.5-flash-lite', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'A small courier robot lit from the left.' }] }],
+    usage: { total_input_tokens: 2000, total_output_tokens: 400, total_thought_tokens: 600 } }));
+  const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('lead@studio.example'), data: { nodeId: 'd' } });
+  assert.equal(response.status, 202);
+  const { run: { id } } = await response.json();
+  await settle();
+  const [{ body }] = calls, graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
+  assert.equal(calls.length, 1); assert.equal(body.model, 'gemini-3.5-flash-lite');
+  assert.match(body.input[0].text, /Describe the attached images in detail/); assert.match(body.input[0].text, /FOCUS:\nOnly the lighting/);
+  assert.deepEqual(body.input.slice(1).map(item => item.type), ['image']);
+  assert.deepEqual([run.status, run.task, run.model, run.count], ['completed', 'describe', 'gemini-3.5-flash-lite', 1]);
+  const output = graph.nodes.find(node => node.id === run.outputIds[0]);
+  assert.deepEqual([output.type, output.data.text], ['text', 'A small courier robot lit from the left.']);
+  assert.ok(graph.edges.some(edge => edge.source === 'd' && edge.target === output.id));
+  const usage = directory.nanoUsage('lead@studio.example');
+  assert.equal(usage.usedToday, 1); assert.equal(Math.round(usage.teamSpentUsd * 1e6), 30000 + Math.round((2000 * .3 + 1000 * 2.5)));
+  validateGraph(graph);
 });

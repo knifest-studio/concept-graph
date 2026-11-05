@@ -1,5 +1,6 @@
-import { collectInputs } from '../graph.mjs';
+import { collectInputs, isDescribe } from '../graph.mjs';
 import { groupBounds } from './canvas.mjs';
+import { plural, t } from './i18n.mjs';
 
 export const gettingStartedKey = viewer => `concept-graph-getting-started:${viewer}`;
 export const emptyChecklist = () => ({ done: { helper: false, prompt: false, generate: false, variation: false }, ownRuns: [], dismissed: false });
@@ -35,21 +36,22 @@ export function checklistSteps(state, helperNeeded, ready) {
 export function generationReadiness({ teammate, ...options }) {
   const own = ownReadiness(options);
   if (own.key === 'ready' || !teammate) return own;
-  return { key: 'ready', label: `Using ${teammate.user.name}’s Codex`, delegate: teammate.to, own };
+  return { key: 'ready', label: t('Using {name}’s Codex', { name: teammate.user.name }), delegate: teammate.to, own };
 }
 
 function ownReadiness({ required, paired, online = true, status }) {
-  if (!required) return { key: 'ready', label: 'Ready to generate' };
-  if (!paired || !online) return { key: 'helper', label: 'Helper not connected · Connect', action: 'Connect helper to generate' };
-  if (status.codexMissing && status.codexInstall?.supported) return { key: 'install', label: 'Codex not installed · Install', action: 'Install Codex' };
-  if (!status.connected) return { key: 'codex', label: 'Codex not ready · Check connection', action: 'Check Codex connection' };
-  if (!status.signedIn) return { key: 'signin', label: 'Codex sign-in needed', action: 'Sign in to generate' };
-  if (!status.imageGeneration) return { key: 'codex', label: 'Image generation unavailable', action: 'Check Codex connection' };
-  return { key: 'ready', label: 'Ready to generate' };
+  if (!required) return { key: 'ready', label: t('Ready to generate') };
+  if (!paired || !online) return { key: 'helper', label: t('Helper not connected · Connect'), action: t('Connect helper to generate') };
+  if (status.codexMissing && status.codexInstall?.supported) return { key: 'install', label: t('Codex not installed · Install'), action: t('Install Codex') };
+  if (!status.connected) return { key: 'codex', label: t('Codex not ready · Check connection'), action: t('Check Codex connection') };
+  if (!status.signedIn) return { key: 'signin', label: t('Codex sign-in needed'), action: t('Sign in to generate') };
+  if (!status.imageGeneration) return { key: 'codex', label: t('Image generation unavailable'), action: t('Check Codex connection') };
+  return { key: 'ready', label: t('Ready to generate') };
 }
 
 export function directInputCounts(graph) {
-  const types = new Map(graph.nodes.map(node => [node.id, node.type])), counts = new Map(graph.nodes.map(node => [node.id, { images: 0, text: 0 }])), seen = new Map();
+  // A describe node feeds nothing into the prompts it connects to, so it is not counted.
+  const types = new Map(graph.nodes.filter(node => !isDescribe(node)).map(node => [node.id, node.type])), counts = new Map(graph.nodes.map(node => [node.id, { images: 0, text: 0 }])), seen = new Map();
   for (const edge of graph.edges) {
     if (!types.has(edge.source) || !counts.has(edge.target)) continue;
     const sources = seen.get(edge.target) || new Set();
@@ -63,7 +65,7 @@ export function directInputCounts(graph) {
 export const directInputs = (graph, nodeId) => directInputCounts(graph).get(nodeId) || { images: 0, text: 0 };
 
 export function inputLabel({ images, text }) {
-  return [images ? `${images} image${images === 1 ? '' : 's'}` : '', text ? `${text} text` : ''].filter(Boolean).join(' · ');
+  return [images ? plural(images, '{count} image', '{count} images') : '', text ? t('{count} text', { count: text }) : ''].filter(Boolean).join(' · ');
 }
 
 export function generationIntent(graph, boardId, nodeId) {
@@ -82,7 +84,7 @@ const nodeSize = node => node.data.collapsed ? { width: 72, height: 72 } : { wid
 
 export function freePromptPosition(graph, sourceId) {
   const source = graph.nodes.find(node => node.id === sourceId);
-  if (!source) throw new Error('Reference node no longer exists.');
+  if (!source) throw new Error(t('Reference node no longer exists.'));
   return freeSpot(graph, { x: source.position.x + nodeSize(source).width + 90, y: source.position.y });
 }
 

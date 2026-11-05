@@ -1,3 +1,5 @@
+import { t } from './i18n.mjs';
+
 const languages = { uk: 'uk-UA', ru: 'ru-RU', en: 'en-US' };
 const browserLanguage = locale => languages[locale?.toLowerCase().split('-')[0]] || 'en-US';
 
@@ -53,5 +55,5 @@ export function dictationResults(results, committed = 0) {
 }
 
 export function dictationError(code) {
-  return ({ 'not-allowed': 'Microphone permission denied. Allow it in browser settings.', 'service-not-allowed': 'Speech recognition is blocked by your browser.', 'audio-capture': 'No microphone available.', 'no-speech': 'No speech heard. Try again.', network: 'Speech service unavailable. Check your connection.', 'language-not-supported': 'This speech language is unavailable in your browser.', aborted: '' })[code] ?? 'Could not start dictation. Try again.';
+  return t(({ 'not-allowed': 'Microphone permission denied. Allow it in browser settings.', 'service-not-allowed': 'Speech recognition is blocked by your browser.', 'audio-capture': 'No microphone available.', 'no-speech': 'No speech heard. Try again.', network: 'Speech service unavailable. Check your connection.', 'language-not-supported': 'This speech language is unavailable in your browser.', aborted: '' })[code] ?? 'Could not start dictation. Try again.');
 }

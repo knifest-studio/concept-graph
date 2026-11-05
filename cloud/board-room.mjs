@@ -1,23 +1,24 @@
 import { YServer } from 'y-partyserver';
-import { applyUpdate, encodeStateAsUpdate, getState } from 'yjs';
+import { applyUpdate, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
 import { imageTypes } from './assets.mjs';
-import { base64, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
-import { generators, imageSize } from '../graph.mjs';
+import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
+import { generators, imageSize, promptVariants } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
-import { placeRunOutput, runSummary, terminalRun } from '../src/run-outputs.mjs';
-import { copyLibrary, libraryCopied } from '../src/board-templates.mjs';
+import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
+import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
+import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 
 const chunkSize = 512 * 1024;
-const origin = 'nano-banana', timestamp = () => new Date().toISOString();
+const origin = 'nano-banana', mcpOrigin = 'mcp', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
   static callbackOptions = { debounceWait: 1000, debounceMaxWait: 5000 };
-  nanoJobs = new Map(); nanoStarting = new Set();
+  nanoJobs = new Map(); nanoStarting = new Set(); agentAsks = new Map();
 
   async onLoad() {
     const kv = this.ctx.storage.kv;
@@ -74,7 +75,20 @@ export class BoardRoom extends YServer {
     }
   }
 
+  // Worker RPC after the owner deletes the board: everyone is sent away and the stored document is erased for good.
+  async destroy() {
+    this.deleted = true;
+    for (const job of this.nanoJobs.values()) job.controller?.abort?.();
+    for (const connection of this.getConnections()) {
+      this.sendCustomMessage(connection, JSON.stringify({ type: 'deleted' }));
+      connection.close(4404, 'Board deleted');
+    }
+    await this.saving;
+    await this.ctx.storage.deleteAll();
+  }
+
   onSave() {
+    if (this.deleted) return Promise.resolve();
     const saving = (this.saving || Promise.resolve()).then(() => this.saveSnapshot());
     this.saving = saving.catch(() => {});
     return saving;
@@ -98,6 +112,8 @@ export class BoardRoom extends YServer {
 
   async onClose(connection, code, reason, wasClean) {
     super.onClose(connection, code, reason, wasClean);
+    for (const ask of [...this.agentAsks.values()]) if (ask.connection === connection.id) ask.done({ error: 'The board in your browser was closed before it answered.' });
+    if (this.deleted) return;
     // y-partyserver 2.2 debounces saves but does not flush them on close.
     if (![...this.getConnections()].some(item => item.id !== connection.id)) await this.onSave();
   }
@@ -134,24 +150,111 @@ export class BoardRoom extends YServer {
     let request;
     try { request = nanoPrompt(graph, nodeId); }
     catch (cause) { return { error: cause.message, status: 400 }; }
-    const estimateUsd = nanoEstimate({ promptLength: request.prompt.length, references: request.images.length });
+    // A describe node gets one written description; it costs the team's budget but no daily images.
+    const describe = !!request.describe, measure = { promptLength: request.prompt.length, references: request.images.length };
+    const estimateUsd = describe ? describeEstimate(measure) : nanoEstimate(measure), variants = describe ? 1 : promptVariants(request.target);
     this.nanoStarting.add(nodeId);
+    const reservations = [], release = async () => { for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 }); };
     try {
-      const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd });
-      if (reserved.error) return reserved;
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: generators.nanoBanana, model: nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp() };
+      // Each variant is its own call, so each takes its own share of the person's day and the team's month.
+      for (let index = 0; index < variants; index++) {
+        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd, images: describe ? 0 : 1 });
+        if (reserved.error) {
+          await release();
+          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${variants} variants fit; choose fewer.` } : reserved;
+        }
+        reservations.push(reserved.reservation);
+      }
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: generators.nanoBanana, model: describe ? describeModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(variants > 1 ? { variants } : {}), ...(describe ? { task: 'describe' } : {}) };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {
-        await this.directory().settleNano(reserved.reservation, { images: 0, usd: 0 });
+        await release();
         return { error: 'This prompt was deleted.', status: 404 };
       }
       this.document.transact(() => this.document.getMap('runs').set(run.id, run), origin);
-      const job = { run, email: requester.email, reservation: reserved.reservation, estimateUsd, request, controller: new AbortController() };
+      const job = { run, email: requester.email, reservations, estimateUsd, request, controller: new AbortController(), next: 0 };
       this.nanoJobs.set(run.id, job);
       this.ctx.waitUntil(this.runNano(job));
       return { run: { id: run.id } };
     } finally { this.nanoStarting.delete(nodeId); }
+  }
+
+  // Worker RPC for an agent connected over MCP; the Worker has checked the person's role. A tool reads and changes the
+  // board in one turn, so no other edit lands in between, and the board is saved at once in case nobody is connected.
+  async mcp({ tool: name, args, user }) {
+    const tool = toolByName.get(name);
+    if (!tool || tool.account) return { error: 'Unknown tool.' };
+    try {
+      if (name === 'start_run') return await this.mcpStart(args.nodeId, user);
+      if (name === 'cancel_run') return await this.mcpCancel(args.runId, user);
+      const prepared = (await tool.prepare?.(args, this.env)) || {};
+      const before = readCloudGraph(this.document), revision = () => revisionOf(encodeStateVector(this.document));
+      const { result, graph } = runBoardTool(tool, { graph: before, args, user, prepared, revision: revision(), templates: readBoardTemplates(this.document),
+        saveTemplate: (value, existing) => saveBoardTemplate(this.document, value, existing, mcpOrigin), deleteTemplate: id => deleteBoardTemplate(this.document, id, mcpOrigin) });
+      if (tool.access === 'view') return { value: result };
+      if (graph) applyLocalGraph(this.document, graph, before, mcpOrigin);
+      await this.onSave();
+      return { value: { ...result, revision: revision() } };
+    } catch (cause) {
+      // The shared board checks throw plain errors meant for people; anything else is a fault.
+      const shown = cause?.expected || cause?.constructor === Error;
+      if (!shown) console.error('Agent tool failed:', name, cause);
+      return { error: shown ? cause.message : 'The tool failed. Read the board and try again.' };
+    }
+  }
+
+  // Nano Banana runs here; Codex runs on the person's own computer, so their open board starts it as Generate would.
+  async mcpStart(nodeId, user) {
+    const node = readCloudGraph(this.document).nodes.find(item => item.id === nodeId);
+    if (!node) return { error: `Node not found: ${nodeId}` };
+    if (node.type !== 'text') return { error: 'Generate from a prompt (a text node).' };
+    if (node.data.generator !== generators.nanoBanana) {
+      const answer = await this.askTabs(user, { type: 'agent-generate', nodeId });
+      if (answer.error) return { error: answer.error };
+      return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
+    }
+    if (nanoSettings(this.env).configured && !await this.directory().nanoAllowed(user.email)) return { error: 'Nano Banana is not available for this account. Ask a site admin for access.' };
+    const result = await this.startNano({ nodeId, requester: user });
+    return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: generators.nanoBanana, status: 'running' } };
+  }
+
+  async mcpCancel(runId, user) {
+    const run = this.document.getMap('runs').get(runId);
+    if (!run) return { error: 'Generation not found.' };
+    if (run.provider === generators.nanoBanana) { const result = this.cancelNano({ runId, email: user.email }); return result.error ? { error: result.error } : { value: { cancelled: runId } }; }
+    if (terminalRun(run.status)) return { value: { runId, status: run.status } };
+    if (run.by?.name !== boardAuthor(user)?.name) return { error: 'Only the person who started this generation can cancel it.' };
+    const answer = await this.askTabs(user, { type: 'agent-cancel', runId });
+    return answer.error ? { error: answer.error } : { value: { cancelled: runId } };
+  }
+
+  // A person's Codex is reached only from their own open board. The room asks that person's tabs, one at a time, to start
+  // or stop it for their agent, so an agent never spends anyone else's Codex.
+  async askTabs(user, message, wait = 45000) {
+    const tabs = [...this.getConnections()].filter(connection => connection.state?.email === user.email && canEdit(connection.state?.role));
+    if (!tabs.length) return { error: 'Codex runs on your own computer, through this board open in your browser. Open the board in Concept Graph with the helper connected, then try again.' };
+    let answer;
+    for (const tab of tabs) {
+      answer = await new Promise(resolve => {
+        const requestId = crypto.randomUUID(), done = value => { clearTimeout(timer); this.agentAsks.delete(requestId); resolve(value); };
+        const timer = setTimeout(() => done({ error: 'The board open in your browser did not answer. Check that it is still open, then try again.' }), wait);
+        this.agentAsks.set(requestId, { connection: tab.id, done });
+        try { this.sendCustomMessage(tab, JSON.stringify({ ...message, requestId })); }
+        catch { done({ error: 'Could not reach the board open in your browser.' }); }
+      });
+      if (!answer.error) return answer;
+    }
+    return answer;
+  }
+
+  // Only the tab that was asked can answer.
+  onCustomMessage(connection, message) {
+    let value;
+    try { value = JSON.parse(message); } catch { return; }
+    const ask = value?.type === 'agent-answer' && this.agentAsks.get(value.requestId);
+    if (!ask || ask.connection !== connection.id) return;
+    ask.done(typeof value.error === 'string' ? { error: value.error.slice(0, 500) || 'Generation could not start.' } : { runId: typeof value.runId === 'string' && value.runId.length <= 120 ? value.runId : null });
   }
 
   // Worker RPC: only the person who started a run can stop it. The call is aborted; whatever arrived before stays.
@@ -176,6 +279,41 @@ export class BoardRoom extends YServer {
     return Promise.all(objects.map(async (object, index) => ({ mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(new Uint8Array(await object.arrayBuffer())) })));
   }
 
+  // The description lands as a text prompt beside the describe node, as with Codex; it holds no images to count.
+  async callDescribe(job, references, fallback, result) {
+    const { url, init } = nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, describeModel);
+    result.usd = job.estimateUsd;
+    const response = await fetch(url, { ...init, signal: job.controller.signal });
+    const body = await response.json().catch(() => null);
+    result.usd = response.ok ? describeCost(body?.usage, fallback) : 0;
+    const { text } = describeResult(response.status, body);
+    if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) return;
+    this.document.transact(() => {
+      const before = readCloudGraph(this.document);
+      const graph = placeRunText(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, fields: { task: 'describe' }, text });
+      if (graph) applyLocalGraph(this.document, graph, before, origin);
+    }, origin);
+  }
+
+  async callNano(job, references, fallback, result) {
+    const { url, init } = nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint });
+    // From here Google may bill the call even if no answer arrives, so the estimate stands until the answer says otherwise.
+    result.usd = job.estimateUsd;
+    const response = await fetch(url, { ...init, signal: job.controller.signal });
+    const body = await response.json().catch(() => null);
+    result.usd = response.ok ? nanoCost(body?.usage, { ...fallback, images: 0 }) : 0;
+    const { images, usage } = nanoResult(response.status, body);
+    result.usd = nanoCost(usage, { ...fallback, images: images.length });
+    for (const image of images) {
+      if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) break;
+      const asset = `${crypto.randomUUID()}.${image.format}`;
+      await this.env.FILES.put(`assets/${asset}`, image.bytes, { httpMetadata: { contentType: image.contentType } });
+      // Calls answer in any order; each image takes the next free output number.
+      if (!this.placeOutput(job, job.next, asset, imageSize(image.bytes))) break;
+      job.next++; result.placed++;
+    }
+  }
+
   placeOutput(job, index, asset, dimensions) {
     let placed = false;
     this.document.transact(() => {
@@ -186,28 +324,23 @@ export class BoardRoom extends YServer {
     return placed;
   }
 
-  // One request, never retried automatically: a retry could be billed twice. Usage is settled with what the call cost.
+  // One request per variant, side by side, never retried automatically: a retry could be billed twice. Images join the run
+  // as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
     const { run, request, controller } = job, fallback = { promptLength: request.prompt.length, references: request.images.length };
     const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, nanoTimeout);
-    let placed = 0, usd = 0, outcome = { status: 'completed' };
+    const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
+    let outcome = { status: 'completed' };
     try {
       const references = await this.references(request.images);
       if (job.cancelled) return;
-      const { url, init } = nanoRequest(request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint });
-      // From here Google may bill the call even if no answer arrives, so the estimate stands until the answer says otherwise.
-      usd = job.estimateUsd;
-      const response = await fetch(url, { ...init, signal: controller.signal });
-      const body = await response.json().catch(() => null);
-      usd = response.ok ? nanoCost(body?.usage, { ...fallback, images: 0 }) : 0;
-      const { images, usage } = nanoResult(response.status, body);
-      usd = nanoCost(usage, { ...fallback, images: images.length });
-      for (const [index, image] of images.entries()) {
-        if (job.cancelled || terminalRun(this.document.getMap('runs').get(run.id)?.status)) break;
-        const asset = `${crypto.randomUUID()}.${image.format}`;
-        await this.env.FILES.put(`assets/${asset}`, image.bytes, { httpMetadata: { contentType: image.contentType } });
-        if (!this.placeOutput(job, index, asset, imageSize(image.bytes))) break;
-        placed++;
+      const calls = await Promise.allSettled(results.map(result => job.request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result)));
+      const failures = calls.filter(call => call.status === 'rejected').map(call => call.reason);
+      if (failures.length === calls.length) throw failures[0];
+      // Some variants arrived: the run succeeds, and History says what the others ran into.
+      if (failures.length) {
+        const reason = failures[0] instanceof NanoError ? failures[0].message : 'Nano Banana generation failed.';
+        outcome = { status: 'completed', error: `${failures.length} of ${calls.length} variants failed: ${reason}` };
       }
     } catch (cause) {
       outcome = { status: 'failed', error: job.timedOut ? 'Nano Banana took longer than 5 minutes. Try again.' : cause instanceof NanoError ? cause.message
@@ -218,8 +351,10 @@ export class BoardRoom extends YServer {
       this.nanoJobs.delete(run.id);
       const current = this.document.getMap('runs').get(run.id);
       this.writeRun(run.id, { ...(job.cancelled ? { status: 'cancelled' } : outcome), count: current?.outputIds?.length || 0 });
-      try { await this.directory().settleNano(job.reservation, { images: placed, usd }); }
-      catch (cause) { console.error('Could not record Nano Banana usage:', cause); }
+      for (const [index, reservation] of job.reservations.entries()) {
+        try { await this.directory().settleNano(reservation, { images: results[index].placed, usd: results[index].usd }); }
+        catch (cause) { console.error('Could not record Nano Banana usage:', cause); }
+      }
       // Paid results are saved before the room may sleep, even when nobody is connected to flush them.
       await this.onSave().catch(cause => console.error('Could not save the board after Nano Banana:', cause));
     }

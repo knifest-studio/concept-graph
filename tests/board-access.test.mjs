@@ -17,7 +17,7 @@ if (nodeModule.registerHooks) {
   const hooks = nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier !== 'cloudflare:workers') return nextResolve(specifier, context);
-      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
+      return { url: 'data:text/javascript,' + encodeURIComponent('export const env = {}; export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }'), shortCircuit: true };
     }
   });
   try { ({ default: worker, BoardRoom, Directory } = await import('../cloud/worker.mjs')); }
@@ -34,18 +34,18 @@ function storage(t) {
 }
 
 function setup(t, extra = {}) {
-  const { sql } = storage(t), directory = new Directory({ storage: { sql } }, extra), routed = [], refreshed = [], served = [];
+  const { sql } = storage(t), directory = new Directory({ storage: { sql } }, extra), routed = [], refreshed = [], served = [], destroyed = [];
   const env = {
     SESSION_SECRET: 'session-test', ...extra,
     Directory: { idFromName: name => name, get: () => directory },
-    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); } }) },
+    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); }, destroy: async () => { destroyed.push(name); } }) },
     FILES: { async head() { return null; }, async get() { return null; }, async put() {} },
     ASSETS: { fetch: async request => { served.push(new URL(request.url).pathname); return new Response('app'); } },
   };
   const request = (path, { method = 'GET', cookie, data, headers = {} } = {}) => worker.fetch(new Request(`http://localhost:8787${path}`, {
     method, headers: { ...(cookie ? { Cookie: cookie } : {}), ...headers }, ...(data !== undefined ? { body: JSON.stringify(data) } : {}) }), env);
   const person = async (email, name) => ({ email, name, cookie: `cg_session=${await signSession({ name, email }, env.SESSION_SECRET)}` });
-  return { env, directory, routed, refreshed, served, request, person };
+  return { env, directory, routed, refreshed, served, destroyed, request, person };
 }
 
 function room(t, directory = {}, values = new Map()) {
@@ -160,7 +160,7 @@ runtimeTest('invitations, roles, link visits and the board list follow the owner
 });
 
 runtimeTest('board routes give each person their role and let only the owner rename or share', async t => {
-  const { request, person, refreshed, directory } = setup(t);
+  const { request, person, refreshed, directory, destroyed } = setup(t);
   const owner = await person('owner@studio.example', 'Owner'), guest = await person('guest@mail.example', 'Guest'), headers = { Origin: 'http://localhost:8787' };
   const created = await request('/api/cloud/boards', { method: 'POST', cookie: owner.cookie, data: { name: ' Robots ' } });
   assert.equal(created.status, 201);
@@ -189,7 +189,10 @@ runtimeTest('board routes give each person their role and let only the owner ren
   const refused = await rename(guest.cookie, 'Mine');
   assert.equal(refused.status, 403); assert.deepEqual(await refused.json(), { error: 'Only the board’s owner can rename it.' });
   assert.equal((await (await rename(owner.cookie, 'Robots v2')).json()).board.name, 'Robots v2');
-  assert.equal((await request(path, { method: 'DELETE', cookie: owner.cookie })).status, 405);
+  // Deleting needs the owner and the board's exact name.
+  const remove = (cookie, confirmName) => request(path, { method: 'DELETE', cookie, data: { confirmName } });
+  assert.deepEqual(await (await remove(guest.cookie, 'Robots v2')).json(), { error: 'Only the board’s owner can delete it.' });
+  assert.equal((await remove(owner.cookie)).status, 400); assert.equal((await remove(owner.cookie, 'robots v2')).status, 400);
   // Nano Banana writes to the board, so it needs edit access.
   const nano = cookie => request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie, data: { nodeId: 'p' } });
   const viewer = await nano(guest.cookie);
@@ -200,6 +203,11 @@ runtimeTest('board routes give each person their role and let only the owner ren
   assert.equal((await nano(owner.cookie)).status, 503);
   directory.changeSharing(board.id, owner.email, { member: { email: guest.email, role: 'edit' } });
   assert.equal((await nano(guest.cookie)).status, 503);
+  assert.deepEqual(await (await remove(guest.cookie, 'Robots v2')).json(), { error: 'Only the board’s owner can delete it.' });
+  assert.deepEqual(await (await remove(owner.cookie, 'Robots v2')).json(), { deleted: board.id });
+  assert.deepEqual(destroyed, [board.id]);
+  assert.equal((await request(path, { cookie: owner.cookie })).status, 404);
+  assert.deepEqual((await (await request('/api/cloud/boards', { cookie: guest.cookie })).json()).boards, []);
 });
 
 runtimeTest('board links serve the app, and Google sign-in returns to the board it started from', async t => {

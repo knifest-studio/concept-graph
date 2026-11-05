@@ -87,24 +87,29 @@ Setup requires no administrator privileges and installs under `%LOCALAPPDATA%\Pr
 
 ## Nano Banana on the company's Gemini key
 
-Cloud prompts can generate with **Nano Banana 2.1** (`gemini-nano-banana-2.1`) on one Gemini API key that the company pays for, so allowed teammates need no helper or Codex. Codex stays the default: the arrow beside a prompt's **Generate** button switches that prompt between **Codex** and **Nano Banana**; the choice is saved with the prompt and synced. The menu's last line shows how many images you have left today and the team's spend this month, or why Nano Banana is unavailable.
+Cloud prompts can generate with **Nano Banana 2.1** (`gemini-nano-banana-2.1`) on one Gemini API key that the company pays for, so allowed teammates need no helper or Codex. Codex stays the default: the arrow beside a prompt's **Generate** button switches that prompt between **Codex** and **Nano Banana**; the choice is saved with the prompt and synced. The menu's last line shows how many images you have left today and the team's spend this month, or why Nano Banana is unavailable. A Nano Banana prompt also shows **Variants 1–4** under its text: one Generate then starts that many separate calls at once, and their images arrive as one slideshow. Each variant counts against the daily image limit and the monthly budget; if they do not all fit, nothing starts. If some variants fail, the others are kept and History says how many failed. A **Describe image** node can also run on the site's key: choose **Gemini** in its menu and the description comes from `gemini-3.5-flash-lite` (about half a cent each at the prices in `cloud/nano-banana.mjs`), so people without Codex can describe images too. Descriptions count against the team's monthly budget but not against anyone's daily images.
 
 Generation runs on the server. The Worker checks the person and the limits; the board's Durable Object then sends one request per Generate to Google's Interactions API (`POST https://generativelanguage.googleapis.com/v1beta/interactions`, `Api-Revision: 2026-05-20`, `store: false`), as documented in Google's [image generation guide](https://aistudio.google.com/docs/image-generation). It sends the same inputs as a Codex run: the prompt, its directly connected text and custom-node instructions, and up to 10 reference images (20 MB in total). Each returned image is saved to R2 and placed on the board exactly like a Codex result, with connections, captions, groups, the author's name and history, so everyone on the board sees it. The key never leaves the Worker. A paid call is never retried automatically: if the board's server restarts during a call, the run fails with **Generation was interrupted. Run the prompt again.** Only the person who started a run can cancel it.
 
 ### Set up
 
 1. In Google AI Studio, create an API key in a project with billing enabled. Nano Banana 2.1 has no free tier for image output.
-2. Store the key and the allowed list as Worker secrets. Each command asks for the value: paste it at the prompt, not on the command line.
+2. Store the key as a Worker secret. The command asks for the value: paste it at the prompt, not on the command line.
 
    ```sh
    npx wrangler secret put GEMINI_API_KEY -c cloud/wrangler.jsonc
-   npx wrangler secret put NANO_BANANA_ALLOWED -c cloud/wrangler.jsonc
    ```
 
-   `NANO_BANANA_ALLOWED` lists emails and whole domains separated by commas or spaces, for example `lead@studio.com, @studio.com`. Case is ignored, and `@studio.com` does not include subdomains. Everyone else can still sign in and use their own Codex. To change the list, run the second command again; secrets take effect without a redeploy.
+   Then choose who may use it in **Team access** on the boards page (see below). Everyone else can still sign in and use their own Codex.
 3. Limits are variables in `cloud/wrangler.jsonc`: `NANO_BANANA_DAILY_IMAGES` (images per person per UTC day, default 50) and `NANO_BANANA_MONTHLY_USD` (the team's spend per UTC calendar month, default 50). Edit the values and run `npm run cloud:deploy`; `0` stops Nano Banana generation.
 
 Without `GEMINI_API_KEY`, the option shows **Nano Banana isn’t set up on this site**. Also set a budget alert in Google Cloud: the monthly cap is the site's own estimate, not a limit Google enforces.
+
+### Team access
+
+Site admins decide who may generate with Nano Banana, in **Team access** on the boards page. The site owner (the `SITE_OWNER_EMAIL` secret) is always an admin and the only one who can make or remove other admins. The panel lists everyone who has signed in, newest first, with each person's Nano Banana images today; admins tick **Nano Banana** for a person, or add an email for someone who hasn't signed in yet, or a whole domain such as `@studio.com` (case is ignored, subdomains are not included). Someone with access through a domain shows a greyed tick; remove the domain to change it. Changes apply to the next Generate, without a redeploy. Admins see the email addresses of everyone who signed in; nobody else does.
+
+The list lives in the board-directory Durable Object (`nano_access` and `site_admins`). The old `NANO_BANANA_ALLOWED` secret is copied into it once, the first time this version runs, and is not read again: change access on the site and delete the secret with `npx wrangler secret delete NANO_BANANA_ALLOWED -c cloud/wrangler.jsonc`. Without `SITE_OWNER_EMAIL` nobody can manage access, and only the copied list applies. Agents connected over MCP cannot change access. The routes are `GET /api/cloud/team` and `PATCH /api/cloud/team` with `{ "nano": { "entry": "name@example.com" | "@example.com", "allowed": true | false } }` or, for the owner, `{ "admin": { "email": "…", "admin": true | false } }`; `GET /api/cloud/me` returns the person's `siteRole` (`owner`, `admin` or null).
 
 ### Limits and cost
 
@@ -117,8 +122,10 @@ The routes are `GET /api/nano` (setup, access and usage for the signed-in person
 Run the fake Gemini server (`node scripts/fake-gemini.mjs`, port 8788; put `[two]`, `[text]`, `[refuse]`, `[busy]`, `[error]` or `[slow]` in a prompt to choose its answer) and point a local Worker at it:
 
 ```sh
-npx wrangler dev -c cloud/wrangler.jsonc --port 8787 --var DEV_LOGIN:1 --var GEMINI_API_KEY:fake-key --var NANO_BANANA_ALLOWED:@example.com --var NANO_BANANA_ENDPOINT:http://127.0.0.1:8788
+npx wrangler dev -c cloud/wrangler.jsonc --port 8787 --var DEV_LOGIN:1 --var GEMINI_API_KEY:fake-key --var SITE_OWNER_EMAIL:you@example.com --var NANO_BANANA_ENDPOINT:http://127.0.0.1:8788
 ```
+
+Sign in with the test sign-in as `you@example.com` and give access in **Team access**.
 
 `NANO_BANANA_ENDPOINT` is honoured only for `localhost`, `127.0.0.1` or `[::1]` addresses, so the key can never be sent to another host by mistake. Keep it out of deployed configuration. The automated tests (`tests/nano-banana.test.mjs`) use a fake fetch and never contact Google.
 
@@ -148,16 +155,45 @@ Owners, access settings, invitations and visits live in the board-directory Dura
 
 The routes are `GET /api/cloud/boards` (the boards you can open, with your role), `GET /api/cloud/boards/<board>` (open a board: your role and who has access; a 403 names the owner), `GET` and `PATCH /api/cloud/boards/<board>/sharing` (owner only for changes: `{ "access": "private" | "link" | "everyone", "linkRole": "view" | "edit", "member": { "email": "…", "role": "view" | "edit" | null } }`, where a null role removes the invitation) and `PATCH /api/cloud/boards/<board>` (rename, owner only).
 
+## Agents over MCP
+
+Agents such as Claude Code, Codex and Claude Desktop can work on cloud boards through the site's remote MCP server at `https://<your-worker-url>/mcp` (Streamable HTTP with plain JSON answers). **Connect MCP** on a board copies a message that asks your agent to register it; by hand:
+
+```sh
+claude mcp add --transport http --scope user concept-graph https://<your-worker-url>/mcp
+codex mcp add concept-graph --url https://<your-worker-url>/mcp && codex mcp login concept-graph
+```
+
+In Claude Desktop or claude.ai, add a custom connector with the same address. The agent signs in with OAuth: its first request opens the site in your browser, you sign in with Google as usual, and a consent page names the app, where its access goes and the account it will act as. **Allow** gives it a token for this site only, valid for an hour and renewed for up to 30 days; **Deny** sends it away. Apps register themselves (dynamic client registration or a Client ID Metadata Document); tokens, codes and the person's identity are kept, hashed or encrypted, in the `OAUTH_KV` namespace by [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider).
+
+An agent acts as the person who connected it, with that person's role on each board: viewers can read, editors can change and generate, and only owners can rename or delete a board. Its edits run inside the board's Durable Object, so everyone on the board sees them at once, and generations and stickies it adds carry that person's name. The tools cover:
+
+- boards: list, create, rename, delete (with the exact name), and who the agent is signed in as with the Nano Banana allowance left today;
+- seeing a board: `get_board` (pages, nodes with their estimated size, connections, groups, sections, custom nodes, recent generations) and `get_image`, which returns images as image content, using the shared preview when one exists;
+- prompts, describe nodes, reference images (uploaded as base64), custom-node prompts, stickies, shapes, arrows (ends can hold on to nodes), stamps and drawings;
+- moving, editing, restacking, folding, copying, connecting and deleting nodes; groups and slideshows; pages; sections (moving one carries what lies inside it); auto-align; and `apply_graph`, which replaces a board's graph in one step and refuses if the board changed since the agent read it;
+- the board's custom nodes, and generation history.
+
+`start_run` generates as the person's **Generate** button would. Nano Banana runs on the site's Gemini key, within that person's daily images and the team's budget. Codex runs on the person's own computer, which the server cannot reach, so the board's room asks that person's open tabs of the board, one at a time, to start it: the tab checks the helper and Codex as Generate does, uses a teammate's Codex if it was granted, shows **Your agent started a generation**, and answers with the run's ID. Only tabs signed in as that person and able to edit are asked, so an agent never spends anyone else's Codex. Without such a tab, or with the helper not connected, the agent is told what to open or fix. `cancel_run` stops a Codex run the same way. There is no screenshot tool: the agent sees a board as data plus its images. Sharing settings are not available to agents. There is no page yet for listing or revoking connected agents; a connection ends when its 30 days run out.
+
+To set it up, create the namespace once and put its ID in the `OAUTH_KV` entry of `cloud/wrangler.jsonc` before deploying:
+
+```sh
+npx wrangler kv namespace create OAUTH_KV -c cloud/wrangler.jsonc
+```
+
+Local development (`npm run cloud:dev`, or `wrangler dev` with `DEV_LOGIN=1`) uses a local namespace. With `DEV_LOGIN=1`, the consent step's sign-in page also offers the local test sign-in.
+
 ## Not yet supported in cloud boards
 
-Board export/import, board deletion, ownership transfer, access requests and email invitations, MCP, run diagnostics beyond the error text, voice chat.
+Board export/import, ownership transfer, access requests and email invitations, run diagnostics beyond the error text, voice chat.
 
 ## Verify authentication
 
 Run the port-free cloud suites with Node.js 22.15 or later so the Worker runtime tests execute.
 
 ```sh
-node --test tests/cloud-worker-auth.test.mjs tests/cloud-worker-runtime.test.mjs tests/board-access.test.mjs tests/cloud-boards.test.mjs tests/cloud-sync.test.mjs tests/cloud-sync-generation.test.mjs tests/cloud-download-upload.test.mjs tests/nano-banana.test.mjs
+node --test tests/team-access.test.mjs tests/cloud-worker-auth.test.mjs tests/cloud-worker-runtime.test.mjs tests/board-access.test.mjs tests/cloud-boards.test.mjs tests/cloud-sync.test.mjs tests/cloud-sync-generation.test.mjs tests/cloud-download-upload.test.mjs tests/nano-banana.test.mjs tests/cloud-mcp.test.mjs
 ```
 
 The tests mock Google's token endpoint and cover state/nonce/PKCE, malformed and rejected tokens, callback errors, cookie expiry and flags, old-cookie rejection, email identity, loopback-only dev sign-in, logout, and authenticated access to shared resources. A D1 stub backed by in-memory SQLite checks first and repeat sign-in records, profile updates, preserved creation times, independent users, and sign-in continuing when D1 fails. Tests also check the database binding and public `/privacy` route without authentication or other bindings. `tests/board-access.test.mjs` covers the role rules, the directory migration of older boards, invitations, link visits and the board list, the owner-only routes, WebSocket admission and header stripping, read-only room connections, board links and the sign-in return to a board, and the one-time copy of the old custom-node library. The helper integration tests in `tests/cloud-jobs.test.mjs` bind local ports and can be run separately with `node --test tests/cloud-jobs.test.mjs`.

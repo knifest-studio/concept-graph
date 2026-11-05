@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor } from './graph.mjs';
+import { collectInputs, describeTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor } from './graph.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
@@ -138,7 +138,9 @@ function authorizeMcp(request) {
 }
 const codex = new Codex(dataDir);
 const codexInstaller = helperSite ? new CodexInstaller({ onInstalled: () => { codex.connection = null; } }) : null;
-let status = { connected: false, signedIn: false, imageGeneration: false };
+// `features` lists what this app or helper can run beyond image generation; the site checks it before sending such jobs.
+const features = Object.freeze(['describe']);
+let status = { connected: false, signedIn: false, imageGeneration: false, features };
 let activeRun = null;
 let processing = false;
 let stopping = false;
@@ -166,9 +168,9 @@ function saveCloudJob(job) {
   return operation;
 }
 function cloudJobSummary(job) {
-  const { id, boardId, nodeId, model, effort, status, startedAt, finishedAt, progress, error, outputs } = job;
+  const { id, boardId, nodeId, model, effort, task, text, status, startedAt, finishedAt, progress, error, outputs } = job;
   // Settings are reported so the board records what this helper really used; older helpers omit them.
-  return { id, boardId, nodeId, ...(model ? { model } : {}), ...(effort ? { effort } : {}), status, startedAt, ...(finishedAt ? { finishedAt } : {}), progress,
+  return { id, boardId, nodeId, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(task ? { task } : {}), ...(text ? { text } : {}), status, startedAt, ...(finishedAt ? { finishedAt } : {}), progress,
     ...(error ? { error } : {}), elapsedMs: Math.max(0, Date.parse(finishedAt || new Date().toISOString()) - Date.parse(startedAt)),
     outputs: outputs.map(output => ({ ...output })) };
 }
@@ -211,7 +213,8 @@ async function createCloudJob(value) {
       || (value.model !== undefined && (typeof value.model !== 'string' || !/^[\w.\/:+-]{1,128}$/.test(value.model)))
       || (value.effort !== undefined && (typeof value.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(value.effort)))
       || (value.labelOutputs !== undefined && typeof value.labelOutputs !== 'boolean')
-      || !Array.isArray(value.images) || value.images.length > 10) throw new Error('Invalid cloud job.');
+      || (value.task !== undefined && value.task !== describeTask)
+      || !Array.isArray(value.images) || value.images.length > 10 || (value.task && !value.images.length)) throw new Error('Invalid cloud job.');
   const images = value.images.map(image => {
     if (typeof image?.asset !== 'string' || !/^[\da-f-]{36}\.(png|jpg|gif|webp)$/.test(image.asset)
         || typeof image.data !== 'string' || image.data.length > 4 * Math.ceil(maxCloudImageBytes / 3)
@@ -223,7 +226,7 @@ async function createCloudJob(value) {
   const now = new Date().toISOString();
   const job = { id: value.jobId, boardId: value.boardId, nodeId: value.nodeId, prompt: value.prompt,
     ...generationSettings,
-    labelOutputs: value.labelOutputs === true, images: images.map((image, index) => `input-${index}.${image.format}`),
+    labelOutputs: value.labelOutputs === true, ...(value.task ? { task: value.task } : {}), images: images.map((image, index) => `input-${index}.${image.format}`),
     status: 'queued', createdAt: now, startedAt: now, progress: 'Queued.', outputs: [] };
   const temporary = path.join(cloudJobsDir, '.' + randomUUID() + '.tmp');
   try {
@@ -242,10 +245,10 @@ async function processCloudJob(job) {
   activeRun = { id: job.id, cloud: true, controller, done };
   const directory = path.join(cloudJobsDir, job.id);
   try {
-    job.status = 'running'; job.startedAt = new Date().toISOString(); job.progress = 'Preparing your image…';
+    job.status = 'running'; job.startedAt = new Date().toISOString(); job.progress = job.task === describeTask ? 'Describing…' : 'Preparing your image…';
     await saveCloudJob(job);
-    await codex.generate({
-      prompt: job.prompt, images: job.images.map(image => path.join(directory, image)), ...generationSettings,
+    const result = await codex.generate({
+      prompt: job.prompt, images: job.images.map(image => path.join(directory, image)), ...generationSettings, task: job.task,
       signal: controller.signal,
       onProgress: message => { job.progress = message; },
       onImage: async item => {
@@ -260,8 +263,9 @@ async function processCloudJob(job) {
       },
     });
     if (controller.signal.aborted) throw new Error('Cancelled.');
+    if (job.task === describeTask) job.text = result.text.slice(0, maxDescription);
     job.status = 'completed';
-    job.progress = `${job.outputs.length} image${job.outputs.length === 1 ? '' : 's'} created`;
+    job.progress = job.task === describeTask ? 'Description written' : `${job.outputs.length} image${job.outputs.length === 1 ? '' : 's'} created`;
   } catch (error) {
     job.status = !stopping && controller.signal.aborted ? 'cancelled' : 'failed';
     job.error = job.progress = stopping ? cloudStopped : error.message;
@@ -374,6 +378,7 @@ async function refreshStatus() {
   try { await codex.connect(); status = await codex.status(); }
   catch (error) { status = { connected: false, signedIn: false, imageGeneration: false, error: error.message, codexMissing: error.codexMissing === true }; }
   if (helperSite) Object.assign(status, { helperVersion, codexMissing: status.codexMissing === true, codexInstall: codexInstaller.status() });
+  status.features = features;
   publish('status', status);
   return status;
 }
@@ -412,11 +417,11 @@ async function processQueue() {
       let missingCaptions = 0;
       activeRun = { id: run.id, controller };
       const diagnostics = runDiagnostics(run, board.id);
-      run.status = 'running'; run.startedAt = new Date().toISOString(); run.message = 'Preparing your image…';
+      run.status = 'running'; run.startedAt = new Date().toISOString(); run.message = run.task === describeTask ? 'Describing…' : 'Preparing your image…';
       await persist(); publish('run', publicRun(run), board.id);
       try {
         const result = await codex.generate({
-          prompt: run.prompt, images: run.images.map(asset => path.join(assetsDir, asset)), signal: controller.signal,
+          prompt: run.prompt, images: run.images.map(asset => path.join(assetsDir, asset)), signal: controller.signal, task: run.task,
           model: run.model || generationSettings.model, effort: run.effort || generationSettings.effort,
           onDiagnostic: diagnostics.receive,
           onProgress: message => { run.message = message; publish('run', publicRun(run), board.id); },
@@ -441,7 +446,16 @@ async function processQueue() {
             await persist(); publish('graph', graph, board.id); publish('run', publicRun(run), board.id);
           },
         });
-        run.status = 'completed'; run.message = `${result.count} image${result.count === 1 ? '' : 's'} created`;
+        if (run.task === describeTask) {
+          const node = descriptionNode(run, result.text);
+          positionRunOutput(node, graph, run);
+          graph.nodes.push(node);
+          if (samePage(graph, graph.nodes.find(n => n.id === run.nodeId), node)) graph.edges.push({ id: randomUUID(), source: run.nodeId, target: node.id });
+          graph.revision++;
+          run.outputIds.push(node.id);
+          await persist(); publish('graph', graph, board.id);
+        }
+        run.status = 'completed'; run.message = run.task === describeTask ? 'Description written' : `${result.count} image${result.count === 1 ? '' : 's'} created`;
       } catch (error) {
         run.status = controller.signal.aborted ? 'cancelled' : 'error';
         run.error = error.message; run.message = error.message;
@@ -504,7 +518,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   ensureConnected();
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
-  const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || '';
+  const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || (inputs.task ? 'Describe image' : '');
   const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
   graph.runs.push(run);
   try { await persist(); } catch (error) { graph.runs.splice(graph.runs.indexOf(run), 1); throw error; }
@@ -751,6 +765,21 @@ const server = http.createServer(async (request, response) => {
       try { await persist(); } catch (error) { if (board.name === nextName) board.name = oldName; throw error; }
       publish('boards', boardList());
       return json(response, { id: board.id, name: board.name });
+    }
+    // Deleting asks for the exact name and keeps one board; image files stay, as other boards and history may use them.
+    if (request.method === 'DELETE' && board && !action) {
+      const { confirmName } = JSON.parse((await readBody(request)).toString() || '{}');
+      await settledWrites();
+      if (confirmName !== board.name) return json(response, { error: 'Type the board’s name to delete it.' }, 400);
+      if (coordinator.barriers.has(board.id)) return json(response, { error: 'The board is being updated by an agent.' }, 423);
+      if (board.graph.runs.some(run => ['queued', 'running'].includes(run.status))) return json(response, { error: 'Cancel or wait for this board’s generation before deleting it.' }, 409);
+      const before = { boards: workspace.boards, defaultBoardId: workspace.defaultBoardId };
+      workspace.boards = workspace.boards.filter(item => item.id !== board.id);
+      if (!workspace.boards.length) workspace.boards.push(createBoard('Untitled board'));
+      if (!workspace.boards.some(item => item.id === workspace.defaultBoardId)) workspace.defaultBoardId = workspace.boards[0].id;
+      try { await persist(); } catch (error) { Object.assign(workspace, before); throw error; }
+      publish('boards', boardList());
+      return json(response, { deleted: board.id, ...boardList() });
     }
     if (request.method === 'POST' && url.pathname === '/api/status') return json(response, await refreshStatus());
     if (request.method === 'GET' && board && action === 'events') {

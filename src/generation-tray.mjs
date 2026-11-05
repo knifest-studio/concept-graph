@@ -1,4 +1,5 @@
 import { runElapsed } from '../timing.mjs';
+import { plural, t } from './i18n.mjs';
 
 const active = run => ['running', 'queued'].includes(run.status);
 const failed = run => ['error', 'failed'].includes(run.status);
@@ -17,9 +18,10 @@ export function generationRows(runs, previous = [], now = Date.now(), dismissed 
     const settledAt = running ? null : old?.settledAt ?? (old ? now : Date.parse(run.finishedAt));
     if (!running && (!Number.isFinite(settledAt) || (!old && now - settledAt >= 4000) || (!error && now - settledAt >= 4000))) return [];
     const count = run.count ?? run.outputIds?.length ?? 0;
-    const status = running ? run.status === 'queued' ? 'Queued' : 'Generating' : error ? `Failed · ${(run.error || 'Generation failed').split(/\r?\n/)[0]}` : run.status === 'cancelled' ? 'Cancelled' : `Done · ${count} image${count === 1 ? '' : 's'}`;
+    const describe = run.task === 'describe';
+    const status = running ? run.status === 'queued' ? t('Queued') : describe ? t('Describing') : t('Generating') : error ? t('Failed · {error}', { error: t(run.error || 'Generation failed').split(/\r?\n/)[0] }) : run.status === 'cancelled' ? t('Cancelled') : describe ? t('Done · description') : plural(count, 'Done · {count} image', 'Done · {count} images');
     return [{ run, active: running, error, settledAt, fading: !running && !error && now - settledAt >= 3500,
-      label: (run.label || run.target?.data.text || run.target?.data.template?.name || 'Generation').trim().split(/\r?\n/)[0],
+      label: (run.label || run.target?.data.text || run.target?.data.template?.name || t('Generation')).trim().split(/\r?\n/)[0],
       status, elapsed: formatElapsed(runElapsed(run, now)) }];
   }).sort((a, b) => Number(b.active) - Number(a.active) || (Date.parse(a.run.createdAt || a.run.startedAt) || 0) - (Date.parse(b.run.createdAt || b.run.startedAt) || 0) || a.run.id.localeCompare(b.run.id));
 }

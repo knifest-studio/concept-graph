@@ -23,6 +23,7 @@
     "cloud:helpers:upload": "node scripts/upload-cloud-downloads.mjs"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4",
     "@xyflow/react": "^12.10.0",
     "partyserver": "^0.5.10",
     "react": "^19.0.0",

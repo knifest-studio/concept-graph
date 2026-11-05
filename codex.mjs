@@ -307,11 +307,13 @@ export class Codex extends EventEmitter {
     this.emit('login-completed', { success: reason === 'completed', reason });
   }
 
-  async generate({ prompt, images, model, effort, onProgress, onImage, onDiagnostic, signal }) {
+  // `task: 'describe'` asks for a written description of the images instead of new images; it resolves with that text.
+  async generate({ prompt, images, model, effort, task, onProgress, onImage, onDiagnostic, signal }) {
+    const describe = task === 'describe';
     await this.connect();
     const status = await this.status();
     if (!status.signedIn) throw new Error('Sign in to Codex with ChatGPT first: run codex login in Terminal. API-key billing is not used by this app.');
-    if (!status.imageGeneration) throw new Error('Your Codex provider does not expose built-in image generation.');
+    if (!describe && !status.imageGeneration) throw new Error('Your Codex provider does not expose built-in image generation.');
     if (signal?.aborted) throw new Error('Cancelled.');
     if (model && effort) {
       const selected = (await this.models()).models.find(item => item.id === model);
@@ -319,11 +321,12 @@ export class Codex extends EventEmitter {
     }
     const workerConfig = await this.imageWorkerConfig();
     const { thread, model: resolvedModel, reasoningEffort } = await this.request('thread/start', {
-      cwd: this.cwd, ephemeral: true, approvalPolicy: 'never', sandbox: 'workspace-write',
+      cwd: this.cwd, ephemeral: true, approvalPolicy: 'never', sandbox: describe ? 'read-only' : 'workspace-write',
       ...(model ? { model } : {}),
       // A global effort such as "ultra" otherwise overrides the turn effort (it ran at "max").
       config: { ...workerConfig, ...(effort ? { model_reasoning_effort: effort } : {}) }, developerInstructions: '',
-      baseInstructions: 'Generate actual images for Concept Graph with the native image tool, using only the supplied text and images. The final request takes priority. Use separate tool calls for separate images; make a collage only if requested. Do not use other tools, API keys, external services, SVG, code or placeholders; do not inspect unrelated files or spawn agents. If generation fails, briefly report the available reason. For multiple images or when useful, add exactly one line [[CG_CAPTION:Front view]] to each image tool prompt, replacing Front view with a specific caption in the final request language (at most 120 characters). This is app metadata: do not render the marker or caption in the image unless the user requests that text.',
+      baseInstructions: describe ? 'Describe the supplied images for Concept Graph in detail, using only the supplied text and images. The final request takes priority. Reply with the description only. Do not generate images, use tools, run commands, inspect files or spawn agents.'
+        : 'Generate actual images for Concept Graph with the native image tool, using only the supplied text and images. The final request takes priority. Use separate tool calls for separate images; make a collage only if requested. Do not use other tools, API keys, external services, SVG, code or placeholders; do not inspect unrelated files or spawn agents. If generation fails, briefly report the available reason. For multiple images or when useful, add exactly one line [[CG_CAPTION:Front view]] to each image tool prompt, replacing Front view with a specific caption in the final request language (at most 120 characters). This is app metadata: do not render the marker or caption in the image unless the user requests that text.',
     });
     onDiagnostic?.({ type: 'thread', model: resolvedModel, effort: reasoningEffort });
     onDiagnostic?.({ type: 'worker_context', text: 'Skills, plugins, project instructions and configured MCP servers are disabled for this worker. Required Codex and host instructions may remain.' });
@@ -338,6 +341,7 @@ export class Codex extends EventEmitter {
     }
     let turnId;
     let text = '';
+    const textLimit = describe ? 20000 : 4000;
     let imageIssue = '';
     let work = Promise.resolve();
     const seen = new Set();
@@ -367,6 +371,7 @@ export class Codex extends EventEmitter {
         cleanup();
         try { await work; } catch (failure) { error ||= failure; }
         if (error) reject(error);
+        else if (describe) text.trim() ? resolve({ text: text.trim(), count: 0 }) : reject(new Error('Codex returned no description.'));
         else if (!seen.size) reject(new Error(imageIssue ? imageIssue + (text.trim() ? ` Codex replied: ${text.trim().slice(0, 300)}` : '') : text.trim() || 'Codex completed without returning an image. Try a more explicit generation prompt.'));
         else resolve({ text, count: seen.size });
       };
@@ -382,7 +387,7 @@ export class Codex extends EventEmitter {
       const receive = ({ method, params = {} }) => {
         if (params.threadId !== thread.id) return;
         if (method === 'item/agentMessage/delta') {
-          text = (text + (params.delta || '')).slice(0, 4000);
+          text = (text + (params.delta || '')).slice(0, textLimit);
           if (params.delta) agentDeltas.add(params.itemId);
           onDiagnostic?.({ type: 'agent_delta', itemId: params.itemId, text: params.delta });
         }
@@ -390,14 +395,14 @@ export class Codex extends EventEmitter {
         if (method === 'model/rerouted') onDiagnostic?.({ type: 'model_rerouted', from: params.fromModel, to: params.toModel });
         if (method === 'thread/tokenUsage/updated') onDiagnostic?.({ type: 'usage', usage: params.tokenUsage?.total });
         if (method === 'item/started') {
-          onProgress?.(params.item?.type === 'imageGeneration' ? 'Generating image…' : 'Preparing your image…');
+          onProgress?.(describe ? 'Describing…' : params.item?.type === 'imageGeneration' ? 'Generating image…' : 'Preparing your image…');
           if (params.item?.type === 'imageGeneration') onDiagnostic?.({ type: 'image_started' });
         }
         if (method === 'item/completed' && params.item?.type === 'agentMessage') {
-          if (!agentDeltas.has(params.item.id) && typeof params.item.text === 'string') text = (text + params.item.text).slice(0, 4000);
+          if (!agentDeltas.has(params.item.id) && typeof params.item.text === 'string') text = (text + params.item.text).slice(0, textLimit);
           onDiagnostic?.({ type: 'agent_completed', itemId: params.item.id, text: params.item.text });
         }
-        if (method === 'item/completed' && params.item?.type === 'imageGeneration') {
+        if (method === 'item/completed' && params.item?.type === 'imageGeneration' && !describe) {
           const item = params.item;
           const output = {
             status: typeof item.status === 'string' && /^[a-zA-Z_-]{1,32}$/.test(item.status) ? item.status : 'unknown',

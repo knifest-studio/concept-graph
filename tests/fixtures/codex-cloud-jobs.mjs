@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0ioAAAAASUVORK5CYII=';
 let sequence = 0, active = null;
+const describing = new Set();
 createInterface({ input: process.stdin }).on('line', line => {
   const { id, method, params = {} } = JSON.parse(line);
   if (id === undefined) return;
@@ -15,8 +16,12 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'model/list') return send({ id, result: { data: [{ id: 'gpt-6-luna', model: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }], nextCursor: null } });
   if (method === 'thread/start') {
     if (params.model !== 'gpt-6-luna') return fail('Generation must use gpt-6-luna.');
-    if (!params.baseInstructions.includes('[[CG_CAPTION:')) return fail('Missing automatic caption instructions.');
-    return send({ id, result: { thread: { id: `thread-${++sequence}` } } });
+    const thread = `thread-${++sequence}`;
+    if (params.baseInstructions.startsWith('Describe')) {
+      if (params.sandbox !== 'read-only') return fail('A describe worker must be read-only.');
+      describing.add(thread);
+    } else if (!params.baseInstructions.includes('[[CG_CAPTION:')) return fail('Missing automatic caption instructions.');
+    return send({ id, result: { thread: { id: thread } } });
   }
   if (method === 'turn/interrupt') {
     if (active?.threadId === params.threadId) { clearTimeout(active.timer); active = null; }
@@ -35,6 +40,12 @@ createInterface({ input: process.stdin }).on('line', line => {
     }
     active = { threadId: params.threadId };
     send({ id, result: { turn: { id: 'turn' } } });
+    if (describing.has(params.threadId)) {
+      active = null;
+      send({ method: 'item/completed', params: { threadId: params.threadId, item: { type: 'agentMessage', id: 'message', text: 'A grey pixel.' } } });
+      send({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: 'turn', status: 'completed' } } });
+      return;
+    }
     send({ method: 'item/started', params: { threadId: params.threadId, item: { type: 'imageGeneration', id: 'image' } } });
     if (prompt.includes('HOLD')) return;
     active.timer = setTimeout(() => {
