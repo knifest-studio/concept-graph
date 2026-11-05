@@ -10,7 +10,8 @@ import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/ru
 import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
-import { falInput, falUpscale, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
+import { reframePng } from './png-frame.mjs';
+import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
 
 const chunkSize = 512 * 1024, maxAgentDeletes = 200;
@@ -476,7 +477,7 @@ export class BoardRoom extends YServer {
     const objects = await Promise.all(images.map(image => this.env.FILES.get(`assets/${image.asset}`)));
     if (objects.some(object => !object)) throw new NanoError('bad_request', `${upscale ? 'An image' : 'A reference image'} is missing from storage. Reconnect it and try again.`);
     if (objects.reduce((total, object) => total + object.size, 0) > maxReferenceBytes) throw new NanoError('bad_request', upscale ? 'Images to upscale can be at most 20 MB in total. Connect fewer.' : 'Reference images are too large for Nano Banana (20 MB in total). Use fewer or smaller images.');
-    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes) }; }));
+    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), ...(upscale ? { bytes } : {}) }; }));
   }
 
   // Pixel sizes from the start of each file, enough to price an upscale before it runs; null where the header is unread.
@@ -494,14 +495,22 @@ export class BoardRoom extends YServer {
     if (!source) throw new NanoError('bad_request', 'Could not read the size of an image to upscale.');
     let image;
     if (upscaler === upscalers.nanoBanana) {
+      // Nano Banana draws only fixed shapes: an image of another shape goes in padded to the nearest one (its edges
+      // repeated) and the part holding the original is cut back out of the answer, so nothing is cropped or stretched.
+      // Only PNGs can be reframed here; other images go as they are, in the nearest shape.
+      const plan = nanoFrame(source), padded = plan.padded && reference.mimeType === 'image/png'
+        && await reframePng(reference.bytes, { width: plan.frame.width, height: plan.frame.height, left: -plan.left, top: -plan.top }).catch(() => null);
       queued();
-      const { url, init } = nanoRequest(nanoUpscalePrompt, [reference], { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, nanoModel, nanoUpscaleFormat(scale, source));
+      const { url, init } = nanoRequest(nanoUpscalePrompt, [padded ? { mimeType: 'image/png', data: base64(padded) } : reference], { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, nanoModel, nanoUpscaleFormat(scale, padded ? plan.frame : source));
       const response = await fetch(url, { ...init, signal });
       const body = await response.json().catch(() => null);
       if (!response.ok) result.usd = 0;
       const { images, usage } = nanoResult(response.status, body);
       if (usage) result.usd = nanoCost(usage, { promptLength: nanoUpscalePrompt.length, references: 1, images: 1 });
       image = images[0];
+      const drawn = padded && image.format === 'png' && imageSize(image.bytes), content = drawn && nanoContent(plan, source, drawn);
+      const cut = content && await reframePng(image.bytes, content).catch(cause => { console.error('Could not cut an upscale back to its shape:', cause); return null; });
+      if (cut) image = { ...image, bytes: cut };
     } else {
       const settings = upscaleSettings(this.env), input = falInput(upscaler, upscaleFactor(source, scale), `data:${reference.mimeType};base64,${reference.data}`);
       image = await falUpscale({ key: this.env.FAL_KEY, endpoint: settings.endpoint, model: upscaleModels[upscaler], input, signal, onQueued: queued });

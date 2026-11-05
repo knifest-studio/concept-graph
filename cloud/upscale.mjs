@@ -55,11 +55,31 @@ export function falInput(upscaler, factor, dataUri) {
   return { image_url: dataUri, model: 'Standard V2', upscale_factor: factor, output_format: 'jpeg' };
 }
 
-const nanoRatios = [['1:1', 1], ['2:3', 2 / 3], ['3:2', 3 / 2], ['3:4', 3 / 4], ['4:3', 4 / 3], ['4:5', 4 / 5], ['5:4', 5 / 4], ['9:16', 9 / 16], ['16:9', 16 / 9], ['21:9', 21 / 9]];
-// The supported aspect ratio closest to the image, so Nano Banana neither crops nor stretches it.
-export const nanoAspect = ({ width, height }) => nanoRatios.reduce((best, item) => Math.abs(Math.log(item[1] * height / width)) < Math.abs(Math.log(best[1] * height / width)) ? item : best)[0];
-export const nanoUpscalePrompt = 'Upscale this image to a higher resolution. Keep the composition, framing, subjects, colours, lighting, style and every detail exactly as they are: only add resolution, sharpness and fine texture. Do not add, remove or change anything, and do not add text or borders.';
-export const nanoUpscaleFormat = (scale, source) => ({ type: 'image', image_size: scale === 4 ? '4K' : '2K', ...(source ? { aspect_ratio: nanoAspect(source) } : {}) });
+// The shapes Nano Banana 2.1 draws (https://aistudio.google.com/docs/image-generation, read 2026-11-05).
+const nanoRatios = [['1:1', 1], ['2:3', 2 / 3], ['3:2', 3 / 2], ['3:4', 3 / 4], ['4:3', 4 / 3], ['4:5', 4 / 5], ['5:4', 5 / 4], ['9:16', 9 / 16], ['16:9', 16 / 9], ['21:9', 21 / 9], ['1:4', 1 / 4], ['4:1', 4], ['1:8', 1 / 8], ['8:1', 8]];
+const nearestRatio = ({ width, height }) => nanoRatios.reduce((best, item) => Math.abs(Math.log(item[1] * height / width)) < Math.abs(Math.log(best[1] * height / width)) ? item : best);
+export const nanoAspect = size => nearestRatio(size)[0];
+// Nano Banana fills whatever shape it is asked for, so an image of another shape would come back cropped or reframed. It
+// goes in padded to the nearest shape instead (`frame`, the image at left/top inside it), and the answer is cut back.
+export function nanoFrame(size) {
+  const [aspect, ratio] = nearestRatio(size), shape = size.width / size.height;
+  if (Math.abs(Math.log(ratio / shape)) < .004) return { aspect, frame: { ...size }, left: 0, top: 0, padded: false };
+  const frame = ratio > shape ? { width: Math.round(size.height * ratio), height: size.height } : { width: size.width, height: Math.round(size.width / ratio) };
+  return { aspect, frame, left: Math.floor((frame.width - size.width) / 2), top: Math.floor((frame.height - size.height) / 2), padded: true };
+}
+// Where the original sits in an answer of `size` drawn from that frame: the full width or height, and the other side
+// from the original's exact shape, so rounding the frame to whole pixels never skews it.
+export function nanoContent(plan, source, size) {
+  if (plan.frame.width > source.width) {
+    const width = Math.min(size.width, Math.round(size.height * source.width / source.height));
+    return { left: Math.min(size.width - width, Math.round(plan.left * size.width / plan.frame.width)), top: 0, width, height: size.height };
+  }
+  const height = Math.min(size.height, Math.round(size.width * source.height / source.width));
+  return { left: 0, top: Math.min(size.height - height, Math.round(plan.top * size.height / plan.frame.height)), width: size.width, height };
+}
+export const nanoUpscalePrompt = 'Upscale this image to a higher resolution. Keep the composition, framing, subjects, colours, lighting, style and every detail exactly as they are, in the same place: only add resolution, sharpness and fine texture. Do not crop, zoom, reframe, add, remove or change anything, and do not add text or borders.';
+// PNG, so a padded answer can be cut back without losing quality.
+export const nanoUpscaleFormat = (scale, frame) => ({ type: 'image', mime_type: 'image/png', image_size: scale === 4 ? '4K' : '2K', ...(frame ? { aspect_ratio: nanoAspect(frame) } : {}) });
 
 const falError = (status, detail) => {
   if ([401, 403].includes(status)) return new NanoError('config', 'fal.ai rejected the site’s key. Ask the site owner to check FAL_KEY.');

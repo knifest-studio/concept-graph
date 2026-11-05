@@ -4,7 +4,7 @@ import * as nodeModule from 'node:module';
 import * as Y from 'yjs';
 import { signSession, userColor } from '../cloud/auth.mjs';
 import { NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings } from '../cloud/nano-banana.mjs';
-import { validateGraph } from '../graph.mjs';
+import { imageSize, validateGraph } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { nanoState } from '../src/generator.mjs';
@@ -513,7 +513,7 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
 });
 
 test('upscale nodes take one to four connected images, and sizes, prices and labels follow the chosen upscaler', async () => {
-  const { upscaleFactor, upscaleCost, upscaleEstimate, nanoAspect, falInput, nanoUpscaleFormat, upscaleSettings } = await import('../cloud/upscale.mjs');
+  const { upscaleFactor, upscaleCost, upscaleEstimate, nanoAspect, falInput, nanoUpscaleFormat, upscaleSettings, nanoFrame, nanoContent } = await import('../cloud/upscale.mjs');
   // FAL_UPSCALERS=off keeps the key but turns Topaz and SeedVR2 off.
   assert.deepEqual([upscaleSettings({}).fal, upscaleSettings({ FAL_KEY: 'k' }).fal, upscaleSettings({ FAL_KEY: 'k', FAL_UPSCALERS: 'off' }).fal, upscaleSettings({ FAL_KEY: 'k', FAL_UPSCALERS: 'on' }).fal], [false, true, false, true]);
   const { resolutionLabel, runInputs } = await import('../graph.mjs');
@@ -527,9 +527,15 @@ test('upscale nodes take one to four connected images, and sizes, prices and lab
   // Before the call the price assumes the largest output, capped at 8K.
   assert.equal(upscaleEstimate('topaz', 4, { width: 4096, height: 4096 }), .32);
   assert.deepEqual([nanoAspect({ width: 640, height: 480 }), nanoAspect({ width: 1080, height: 1920 }), nanoAspect({ width: 1000, height: 1010 })], ['4:3', '9:16', '1:1']);
-  assert.deepEqual(nanoUpscaleFormat(4, { width: 640, height: 480 }), { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
+  assert.deepEqual(nanoUpscaleFormat(4, { width: 640, height: 480 }), { type: 'image', mime_type: 'image/png', image_size: '4K', aspect_ratio: '4:3' });
+  // A 2:1 image goes in padded above and below to 16:9, and the answer is cut back to 2:1; a 4:3 one needs nothing.
+  const wide = nanoFrame({ width: 2048, height: 1024 });
+  assert.deepEqual(wide, { aspect: '16:9', frame: { width: 2048, height: 1152 }, left: 0, top: 64, padded: true });
+  assert.deepEqual(nanoContent(wide, { width: 2048, height: 1024 }, { width: 5504, height: 3072 }), { left: 0, top: 171, width: 5504, height: 2752 });
+  assert.equal(nanoFrame({ width: 640, height: 480 }).padded, false);
+  assert.deepEqual(nanoFrame({ width: 4000, height: 1000 }).aspect, '4:1');
   assert.deepEqual(falInput('seedvr', 2, 'data:x'), { image_url: 'data:x', upscale_mode: 'factor', upscale_factor: 2, output_format: 'jpg' });
-  assert.deepEqual([resolutionLabel({ width: 1024, height: 1024 }), resolutionLabel({ width: 2048, height: 1536 }), resolutionLabel({ width: 2160, height: 3840 }), resolutionLabel({ width: 8192, height: 4096 }), resolutionLabel(undefined)], ['', '2K', '4K', '8K', '']);
+  assert.deepEqual([resolutionLabel({ width: 1024, height: 1024 }), resolutionLabel({ width: 2048, height: 1536 }), resolutionLabel({ width: 2752, height: 1536 }), resolutionLabel({ width: 3072, height: 2048 }), resolutionLabel({ width: 2160, height: 3840 }), resolutionLabel({ width: 8192, height: 4096 }), resolutionLabel(undefined)], ['', '2K', '2K', '3K', '4K', '8K', '']);
   const image = id => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: reference } });
   const graph = count => ({ nodes: [{ id: 'u', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'upscale', upscaler: 'seedvr', scale: 4 } }, ...Array.from({ length: count }, (_, index) => image(`i${index}`))],
     edges: Array.from({ length: count }, (_, index) => ({ id: `e${index}`, source: `i${index}`, target: 'u' })), groups: [], runs: [] });
@@ -606,7 +612,7 @@ runtimeTest('Nano Banana upscales by redrawing the image at 2K or 4K in its own 
   await settle();
   assert.equal(calls.length, 1);
   const { body } = calls[0];
-  assert.deepEqual(body.response_format, { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
+  assert.deepEqual(body.response_format, { type: 'image', mime_type: 'image/png', image_size: '4K', aspect_ratio: '4:3' });
   assert.match(body.input[0].text, /^Upscale this image/); assert.equal(body.input.length, 2); assert.equal(body.model, 'gemini-nano-banana-2.1');
   const graph = readCloudGraph(boardRoom.document), output = graph.nodes.find(node => node.data.runId === result.run.id);
   assert.deepEqual(output.data.pixels, { width: 4096, height: 3072 });
@@ -627,4 +633,35 @@ test('agents add an upscale node fed by images on one page', async () => {
   assert.throws(() => run({ imageIds: ['i'], upscaler: 'topaz' }, false), /off on this site/);
   assert.throws(() => run({ imageIds: ['p'] }), /Upscale images only/);
   assert.throws(() => run({ imageIds: ['i'], scale: 3 }), /Invalid upscale size/);
+});
+
+// A real RGB PNG, every pixel (x mod 256, y mod 256, 90), for upscales that are padded and cut back.
+async function realPng(width, height) {
+  const { deflateSync } = await import('node:zlib');
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = bytes => { let c = 0xffffffff; for (const b of bytes) c = crcTable[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const head = Buffer.alloc(8); head.writeUInt32BE(data.length); head.write(type, 4); const tail = Buffer.alloc(4); tail.writeUInt32BE(crc(Buffer.concat([Buffer.from(type), data]))); return Buffer.concat([head, data, tail]); };
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) raw.set([x & 255, y & 255, 90], y * (width * 3 + 1) + 1 + x * 3);
+  const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header.set([8, 2, 0, 0, 0], 8);
+  return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
+}
+
+runtimeTest('a Nano Banana upscale of a 2:1 PNG is sent padded to 16:9 and comes back 2:1, not cropped', async t => {
+  const { boardRoom, board, files, settle } = cloudSetup(t);
+  await boardRoom.setName(board.id);
+  files.set(`assets/${reference}`, { bytes: await realPng(200, 100), size: 1 });
+  addUpscale(boardRoom, { upscaler: 'nano-banana', scale: 2 });
+  const answer = await realPng(320, 180);
+  const calls = fakeGemini(t, () => Response.json(interaction([answer])));
+  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  const { body } = calls[0], sent = Buffer.from(body.input[1].data, 'base64');
+  assert.equal(body.response_format.aspect_ratio, '16:9'); assert.equal(body.input[1].mime_type, 'image/png');
+  // 200×100 padded to 16:9 is 200×113, the original six rows down.
+  assert.deepEqual(imageSize(new Uint8Array(sent)), { width: 200, height: 113 });
+  const output = readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id);
+  // The 320×180 answer is cut back to the original's 2:1: 320×160.
+  assert.deepEqual(output.data.pixels, { width: 320, height: 160 });
+  assert.deepEqual(imageSize(files.get(`assets/${output.data.asset}`).bytes), { width: 320, height: 160 });
 });

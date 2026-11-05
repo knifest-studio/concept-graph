@@ -21,7 +21,8 @@ export const maxUpscaleImages = 4;
 // The pixel size a generated or upscaled image was stored at, shown as 2K, 4K and up on the board.
 export function resolutionLabel(pixels) {
   const side = Math.max(pixels?.width || 0, pixels?.height || 0);
-  return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2700, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
+  // Nano Banana's 2K is 2752 px wide at 16:9, so 3K starts a little higher.
+  return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2900, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
 }
 export const maxDescription = 20000;
 // A Nano Banana prompt can ask for up to this many variants: separate images generated side by side.

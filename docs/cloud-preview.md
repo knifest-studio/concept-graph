@@ -137,7 +137,9 @@ Sign in with the test sign-in as `you@example.com` and give access in **Team acc
 | --- | --- | --- | --- |
 | **Topaz** (default), `fal-ai/topaz/upscale/image`, model *Standard V2* | The same engine as Krea's enhancer; keeps the picture as it is | ×2, ×4 | $0.08 per image up to 24 MP of output, $0.16 up to 48 MP |
 | **SeedVR2**, `fal-ai/seedvr/upscale/image` | Restores fine detail; much cheaper | ×2, ×4 | $0.001 per output megapixel (a 4K image ≈ $0.02) |
-| **Nano Banana** (`gemini-nano-banana-2.1`, `response_format.image_size`) | Redraws the image at the new size, in its own aspect ratio; small details can change | 2K, 4K | about $0.05 (2K) or $0.11 (4K) |
+| **Nano Banana** (`gemini-nano-banana-2.1`, `response_format.image_size`) | Redraws the image at the new size; small details can change | 2K, 4K | about $0.05 (2K) or $0.11 (4K) |
+
+Nano Banana draws only fixed shapes (1:1, 2:3, 3:4, 4:5, 9:16, 1:4, 1:8 and their landscape forms, 16:9 and 21:9) and fills whichever it is asked for, so an image of another shape would come back cropped or reframed. A PNG of another shape is therefore sent padded to the nearest shape (its edge pixels repeated) and the part holding the original is cut back out of the PNG answer, so the result keeps the original's shape and framing. Both steps run row by row (`cloud/png-frame.mjs`), so even a 4K answer stays well inside the room's 128 MB. Other formats (JPEG, WebP) are sent as they are, in the nearest shape.
 
 Upscaling runs in the board's Durable Object like Nano Banana and is governed the same way: only people on the **Team access** list can run it, each upscaled image counts as one of the person's daily images, and its cost counts toward the team's monthly budget (reserved at the largest size it could come out, then settled with what it cost). Outputs are capped at 8192 px on their long side; a ×4 that would pass it is reduced, and an image already that large is refused. Topaz and SeedVR2 return JPEG to keep 4K files small. Agents use `add_upscale_node`, then `start_run`.
 
