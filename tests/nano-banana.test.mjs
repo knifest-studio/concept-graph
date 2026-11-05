@@ -527,7 +527,7 @@ test('upscale nodes take one to four connected images, and sizes, prices and lab
   // Before the call the price assumes the largest output, capped at 8K.
   assert.equal(upscaleEstimate('topaz', 4, { width: 4096, height: 4096 }), .32);
   assert.deepEqual([nanoAspect({ width: 640, height: 480 }), nanoAspect({ width: 1080, height: 1920 }), nanoAspect({ width: 1000, height: 1010 })], ['4:3', '9:16', '1:1']);
-  assert.deepEqual(nanoUpscaleFormat(4, { width: 640, height: 480 }), { type: 'image', mime_type: 'image/png', image_size: '4K', aspect_ratio: '4:3' });
+  assert.deepEqual(nanoUpscaleFormat(4, { width: 640, height: 480 }), { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
   // A 2:1 image goes in padded above and below to 16:9, and the answer is cut back to 2:1; a 4:3 one needs nothing.
   const wide = nanoFrame({ width: 2048, height: 1024 });
   assert.deepEqual(wide, { aspect: '16:9', frame: { width: 2048, height: 1152 }, left: 0, top: 64, padded: true });
@@ -612,7 +612,7 @@ runtimeTest('Nano Banana upscales by redrawing the image at 2K or 4K in its own 
   await settle();
   assert.equal(calls.length, 1);
   const { body } = calls[0];
-  assert.deepEqual(body.response_format, { type: 'image', mime_type: 'image/png', image_size: '4K', aspect_ratio: '4:3' });
+  assert.deepEqual(body.response_format, { type: 'image', image_size: '4K', aspect_ratio: '4:3' });
   assert.match(body.input[0].text, /^Upscale this image/); assert.equal(body.input.length, 2); assert.equal(body.model, 'gemini-nano-banana-2.1');
   const graph = readCloudGraph(boardRoom.document), output = graph.nodes.find(node => node.data.runId === result.run.id);
   assert.deepEqual(output.data.pixels, { width: 4096, height: 3072 });
@@ -647,21 +647,69 @@ async function realPng(width, height) {
   return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
 }
 
-runtimeTest('a Nano Banana upscale of a 2:1 PNG is sent padded to 16:9 and comes back 2:1, not cropped', async t => {
-  const { boardRoom, board, files, settle } = cloudSetup(t);
+// Cloudflare Images as the IMAGES binding: records each transformation and answers with what `produce` makes of it.
+function fakeImages(produce) {
+  const calls = [];
+  return { calls, binding: { input(stream) {
+    const transforms = [];
+    const chain = { transform(options) { transforms.push(options); return chain; }, async output(options) {
+      const call = { transforms, output: options, bytes: new Uint8Array(await new Response(stream).arrayBuffer()) };
+      calls.push(call);
+      const bytes = await produce(call);
+      return { response: () => new Response(bytes), contentType: () => options.format };
+    } };
+    return chain;
+  } } };
+}
+// Just enough of a JPEG for its format and size to be read.
+const jpeg = (width, height) => new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, height >> 8, height & 255, width >> 8, width & 255, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]);
+
+runtimeTest('a Nano Banana upscale of a 2:1 image is sent padded to 16:9 and its JPEG answer is cut back to 2:1, not cropped', async t => {
+  const images = fakeImages(({ transforms }) => { const { trim } = transforms[0]; return jpeg(320 - trim.left - trim.right, 180 - trim.top - trim.bottom); });
+  const { boardRoom, board, files, settle } = cloudSetup(t, { IMAGES: images.binding });
+  await boardRoom.setName(board.id);
+  files.set(`assets/${reference}`, { bytes: await realPng(200, 100), size: 1 });
+  addUpscale(boardRoom, { upscaler: 'nano-banana', scale: 2 });
+  const calls = fakeGemini(t, () => Response.json({ ...interaction([]), steps: [{ type: 'model_output', content: [{ type: 'image', mime_type: 'image/jpeg', data: b64(jpeg(320, 180)) }] }] }));
+  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  const { body } = calls[0], sent = Buffer.from(body.input[1].data, 'base64');
+  assert.equal(body.response_format.aspect_ratio, '16:9'); assert.equal(body.response_format.mime_type, undefined); assert.equal(body.input[1].mime_type, 'image/png');
+  // A PNG is padded here, repeating its edges: 200×100 padded to 16:9 is 200×113, the original six rows down.
+  assert.deepEqual(imageSize(new Uint8Array(sent)), { width: 200, height: 113 });
+  // The 320×180 JPEG answer is cut back to the original's 2:1 through Cloudflare Images.
+  assert.deepEqual(images.calls.map(call => [call.transforms, call.output]), [[[{ trim: { top: 10, left: 0, bottom: 10, right: 0 } }], { format: 'image/jpeg', quality: 95 }]]);
+  const output = readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id);
+  assert.deepEqual(output.data.pixels, { width: 320, height: 160 }); assert.match(output.data.asset, /\.jpg$/);
+});
+
+runtimeTest('a PNG answer is cut back here, images other than PNGs are padded through Cloudflare Images, and without it nothing is padded', async t => {
+  const images = fakeImages(({ transforms }) => realPng(transforms[0].width, transforms[0].height));
+  const { boardRoom, board, files, settle, env } = cloudSetup(t, { IMAGES: images.binding });
   await boardRoom.setName(board.id);
   files.set(`assets/${reference}`, { bytes: await realPng(200, 100), size: 1 });
   addUpscale(boardRoom, { upscaler: 'nano-banana', scale: 2 });
   const answer = await realPng(320, 180);
-  const calls = fakeGemini(t, () => Response.json(interaction([answer])));
-  const result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  let calls = fakeGemini(t, () => Response.json(interaction([answer])));
+  let result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
   await settle();
-  const { body } = calls[0], sent = Buffer.from(body.input[1].data, 'base64');
-  assert.equal(body.response_format.aspect_ratio, '16:9'); assert.equal(body.input[1].mime_type, 'image/png');
-  // 200×100 padded to 16:9 is 200×113, the original six rows down.
-  assert.deepEqual(imageSize(new Uint8Array(sent)), { width: 200, height: 113 });
-  const output = readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id);
-  // The 320×180 answer is cut back to the original's 2:1: 320×160.
-  assert.deepEqual(output.data.pixels, { width: 320, height: 160 });
-  assert.deepEqual(imageSize(files.get(`assets/${output.data.asset}`).bytes), { width: 320, height: 160 });
+  assert.deepEqual(readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id).data.pixels, { width: 320, height: 160 });
+  assert.equal(images.calls.length, 0);
+  // A JPEG to upscale is padded by Cloudflare Images instead.
+  const photo = '87654321-4321-4321-4321-cba987654321.jpg';
+  files.set(`assets/${photo}`, { bytes: jpeg(200, 100), size: 1 });
+  const before = readCloudGraph(boardRoom.document);
+  applyLocalGraph(boardRoom.document, { ...before, nodes: [...before.nodes, { id: 'j', type: 'image', position: { x: 0, y: 900 }, data: { asset: photo } }, { id: 'v', type: 'text', position: { x: 400, y: 900 }, data: { text: '', task: 'upscale', upscaler: 'nano-banana', scale: 2 } }], edges: [...before.edges, { id: 'jv', source: 'j', target: 'v' }] }, before, 'seed');
+  result = await boardRoom.startNano({ nodeId: 'v', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  assert.deepEqual(images.calls[0].transforms, [{ width: 200, height: 113, fit: 'pad', background: '#000000' }]);
+  assert.equal(readCloudGraph(boardRoom.document).runs.find(run => run.id === result.run.id).status, 'completed');
+  // Without the binding the image goes as it is, in the nearest shape.
+  delete env.IMAGES; t.mock.restoreAll();
+  calls = fakeGemini(t, () => Response.json(interaction([answer])));
+  boardRoom.document.getMap('runs').forEach((run, id) => { if (run.nodeId === 'u') boardRoom.document.getMap('runs').delete(id); });
+  result = await boardRoom.startNano({ nodeId: 'u', requester: { name: 'Lead', email: 'lead@studio.example', color: user.color } });
+  await settle();
+  assert.deepEqual(imageSize(new Uint8Array(Buffer.from(calls[0].body.input[1].data, 'base64'))), { width: 200, height: 100 });
+  assert.deepEqual(readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id).data.pixels, { width: 320, height: 180 });
 });

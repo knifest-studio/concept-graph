@@ -15,6 +15,7 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["BoardRoom", "Directory"] }
   ],
+  "images": { "binding": "IMAGES" },
   "r2_buckets": [
     { "binding": "FILES", "bucket_name": "concept-graph-files" }
   ],

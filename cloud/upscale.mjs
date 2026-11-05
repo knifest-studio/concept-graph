@@ -78,8 +78,8 @@ export function nanoContent(plan, source, size) {
   return { left: 0, top: Math.min(size.height - height, Math.round(plan.top * size.height / plan.frame.height)), width: size.width, height };
 }
 export const nanoUpscalePrompt = 'Upscale this image to a higher resolution. Keep the composition, framing, subjects, colours, lighting, style and every detail exactly as they are, in the same place: only add resolution, sharpness and fine texture. Do not crop, zoom, reframe, add, remove or change anything, and do not add text or borders.';
-// PNG, so a padded answer can be cut back without losing quality.
-export const nanoUpscaleFormat = (scale, frame) => ({ type: 'image', mime_type: 'image/png', image_size: scale === 4 ? '4K' : '2K', ...(frame ? { aspect_ratio: nanoAspect(frame) } : {}) });
+// The answer comes back as a JPEG; Google accepts no other mime_type here.
+export const nanoUpscaleFormat = (scale, frame) => ({ type: 'image', image_size: scale === 4 ? '4K' : '2K', ...(frame ? { aspect_ratio: nanoAspect(frame) } : {}) });
 
 const falError = (status, detail) => {
   if ([401, 403].includes(status)) return new NanoError('config', 'fal.ai rejected the site’s key. Ask the site owner to check FAL_KEY.');

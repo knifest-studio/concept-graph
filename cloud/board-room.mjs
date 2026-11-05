@@ -1,7 +1,7 @@
 import { YServer } from 'y-partyserver';
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
-import { assetPattern, imageTypes } from './assets.mjs';
+import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
 import { generators, imageSize, isUpscale, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -233,6 +233,26 @@ export class BoardRoom extends YServer {
         for (let index = 0; index < doomed.length; index += 1000) await this.env.FILES.delete(doomed.slice(index, index + 1000));
       } catch (cause) { console.error('Could not remove old board versions:', cause); }
     }
+  }
+
+  // Cloudflare Images through the IMAGES binding (5,000 transformations a month on the free plan).
+  async transformImage(bytes, transform, format) {
+    const result = await this.env.IMAGES.input(new Blob([bytes]).stream()).transform(transform).output({ format, ...(format === 'image/jpeg' ? { quality: 95 } : {}) });
+    return new Uint8Array(await result.response().arrayBuffer());
+  }
+
+  // The part of a padded Nano Banana answer that holds the original. If it cannot be cut, the whole answer is kept:
+  // nothing of the original is lost, only the padding stays.
+  async cutBack(image, plan, source) {
+    const size = imageSize(image.bytes), content = size && nanoContent(plan, source, size);
+    if (!content) return image;
+    try {
+      const bytes = image.format === 'png' ? await reframePng(image.bytes, content)
+        : await this.transformImage(image.bytes, { trim: { top: content.top, left: content.left, bottom: size.height - content.top - content.height, right: size.width - content.left - content.width } }, 'image/jpeg');
+      if (!bytes) return image;
+      const format = imageFormat(bytes);
+      return { bytes, format, contentType: imageTypes[format] };
+    } catch (cause) { console.error('Could not cut an upscale back to its shape:', cause); return image; }
   }
 
   // Worker RPC: the board's versions, newest first. A daily backup shows once the version it copies is gone.
@@ -495,11 +515,17 @@ export class BoardRoom extends YServer {
     if (!source) throw new NanoError('bad_request', 'Could not read the size of an image to upscale.');
     let image;
     if (upscaler === upscalers.nanoBanana) {
-      // Nano Banana draws only fixed shapes: an image of another shape goes in padded to the nearest one (its edges
-      // repeated) and the part holding the original is cut back out of the answer, so nothing is cropped or stretched.
-      // Only PNGs can be reframed here; other images go as they are, in the nearest shape.
-      const plan = nanoFrame(source), padded = plan.padded && reference.mimeType === 'image/png'
-        && await reframePng(reference.bytes, { width: plan.frame.width, height: plan.frame.height, left: -plan.left, top: -plan.top }).catch(() => null);
+      // Nano Banana draws only fixed shapes: an image of another shape goes in padded to the nearest one and the part
+      // holding the original is cut back out of the answer, so nothing is cropped or stretched. A PNG is padded here,
+      // repeating its edges; other formats, and the JPEG answer, go through Cloudflare Images. Without that binding the
+      // image goes as it is, in the nearest shape.
+      const plan = nanoFrame(source);
+      let padded = null;
+      if (plan.padded && this.env.IMAGES) {
+        if (reference.mimeType === 'image/png') padded = await reframePng(reference.bytes, { width: plan.frame.width, height: plan.frame.height, left: -plan.left, top: -plan.top }).catch(() => null);
+        padded ||= await this.transformImage(reference.bytes, { width: plan.frame.width, height: plan.frame.height, fit: 'pad', background: '#000000' }, 'image/png')
+          .catch(cause => { console.error('Could not pad an image for Nano Banana:', cause); return null; });
+      }
       queued();
       const { url, init } = nanoRequest(nanoUpscalePrompt, [padded ? { mimeType: 'image/png', data: base64(padded) } : reference], { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, nanoModel, nanoUpscaleFormat(scale, padded ? plan.frame : source));
       const response = await fetch(url, { ...init, signal });
@@ -507,10 +533,7 @@ export class BoardRoom extends YServer {
       if (!response.ok) result.usd = 0;
       const { images, usage } = nanoResult(response.status, body);
       if (usage) result.usd = nanoCost(usage, { promptLength: nanoUpscalePrompt.length, references: 1, images: 1 });
-      image = images[0];
-      const drawn = padded && image.format === 'png' && imageSize(image.bytes), content = drawn && nanoContent(plan, source, drawn);
-      const cut = content && await reframePng(image.bytes, content).catch(cause => { console.error('Could not cut an upscale back to its shape:', cause); return null; });
-      if (cut) image = { ...image, bytes: cut };
+      image = padded ? await this.cutBack(images[0], plan, source) : images[0];
     } else {
       const settings = upscaleSettings(this.env), input = falInput(upscaler, upscaleFactor(source, scale), `data:${reference.mimeType};base64,${reference.data}`);
       image = await falUpscale({ key: this.env.FAL_KEY, endpoint: settings.endpoint, model: upscaleModels[upscaler], input, signal, onQueued: queued });
