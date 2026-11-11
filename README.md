@@ -24,7 +24,7 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 - Keep unrelated Codex skills, plugins and configured MCP servers out of image-generation threads without changing global settings.
 - Export a board and its images as one `.conceptgraph` file, then import it as a new board.
 - Save custom text nodes with reusable instructions and reference images, and switch existing prompts between saved types.
-- Every expanded image shows an editable name above it. Use that exact name in prompts, such as “take the clouds from Storm 3 and the angle from Canyon”. Connected images reach every generator with their board names.
+- Every expanded image shows an editable name above it. Use that exact name in prompts, such as “take the clouds from Storm 3 and the angle from Canyon”. Connected images reach every generator with their board names. A prompt can also point at a connected image by its node ID (**Copy node ID**) or by its file name, as shown in fullscreen and used for downloads; every generator receives all three for each image.
 - Connect a local MCP-capable agent to read and change boards, inspect images and start generation.
 - Sketch around your ideas as in FigJam: draw with the pen, add stickies, stamps and sections, place rectangles, ellipses, diamonds and triangles with text inside (R, O), and connect things with arrows (L) that stay attached when they move.
 - Delete a board you no longer need; you type its name to confirm. The canvas stops a little past the board's content, so you cannot scroll off and lose it.

@@ -47,15 +47,22 @@ test('connecting legacy images stores names and resolves target collisions in on
 });
 
 test('attachment ordinals never impersonate board names, including the real Image 1 collision', () => {
-  const nodes = [image('first', 'image.png'), { ...image('second', 'Result 1'), data: { ...image('second').data, caption: 'Image 1' } }, text('p', 'Take the clouds from “Image 1”')];
+  const nodes = [image('first', 'image.png'), { ...image('second', 'Result 1'), data: { ...image('second').data, label: 'generated.png', caption: 'Image 1', runId: 'run' } }, text('p', 'Take the clouds from “Image 1”')];
   const graph = { nodes, edges: [edge('first', 'p'), edge('second', 'p')] };
   const { prompt, snapshot } = collectInputs(graph, 'p');
-  assert.match(prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
-  assert.doesNotMatch(prompt, /Image 1:|Image 2:|image\.png/);
+  const attachments = [
+    `Attachment 1: “Image” (node ID first; file ${nodes[0].data.asset}, uploaded as image.png)`,
+    `Attachment 2: “Image 1” (node ID second; file ${nodes[1].data.asset})`,
+  ];
+  const actualAttachments = prompt.split('\n').filter(line => line.startsWith('Attachment '));
+  assert.deepEqual(actualAttachments, attachments);
+  assert.doesNotMatch(prompt, /Image 1:|Image 2:/);
+  assert.match(actualAttachments[0], /uploaded as image\.png/);
+  assert.doesNotMatch(actualAttachments[1], /uploaded as/);
   assert.match(prompt, /Take the clouds from “Image 1”/);
   assert.deepEqual(snapshot, nodes);
   graph.nodes[2].data.task = 'describe';
-  assert.match(collectInputs(graph, 'p').prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
+  assert.deepEqual(collectInputs(graph, 'p').prompt.split('\n').filter(line => line.startsWith('Attachment ')), attachments);
 });
 
 test('every expanded image reserves name space, including unnamed legacy images', () => {
@@ -132,7 +139,9 @@ test('custom nodes add their saved instructions and reference images to the conn
   const result = collectInputs(graph, 'custom');
   assert.deepEqual(result.images, [asset, asset]);
   assert.match(result.prompt, /Show front, side, and back/);
-  assert.match(result.prompt, /Attachment 2: “Multiview reference 1”/);
+  const attachment = result.prompt.split('\n').find(line => line.startsWith('Attachment 2:'));
+  assert.equal(attachment, `Attachment 2: “Multiview reference 1” (file ${asset})`);
+  assert.doesNotMatch(attachment, /node ID/);
   custom.data.template.instructions = 'Changed after run';
   assert.equal(result.target.data.template.instructions, 'Show front, side, and back');
   assert.equal(result.snapshot[1].data.template.instructions, 'Show front, side, and back');

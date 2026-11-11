@@ -68,8 +68,8 @@ test('settings come from the Worker environment with safe defaults, and the endp
 
 test('the request sends the prompt, connected context and labelled references, without Codex tool instructions', () => {
   const { prompt, images, target } = nanoPrompt(seed, 'p');
-  assert.equal(target.id, 'p'); assert.deepEqual(images, [{ asset: reference, label: 'Front view' }]);
-  assert.equal(prompt, 'Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nAttached images, in order. Each is named as it appears on the board. When the request mentions one of these names, it means that image:\nAttachment 1: “Front view”\n\nRequest:\nA courier robot at dawn');
+  assert.equal(target.id, 'p'); assert.deepEqual(images, [{ asset: reference, label: 'Front view', nodeId: 'i' }]);
+  assert.equal(prompt, `Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nAttached images, in order. The request may point at an image by its name on the board, its node ID or its file name; each of these means that image:\nAttachment 1: “Front view” (node ID i; file ${reference})\n\nRequest:\nA courier robot at dawn`);
   assert.doesNotMatch(prompt, /built-in image tool|paid API|Not connected/);
   // A lone prompt is sent as written.
   assert.equal(nanoPrompt({ nodes: [seed.nodes[0]], edges: [] }, 'p').prompt, 'A courier robot at dawn');
@@ -91,13 +91,16 @@ test('generation and describe interleave exact board names with the correspondin
   for (const describe of [false, true]) {
     if (describe) graph.nodes[0].data.task = 'describe';
     const { prompt, images } = nanoPrompt(graph, 'p');
-    assert.match(prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
+    assert.deepEqual(prompt.split('\n').filter(line => line.startsWith('Attachment ')), [
+      `Attachment 1: “Image” (node ID first; file ${reference}, uploaded as image.png)`,
+      `Attachment 2: “Image 1” (node ID i; file ${reference})`,
+    ]);
     const references = images.map((image, index) => ({ ...image, mimeType: 'image/png', data: `bytes-${index}` }));
     const { init } = nanoRequest(prompt, references, { key: 'key', endpoint: 'https://generativelanguage.googleapis.com' });
     assert.deepEqual(JSON.parse(init.body).input, [
       { type: 'text', text: prompt },
-      { type: 'text', text: 'Attachment 1: “Image”' }, { type: 'image', mime_type: 'image/png', data: 'bytes-0' },
-      { type: 'text', text: 'Attachment 2: “Image 1”' }, { type: 'image', mime_type: 'image/png', data: 'bytes-1' },
+      { type: 'text', text: `Attachment 1: “Image” (node ID first; file ${reference}, uploaded as image.png)` }, { type: 'image', mime_type: 'image/png', data: 'bytes-0' },
+      { type: 'text', text: `Attachment 2: “Image 1” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: 'bytes-1' },
     ]);
   }
 });
@@ -349,7 +352,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
   assert.equal(headers.get('x-goog-api-key'), 'test-gemini-key'); assert.equal(headers.get('api-revision'), '2026-05-20');
   assert.equal(body.model, 'gemini-nano-banana-2.1'); assert.equal(body.store, false);
-  assert.deepEqual(body.input.slice(1), [{ type: 'text', text: 'Attachment 1: “Front view”' }, { type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
+  assert.deepEqual(body.input.slice(1), [{ type: 'text', text: `Attachment 1: “Front view” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
   assert.equal(body.input[0].text, nanoPrompt(before, 'p').prompt);
   const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
   assert.equal(run.status, 'completed'); assert.equal(run.count, 2); assert.ok(Date.parse(run.finishedAt) >= Date.parse(run.startedAt));
@@ -540,7 +543,7 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
   assert.equal(calls.length, 1); assert.equal(body.model, 'gemini-3.5-flash-lite');
   assert.match(body.input[0].text, /Describe the attached images in detail/); assert.match(body.input[0].text, /FOCUS:\nOnly the lighting/);
   assert.deepEqual(body.input.slice(1).map(item => item.type), ['text', 'image']);
-  assert.equal(body.input[1].text, 'Attachment 1: “Front view”');
+  assert.equal(body.input[1].text, `Attachment 1: “Front view” (node ID i; file ${reference})`);
   assert.deepEqual([run.status, run.task, run.model, run.count], ['completed', 'describe', 'gemini-3.5-flash-lite', 1]);
   const output = graph.nodes.find(node => node.id === run.outputIds[0]);
   assert.deepEqual([output.type, output.data.text], ['text', 'A small courier robot lit from the left.']);

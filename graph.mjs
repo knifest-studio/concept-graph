@@ -212,8 +212,13 @@ export function nameImageConnections(nodes, edges, added) {
   return nodes;
 }
 
-export const imageAttachment = (image, index) => `Attachment ${index + 1}: “${image.label}”`;
-export const imageAttachments = images => images.length ? 'Attached images, in order. Each is named as it appears on the board. When the request mentions one of these names, it means that image:\n' + images.map(imageAttachment).join('\n') : '';
+// Every way a person can point at an image: the name shown above it, the node ID that Copy node ID gives, and the file
+// name a download gets (plus the original name of an uploaded file).
+const uploadedName = node => !node.data.runId && /\.[a-z\d]{2,5}$/i.test(node.data.label?.trim() || '') && node.data.label.trim() !== node.data.asset ? node.data.label.trim().slice(0, 200) : undefined;
+export const imageReference = node => ({ asset: node.data.asset, label: imageName(node), nodeId: node.id, ...(uploadedName(node) ? { uploaded: uploadedName(node) } : {}) });
+export const imageAttachment = (image, index) => `Attachment ${index + 1}: “${image.label}”` + (image.nodeId || image.asset
+  ? ` (${[image.nodeId && `node ID ${image.nodeId}`, image.asset && `file ${image.asset}${image.uploaded ? `, uploaded as ${image.uploaded}` : ''}`].filter(Boolean).join('; ')})` : '');
+export const imageAttachments = images => images.length ? 'Attached images, in order. The request may point at an image by its name on the board, its node ID or its file name; each of these means that image:\n' + images.map(imageAttachment).join('\n') : '';
 
 // What every generator receives for a prompt: the prompt and its directly connected nodes (their own ancestors are
 // not sent, to keep runs small), the reference images in order with their labels, and the connected context texts.
@@ -223,10 +228,10 @@ export function runInputs(graph, nodeId) {
   const target = nodes.get(nodeId);
   if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
-  const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: imageName(node) }]
+  const images = ordered.flatMap(node => node.type === 'image' ? [imageReference(node)]
     : (node.data.template?.assets || []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
   if (isUpscale(target)) {
-    const pictures = ordered.filter(node => node.type === 'image').map(node => ({ asset: node.data.asset, label: imageName(node) }));
+    const pictures = ordered.filter(node => node.type === 'image').map(imageReference);
     if (!pictures.length) throw new Error('Connect an image to upscale.');
     if (pictures.length > maxUpscaleImages) throw new Error(`Connect at most ${maxUpscaleImages} images to one upscale node.`);
     return { target, ordered, images: pictures, context: [] };

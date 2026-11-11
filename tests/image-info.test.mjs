@@ -23,8 +23,13 @@ test('cloud images show author, recorded settings, run duration, template, date 
   const info = imageInfo(node, [run], { width: 1024, height: 1536, formatDate });
   assert.equal(info.kind, 'generated'); assert.deepEqual(info.author, { name: 'Knife St', color: '#448bfa' });
   assert.equal(info.caption, 'Front'); assert.equal(info.prompt, 'A courier robot');
-  assert.deepEqual(rows(info), { template: 'Character sheet', model: 'gpt-6-luna', effort: 'Low', duration: '1 min 12 s (Whole run, 3 images)', created: 'date:2026-11-03T10:00:50.000Z', size: '1024 × 1536 px' });
-  assert.deepEqual(info.rows.map(row => row.key), ['template', 'model', 'effort', 'duration', 'created', 'size']);
+  assert.deepEqual(rows(info), { template: 'Character sheet', model: 'gpt-6-luna', effort: 'Low', duration: '1 min 12 s (Whole run, 3 images)', created: 'date:2026-11-03T10:00:50.000Z', size: '1024 × 1536 px', file: asset, node: 'a' });
+  assert.deepEqual(info.rows.map(row => row.key), ['template', 'model', 'effort', 'duration', 'created', 'size', 'file', 'node']);
+  assert.deepEqual(info.rows.slice(-2), [
+    { key: 'file', label: 'File', value: asset, copy: 'file' },
+    { key: 'node', label: 'Node ID', value: 'a', copy: 'id' },
+  ]);
+  assert.equal(imageInfo({ ...node, data: { ...node.data, label: 'generated.png' } }, [run]).rows.some(row => row.key === 'uploaded'), false);
   // The node's own author wins over the run's.
   assert.equal(imageInfo({ ...node, data: { ...node.data, author: { name: 'Owner' } } }, [run]).author.name, 'Owner');
   // A template-only prompt is not repeated as the prompt text.
@@ -38,30 +43,37 @@ test('local runs prefer the model Codex reported, fall back to the request, and 
   const node = { id: 'a', type: 'image', data: { asset, runId: 'run', label: 'Result 1' } };
   const info = imageInfo(node, [run], { formatDate });
   assert.equal(info.author, undefined); assert.equal(info.prompt, 'Full original prompt');
-  assert.deepEqual(rows(info), { model: 'rerouted-model', effort: 'Medium', duration: '10 s', created: 'date:2026-11-03T10:00:09.600Z' });
+  assert.deepEqual(rows(info), { model: 'rerouted-model', effort: 'Medium', duration: '10 s', created: 'date:2026-11-03T10:00:09.600Z', file: asset, node: 'a' });
   const old = { ...run, model: undefined, effort: undefined, diagnostics: { model: null, effort: null, requestedModel: 'older-model', requestedEffort: 'high' } };
-  assert.deepEqual(rows(imageInfo(node, [old], { formatDate })), { model: 'older-model', effort: 'High', duration: '10 s', created: 'date:2026-11-03T10:00:09.600Z' });
+  assert.deepEqual(rows(imageInfo(node, [old], { formatDate })), { model: 'older-model', effort: 'High', duration: '10 s', created: 'date:2026-11-03T10:00:09.600Z', file: asset, node: 'a' });
 });
 
 test('unknown or invalid values are omitted rather than guessed', () => {
   const running = { id: 'run', nodeId: 'p', label: 'Working', status: 'running', startedAt: '2026-11-03T10:00:00.000Z', outputIds: ['a'], model: '../bad model', effort: 'Not Valid' };
   const node = { id: 'a', type: 'image', data: { asset, runId: 'run', createdAt: 'not a date' } };
   const info = imageInfo(node, [running], { width: 0, height: 512, formatDate });
-  assert.deepEqual(info.rows, []); assert.equal(info.prompt, 'Working');
+  assert.deepEqual(rows(info), { file: asset, node: 'a' }); assert.equal(info.prompt, 'Working');
+  assert.deepEqual(imageInfo({ data: {} }).rows, []);
   // History removed after the image was generated: still a generated image, with nothing invented.
   const orphan = imageInfo({ id: 'b', type: 'image', data: { asset, runId: 'gone' } }, [], { formatDate });
-  assert.equal(orphan.kind, 'generated'); assert.deepEqual(orphan.rows, []); assert.equal(orphan.prompt, undefined);
+  assert.equal(orphan.kind, 'generated'); assert.deepEqual(rows(orphan), { file: asset, node: 'b' }); assert.equal(orphan.prompt, undefined);
 });
 
 test('uploaded references show what exists: file name, date and size', () => {
   const node = { id: 'r', type: 'image', data: { asset, label: 'mood.png', createdAt: '2026-11-03T09:00:00.000Z' } };
   const info = imageInfo(node, [], { width: 640, height: 480, formatDate });
   assert.equal(info.kind, 'reference'); assert.equal(info.author, undefined); assert.equal(info.prompt, undefined); assert.equal(info.caption, 'mood');
-  assert.deepEqual(rows(info), { created: 'date:2026-11-03T09:00:00.000Z', size: '640 × 480 px' });
+  assert.deepEqual(rows(info), { created: 'date:2026-11-03T09:00:00.000Z', size: '640 × 480 px', file: asset, uploaded: 'mood.png', node: 'r' });
+  assert.deepEqual(info.rows.slice(-3), [
+    { key: 'file', label: 'File', value: asset, copy: 'file' },
+    { key: 'uploaded', label: 'Uploaded as', value: 'mood.png', copy: 'file' },
+    { key: 'node', label: 'Node ID', value: 'r', copy: 'id' },
+  ]);
   assert.equal(info.rows.find(row => row.key === 'created').label, 'Added');
   // A caption replaces the file name.
   const captioned = imageInfo({ ...node, data: { ...node.data, caption: 'Mood board' } }, [], { formatDate });
   assert.equal(captioned.caption, 'Mood board'); assert.equal(captioned.rows.some(row => row.key === 'name'), false);
+  assert.equal(rows(captioned).uploaded, 'mood.png');
 });
 
 test('Nano Banana images name the model and show no reasoning effort', () => {
@@ -69,5 +81,5 @@ test('Nano Banana images name the model and show no reasoning effort', () => {
     status: 'completed', createdAt: '2026-11-04T10:00:00.000Z', startedAt: '2026-11-04T10:00:00.000Z', finishedAt: '2026-11-04T10:00:21.000Z', outputIds: ['a'], count: 1 };
   const info = imageInfo({ id: 'a', type: 'image', data: { asset, runId: 'run', createdAt: '2026-11-04T10:00:20.000Z' } }, [run], { width: 1024, height: 1024, formatDate });
   assert.deepEqual(info.author, { name: 'Lead', color: '#0077b6' }); assert.equal(info.prompt, 'A courier robot');
-  assert.deepEqual(rows(info), { model: 'Nano Banana 2.1', duration: '21 s', created: 'date:2026-11-04T10:00:20.000Z', size: '1024 × 1024 px' });
+  assert.deepEqual(rows(info), { model: 'Nano Banana 2.1', duration: '21 s', created: 'date:2026-11-04T10:00:20.000Z', size: '1024 × 1024 px', file: asset, node: 'a' });
 });

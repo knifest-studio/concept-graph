@@ -38,6 +38,10 @@ export function imageInfo(node, runs = [], { width, height, formatDate = value =
     duration && { key: 'duration', label: t('Generation time'), value: duration, ...(outputs > 1 ? { note: plural(outputs, 'Whole run, {count} image', 'Whole run, {count} images') } : {}) },
     createdAt && { key: 'created', label: generated ? t('Created') : t('Added'), value: formatDate(createdAt) },
     size && { key: 'size', label: t('Size'), value: size },
+    // The names a prompt can use for this image besides the one above it: the downloaded file and the node ID.
+    text(data.asset) && { key: 'file', label: t('File'), value: text(data.asset), copy: 'file' },
+    !generated && text(data.label) && /\.[a-z\d]{2,5}$/i.test(text(data.label)) && text(data.label) !== text(data.asset) && { key: 'uploaded', label: t('Uploaded as'), value: text(data.label), copy: 'file' },
+    text(node?.id) && { key: 'node', label: t('Node ID'), value: text(node.id), copy: 'id' },
   ].filter(Boolean);
   return { kind: generated ? 'generated' : 'reference', ...(author ? { author } : {}), caption, ...(prompt ? { prompt } : {}), rows };
 }
