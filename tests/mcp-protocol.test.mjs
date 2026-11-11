@@ -116,6 +116,11 @@ test('stdio MCP discovers the authenticated local app and synchronizes graph edi
   const captioned = await call('add_image_node', { boardId, asset, caption: 'Front view' });
   const captionedId = JSON.parse(captioned.result.content[0].text).nodeId;
   assert.equal(board.graph.nodes.find(n => n.id === captionedId).data.caption, 'Front view');
+  for (const [args, name] of [[{}, 'Image 1'], [{ label: 'image.png' }, 'Image 2'], [{ label: 'Canyon.jpg' }, 'Canyon'], [{ caption: 'Front view' }, 'Front view 2']]) {
+    const added = await call('add_image_node', { boardId, asset, ...args });
+    const nodeId = JSON.parse(added.result.content[0].text).nodeId;
+    assert.equal(board.graph.nodes.find(node => node.id === nodeId).data.caption, name);
+  }
   const beforeSwitch = structuredClone(board.graph.nodes.find(n => n.id === result.nodeId));
   const beforeEdges = structuredClone(board.graph.edges);
   assert.equal((await call('set_node_template', { boardId, nodeId: result.nodeId, templateId })).result.isError, undefined);

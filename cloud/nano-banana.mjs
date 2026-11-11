@@ -1,4 +1,4 @@
-import { collectInputs, describeModel, isDescribe, nanoModel, promptText, runInputs } from '../graph.mjs';
+import { describePrompt, describeModel, isDescribe, nanoModel, promptText, runInputs, imageAttachment, imageAttachments } from '../graph.mjs';
 import { imageFormat, imageTypes } from './assets.mjs';
 
 // Nano Banana 2.1 through the Gemini Interactions API, the request the image-generation guide documents (read 2026-11-04):
@@ -47,16 +47,13 @@ export function nanoSettings(env) {
 
 // The inputs a Codex run would get (runInputs decides which), written for an image model instead of an agent.
 export function nanoPrompt(graph, nodeId) {
-  // A describe node asks for the same written description Codex would give, from a text model.
-  if (isDescribe(graph.nodes.find(node => node.id === nodeId))) {
-    const { prompt, images, target } = collectInputs(graph, nodeId);
-    return { prompt, images: images.map(asset => ({ asset })), target, describe: true };
-  }
   const { target, images, context } = runInputs(graph, nodeId);
+  // A describe node asks for the same written description Codex would give, from a text model.
+  if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images, target, describe: true };
   const prompt = [
     context.length ? 'Create an image for the request at the end. The earlier text is context for it, not separate requests.' : '',
     ...context.map((node, i) => `Context ${i + 1}:\n${promptText(node)}`),
-    images.length ? 'Reference images, attached in this order:\n' + images.map((image, i) => `Image ${i + 1}: ${image.label}`).join('\n') : '',
+    imageAttachments(images),
     `${context.length || images.length ? 'Request:\n' : ''}${promptText(target)}`,
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
@@ -77,13 +74,13 @@ export function base64(bytes) {
   return btoa(binary);
 }
 
-// One request per Generate. `references` are { mimeType, data (base64) } in prompt order.
+// One request per Generate. `references` are { mimeType, data (base64), label? } in prompt order.
 // `format` is a response_format, such as the 2K or 4K size an upscale asks for.
 export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel, format) {
   return { url: `${endpoint}/v1beta/interactions`, init: {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, 'Api-Revision': apiRevision },
     // Nothing needs a follow-up turn, so the interaction is not kept in Google's interaction history.
-    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.map(image => ({ type: 'image', mime_type: image.mimeType, data: image.data }))], ...(format ? { response_format: format } : {}), store: false }),
+    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.flatMap((image, index) => [...(image.label ? [{ type: 'text', text: imageAttachment(image, index) }] : []), { type: 'image', mime_type: image.mimeType, data: image.data }])], ...(format ? { response_format: format } : {}), store: false }),
   } };
 }
 

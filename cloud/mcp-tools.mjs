@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -162,10 +162,10 @@ define('add_upscale_node', 'Add an upscale node fed by images on the board, then
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });
-define('add_image_node', 'Put an uploaded image on the board, e.g. as a reference to connect into a prompt.', { asset: assetId, caption: text('Caption shown above the image', { maxLength: 120 }), label: text('What the image is, for prompts it feeds', { maxLength: 100000 }), position: at, pageId }, ['asset'],
+define('add_image_node', 'Put an uploaded image on the board, e.g. as a reference to connect into a prompt.', { asset: assetId, caption: text('Visible image name used to refer to it in prompts', { maxLength: 120 }), label: text('Original file name. Used to derive a name when caption is omitted', { maxLength: 100000 }), position: at, pageId }, ['asset'],
   { prepare: (args, env) => imageShape(env, args.asset), run: ctx => {
     const { args } = ctx, { aspect, pixels } = ctx.prepared;
-    return addNode(ctx, 'image', { asset: args.asset, label: args.label || 'Reference image', ...(args.caption ? { caption: args.caption } : {}), ...(aspect ? { aspect } : {}), ...(pixels ? { pixels } : {}) }, targetPage(ctx.graph, args.pageId), args.position);
+    return addNode(ctx, 'image', { asset: args.asset, label: args.label || 'Reference image', caption: uniqueImageName(ctx.graph.nodes, args.caption?.trim() || imageName({ data: { label: args.label } })), ...(aspect ? { aspect } : {}), ...(pixels ? { pixels } : {}) }, targetPage(ctx.graph, args.pageId), args.position);
   } });
 define('add_template_node', 'Add a prompt made from one of the board’s custom nodes, optionally with extra text.', { templateId, text: text('Extra prompt text', { maxLength: 100000 }), position: at, pageId, generator }, ['templateId'], { run: ctx => {
   const { args } = ctx, data = { text: args.text || '', template: templateSnapshot(templateOf(ctx, args.templateId)) };

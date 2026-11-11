@@ -25,6 +25,7 @@ test('image runs disable inherited integrations without changing provider, authe
   };
   await codex.generate({ prompt: 'A bird', images: ['/tmp/reference.png'], onImage: async () => {} });
   const thread = calls.find(call => call.method === 'thread/start').params;
+  assert.match(thread.baseInstructions, /exactly one line \[\[CG_CAPTION:Front view\]\] to every image tool prompt, including single-image requests/);
   const config = thread.config;
   assert.deepEqual(config.mcp_servers, { 'server.with.dots': { enabled: false }, 'quoted"server': { enabled: false } });
   for (const key of ['skills.include_instructions', 'skills.bundled.enabled', 'cloud.skills.enabled', 'orchestrator.mcp.enabled', 'features.plugins', 'features.apps', 'features.multi_agent', 'features.memories', 'features.shell_tool', 'features.browser_use', 'features.computer_use', 'features.js_repl', 'features.code_mode', 'features.code_mode_only', 'tools.update_plan.enabled']) assert.equal(config[key], false, key);

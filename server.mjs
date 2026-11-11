@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, describeTask, upscaleTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor } from './graph.mjs';
+import { collectInputs, describeTask, upscaleTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor, uniqueImageName } from './graph.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
@@ -257,8 +257,7 @@ async function processCloudJob(job) {
         const format = imageFormat(bytes), index = job.outputs.length;
         await writeFile(path.join(directory, `output-${index}.${format}`), bytes);
         const caption = generatedImageCaption(item.revisedPrompt);
-        if (index === 1 && !job.outputs[0].caption) job.outputs[0].caption = 'Image 1';
-        job.outputs.push({ index, format, ...(caption ? { caption } : index ? { caption: `Image ${index + 1}` } : {}) });
+        job.outputs.push({ index, format, ...(caption ? { caption } : {}) });
         await saveCloudJob(job);
       },
     });
@@ -430,13 +429,8 @@ async function processQueue() {
             const asset = await saveImage(buffer);
             const node = imageNode(run, asset, run.outputIds.length, imageSize(buffer));
             const caption = generatedImageCaption(item.revisedPrompt);
-            if (caption) node.data.caption = caption;
-            else if (run.outputIds.length) { node.data.caption = `Image ${run.outputIds.length + 1}`; missingCaptions++; }
-            // The first output needs a fallback only once this run produces a second image.
-            if (run.outputIds.length === 1) {
-              const first = graph.nodes.find(item => item.id === run.outputIds[0]);
-              if (first && !Object.hasOwn(first.data, 'caption')) { first.data.caption = 'Image 1'; missingCaptions++; }
-            }
+            node.data.caption = uniqueImageName(graph.nodes, caption);
+            if (!caption) missingCaptions++;
             positionRunOutput(node, graph, run);
             graph.nodes.push(node);
             if (samePage(graph, graph.nodes.find(n => n.id === run.nodeId), node)) graph.edges.push({ id: randomUUID(), source: run.nodeId, target: node.id });

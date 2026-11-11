@@ -1,5 +1,5 @@
 import { imageAuthor } from './annotations.mjs';
-import { modelNames } from '../graph.mjs';
+import { modelNames, imageName } from '../graph.mjs';
 import { plural, t } from './i18n.mjs';
 
 const settingId = value => typeof value === 'string' && /^[\w.\/:+-]{1,128}$/.test(value) ? value : undefined;
@@ -18,7 +18,7 @@ export function formatDuration(ms) {
 // Facts for the full-screen view. Unknown values are left out instead of guessed.
 export function imageInfo(node, runs = [], { width, height, formatDate = value => new Date(value).toLocaleString() } = {}) {
   const data = node?.data || {}, run = data.runId ? runs.find(item => item.id === data.runId) : undefined;
-  const generated = !!(run || data.runId), diagnostics = run?.diagnostics, author = imageAuthor(data, runs), caption = text(data.caption);
+  const generated = !!(run || data.runId), diagnostics = run?.diagnostics, author = imageAuthor(data, runs), caption = imageName(node);
   // Codex's reported thread values win over the recorded request; older local runs only have diagnostics.
   const model = settingId(diagnostics?.model) || settingId(run?.model) || settingId(diagnostics?.requestedModel);
   const effort = settingId(diagnostics?.effort) || settingId(run?.effort) || settingId(diagnostics?.requestedEffort);
@@ -32,7 +32,6 @@ export function imageInfo(node, runs = [], { width, height, formatDate = value =
   const createdAt = time(data.createdAt) || time(run?.finishedAt) || time(run?.createdAt);
   const size = pixels(width) && pixels(height) ? `${width} × ${height} px` : undefined;
   const rows = [
-    !generated && !caption && text(data.label) && { key: 'name', label: t('File'), value: text(data.label) },
     template && { key: 'template', label: t('Custom node'), value: template },
     model && { key: 'model', label: t('Model'), value: Object.hasOwn(modelNames, model) ? modelNames[model] : model },
     effort && { key: 'effort', label: t('Reasoning effort'), value: t(effort[0].toUpperCase() + effort.slice(1)) },
@@ -40,5 +39,5 @@ export function imageInfo(node, runs = [], { width, height, formatDate = value =
     createdAt && { key: 'created', label: generated ? t('Created') : t('Added'), value: formatDate(createdAt) },
     size && { key: 'size', label: t('Size'), value: size },
   ].filter(Boolean);
-  return { kind: generated ? 'generated' : 'reference', ...(author ? { author } : {}), ...(caption ? { caption } : {}), ...(prompt ? { prompt } : {}), rows };
+  return { kind: generated ? 'generated' : 'reference', ...(author ? { author } : {}), caption, ...(prompt ? { prompt } : {}), rows };
 }

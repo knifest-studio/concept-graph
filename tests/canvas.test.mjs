@@ -1,24 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, restoreFirstImageFallback, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
-
-test('undo restores a neutral first-image caption only for a run that became multi-image after the snapshot', () => {
-  const first = caption => ({ id: 'first', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
-  const second = { id: 'second', type: 'image', data: { runId: 'run' } };
-  const run = { id: 'run', status: 'running', outputIds: ['first', 'second'] };
-  const snapshot = { capturedAt: '2026-01-01T12:00:00.000Z', activeRunIds: ['run'] };
-  const restore = (nodes = [first()], current = [first('My caption'), second], result = run, point = snapshot) => restoreFirstImageFallback(nodes, current, [result], point);
-  assert.equal(restore()[0].data.caption, 'Image 1');
-  assert.equal(restore(undefined, undefined, { ...run, status: 'completed', finishedAt: '2026-01-01T12:00:00.000Z' })[0].data.caption, 'Image 1');
-  assert.equal(restore(undefined, undefined, { ...run, status: 'cancelled', finishedAt: '2026-01-01T12:00:01.000Z' }, { ...snapshot, activeRunIds: [] })[0].data.caption, 'Image 1');
-  assert.equal(restore(undefined, undefined, { ...run, status: 'completed', finishedAt: '2026-01-01T11:59:59.000Z' }, { ...snapshot, activeRunIds: [] })[0].data.caption, undefined);
-  assert.equal(restore(undefined, undefined, { ...run, status: 'running', outputIds: ['first'] })[0].data.caption, undefined);
-  assert.equal(restore([first('')])[0].data.caption, '');
-  assert.equal(restore(undefined, [first(''), second])[0].data.caption, undefined);
-  assert.equal(restore([first('Earlier caption')])[0].data.caption, 'Earlier caption');
-  assert.equal(restore([second])[0].data.caption, undefined);
-  assert.equal(restore(undefined, [second])[0].data.caption, undefined);
-});
+import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
 test('undo preserves only a subsequently merged generation caption, without undoing manual edits', () => {
   const image = caption => ({ id: 'image', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
@@ -94,12 +76,13 @@ test('grouped display cycles remain finite; removing members never removes survi
   assert.equal(groupBounds(groups[0], nodes).x, -24);
 });
 
-test('group bounds make room above captioned images without changing their positions or connections', () => {
+test('group bounds make room above every expanded image without changing their positions or connections', () => {
   const node = image('a', 100, 200), groups = [group(['a'], false)];
   const plain = groupBounds(groups[0], [node]);
   const captioned = { ...node, data: { ...node.data, caption: 'Front view' } };
   const withCaption = groupBounds(groups[0], [captioned]);
-  assert.equal(withCaption.y, plain.y - 24);
+  assert.equal(plain.y, node.position.y - 24 - 48);
+  assert.deepEqual(withCaption, plain);
   assert.equal(withCaption.y + withCaption.height, plain.y + plain.height);
   assert.deepEqual(canvasView([captioned], [], groups).nodes.find(n => n.id === 'a').position, node.position);
 });
@@ -349,7 +332,7 @@ test('group bounds by id map match the scan over all nodes', () => {
   const nodes = [text('a', 90, 50), image('b', 480, 60), text('c', 300, 10)], group = { id: 'g', name: 'G', nodeIds: ['b', 'a', 'missing'], collapsed: false };
   const byId = new Map(nodes.map(node => [node.id, node]));
   assert.deepEqual(groupBounds(group, nodes, byId), groupBounds(group, nodes));
-  assert.deepEqual(groupBounds(group, nodes), { x: 66, y: 2, width: 748, height: 702 });
+  assert.deepEqual(groupBounds(group, nodes), { x: 66, y: -12, width: 748, height: 716 });
   const frame = canvasView(nodes, [], [{ ...group, collapsed: true }]).nodes[0];
   assert.deepEqual(frame.handles.map(({ type, x, y }) => [type, x, y]), [['target', -10, 31], ['source', 240, 31]]);
   assert.deepEqual(canvasView(nodes, [], [group]).nodes[0].handles, []);

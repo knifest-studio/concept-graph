@@ -30,23 +30,6 @@ export function preserveRemoteImageCaptions(snapshotNodes, currentNodes, changes
   });
 }
 
-// A run may gain its second image after the user edited the initially uncaptioned first one.
-export function restoreFirstImageFallback(nodes, currentNodes, runs, snapshot) {
-  const current = new Map(currentNodes.map(node => [node.id, node]));
-  const runsById = new Map(runs.map(run => [run.id, run]));
-  const activeAtSnapshot = new Set(snapshot.activeRunIds || []);
-  const captured = Date.parse(snapshot.capturedAt);
-  return nodes.map(node => {
-    if (node.type !== 'image' || !node.data.runId || Object.hasOwn(node.data, 'caption')) return node;
-    const now = current.get(node.id), run = runsById.get(node.data.runId);
-    if (!now || now.type !== 'image' || now.data.caption === '' || !run || run.outputIds?.length < 2 || run.outputIds?.[0] !== node.id) return node;
-    const active = run.status === 'running' || run.status === 'queued';
-    const finishedAfter = Number.isFinite(captured) && Number.isFinite(Date.parse(run.finishedAt)) && Date.parse(run.finishedAt) > captured;
-    if (!active && !activeAtSnapshot.has(run.id) && !finishedAfter) return node;
-    return { ...node, data: { ...node.data, caption: 'Image 1' } };
-  });
-}
-
 // Generation can finish in the same millisecond as an undo checkpoint.
 export function freshOutputNodes(nodes, snapshot, runs) {
   const ids = new Set(snapshot.nodes.map(node => node.id));

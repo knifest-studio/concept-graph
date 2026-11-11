@@ -11,7 +11,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'config/read') return send({ id, result: { config: {} } });
   if (method === 'model/list') return send({ id, result: { data: [{ id: 'gpt-6-luna', model: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }], nextCursor: null } });
   if (method === 'thread/start') {
-    if (process.env.EXPECT_CAPTION_INSTRUCTIONS === '1' && !params.baseInstructions.includes('[[CG_CAPTION:')) return send({ id, error: { message: 'Missing caption instructions' } });
+    if (process.env.EXPECT_CAPTION_INSTRUCTIONS === '1' && (!params.baseInstructions.includes('[[CG_CAPTION:') || !params.baseInstructions.includes('every image tool prompt, including single-image requests'))) return send({ id, error: { message: 'Missing caption instructions' } });
     if (process.env.EXPECT_CAPTION_INSTRUCTIONS === '0' && params.baseInstructions.includes('[[CG_CAPTION:')) return send({ id, error: { message: 'Unexpected caption instructions' } });
     return send({ id, result: { thread: { id: 'thread' } } });
   }

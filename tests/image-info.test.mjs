@@ -56,8 +56,8 @@ test('unknown or invalid values are omitted rather than guessed', () => {
 test('uploaded references show what exists: file name, date and size', () => {
   const node = { id: 'r', type: 'image', data: { asset, label: 'mood.png', createdAt: '2026-11-03T09:00:00.000Z' } };
   const info = imageInfo(node, [], { width: 640, height: 480, formatDate });
-  assert.equal(info.kind, 'reference'); assert.equal(info.author, undefined); assert.equal(info.prompt, undefined);
-  assert.deepEqual(rows(info), { name: 'mood.png', created: 'date:2026-11-03T09:00:00.000Z', size: '640 × 480 px' });
+  assert.equal(info.kind, 'reference'); assert.equal(info.author, undefined); assert.equal(info.prompt, undefined); assert.equal(info.caption, 'mood');
+  assert.deepEqual(rows(info), { created: 'date:2026-11-03T09:00:00.000Z', size: '640 × 480 px' });
   assert.equal(info.rows.find(row => row.key === 'created').label, 'Added');
   // A caption replaces the file name.
   const captioned = imageInfo({ ...node, data: { ...node.data, caption: 'Mood board' } }, [], { formatDate });

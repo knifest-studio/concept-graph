@@ -7,10 +7,10 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel } from '../graph.mjs';
+import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, restoreFirstImageFallback, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
@@ -222,7 +222,6 @@ function ExpandedImageNode({ id, data }) {
       if (editing) captionBeforeEdit.current = data.caption;
     }
   }, [data.caption]);
-  useLayoutEffect(() => { if (captionFocused && !data.caption) captionInput.current?.focus({ preventScroll: true }); }, [captionFocused]);
   const zoom = useImageButtonZoom(hovered || focused);
   const image = useCanvasImage(assetUrl(data.asset));
   const imageElement = useRef(null);
@@ -239,12 +238,11 @@ function ExpandedImageNode({ id, data }) {
   }, [view.variation, id]);
   const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
   return <NodeContextMenu id={id} type="image" actions={canvas}><div className="image-node-wrapper">
-    {(captionFocused || !!data.caption?.trim()) && <input ref={captionInput} className="image-node-caption nodrag" aria-label={t('Image caption')} title={view.readOnly ? undefined : t('Edit image caption')} readOnly={view.readOnly} maxLength={120} value={caption} onFocus={() => { captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => setCaptionFocused(false)} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/>}<article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
+    <input ref={captionInput} className={`image-node-caption nodrag${data.caption?.trim() ? '' : ' unnamed'}`} aria-label={t('Image name')} title={view.readOnly ? undefined : t('Edit image name')} readOnly={view.readOnly} maxLength={120} value={captionFocused ? caption : imageName({ data })} onFocus={() => { setCaption(imageName({ data })); captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => { if (!view.readOnly && !captionEdited.current && !data.caption?.trim()) canvas.editCaption(id, imageName({ data })); setCaptionFocused(false); }} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); captionEdited.current = true; setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/><article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
-    {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={data.caption || data.label || t('Concept image')} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
+    {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName({ data })} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
     <div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
     <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
-    {!data.caption?.trim() && !captionFocused && <button className="image-caption-add nodrag" type="button" aria-label={t('Add image caption')} data-tooltip={t('Add image caption')} onClick={event => { event.stopPropagation(); setCaptionFocused(true); }} onDoubleClick={event => event.stopPropagation()}><Icon name="tag" size={15}/></button>}
     <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
     <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip={t('New prompt that uses this image as a reference')} onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>{t('+ Prompt from this')}</button>
     <Handle type="source" position={Position.Right} aria-label={t('Connect image as reference')}/>
@@ -936,23 +934,19 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const snapshotNow = () => captureHistory(boardContent(), { remoteGroupVersion: remoteGroups.current.version, remoteCaptionVersion: remoteCaptions.current.version, activeRunIds: runs.filter(busy).map(run => run.id) });
   const cancelCaption = (nodeId, caption, checkpointSnapshot) => {
     if (mcpLocked.current) return;
-    const node = nodeRef.current.find(item => item.id === nodeId);
-    const run = runs.find(item => item.id === node?.data.runId);
-    const outputIndex = run?.outputIds?.indexOf(nodeId) ?? -1;
-    const restored = caption === undefined && run?.outputIds?.length > 1 && outputIndex >= 0 ? `Image ${outputIndex + 1}` : caption;
     putNodes(current => current.map(node => {
       if (node.id !== nodeId) return node;
-      const data = { ...node.data }; if (restored === undefined) delete data.caption; else data.caption = restored;
+      const data = { ...node.data }; if (caption === undefined) delete data.caption; else data.caption = caption;
       return { ...node, data };
     }));
     markDirty();
-    if (!checkpointSnapshot || history.current.at(-1) !== checkpointSnapshot) return restored;
+    if (!checkpointSnapshot || history.current.at(-1) !== checkpointSnapshot) return caption;
     const snapshot = JSON.parse(checkpointSnapshot);
-    if (historySignature(boardContent()) !== snapshotSignature(snapshot)) return restored;
+    if (historySignature(boardContent()) !== snapshotSignature(snapshot)) return caption;
     history.current.pop();
     const previous = history.current.at(-1) && JSON.parse(history.current.at(-1));
     lastHistory.current = previous ? snapshotSignature(previous) : '';
-    return restored;
+    return caption;
   };
   const mergeRemote = remote => {
     if (remote.revision <= base.current.revision) return;
@@ -1124,7 +1118,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         const run = JSON.parse(event.data);
         effects.observeRun(run, feedbackLive);
         setRuns(current => { const old = current.find(r => r.id === run.id); return old ? current.map(r => r.id === run.id ? { ...r, ...run } : r) : [...current, run]; });
-        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify(t('Some images have generic labels. Click a label to edit it.'));
+        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify(t('Some images have generic names. Click a name to edit it.'));
       });
       events.addEventListener('templates', refreshTemplates);
       events.addEventListener('mcp-prepare', async event => {
@@ -1258,6 +1252,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const sources = sourceIds.slice(0, 10), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, { task: describeTask });
       if (!sources.length) return;
       const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+      putNodes(current => nameImageConnections(current, edgeRef.current, added));
       putEdges(current => [...current, ...added]); markDirty();
     } catch (error) { notify(error.message); }
   };
@@ -1270,6 +1265,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const sources = sourceIds.slice(0, maxUpscaleImages), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, upscaleData());
       if (!sources.length) return;
       const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+      putNodes(current => nameImageConnections(current, edgeRef.current, added));
       putEdges(current => [...current, ...added]); markDirty();
     } catch (error) { notify(error.message); }
   };
@@ -1279,6 +1275,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try {
       const node = addText(promptSpot(sourceId));
       const edge = { id: id(), source: sourceId, target: node.id }; effects.createEdges([edge.id], [edge.target]);
+      putNodes(current => nameImageConnections(current, edgeRef.current, [edge]));
       putEdges(current => [...current, edge]); markDirty();
       guide.report({ type: 'variation' });
     } catch (error) { notify(error.message); }
@@ -1340,7 +1337,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         const shape = size?.width > 0 && size?.height > 0 ? { pixels: { width: size.width, height: size.height }, ...(size.height / size.width >= .1 && size.height / size.width <= 10 ? { aspect: size.height / size.width } : {}) } : {};
         // On team boards an image shows who added it, as a generated one shows who generated it.
         const author = boardAuthor(cloudSession?.user);
-        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape, ...(author ? { author } : {}) } }, page);
+        const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, caption: uniqueImageName(nodeRef.current, imageName({ data: { label: file.name } })), label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape, ...(author ? { author } : {}) } }, page);
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
     } } finally { uploads.current--; setUploading(uploads.current > 0); }
@@ -1408,7 +1405,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const freshEdges = edgeRef.current.filter(e => freshOutputs.some(n => n.id === e.target) && ids.has(e.source) && !graph.edges.some(old => old.id === e.id));
     const addedGroups = new Set([...remoteGroups.current.added].filter(([, version]) => version > (graph.remoteGroupVersion || 0)).map(([id]) => id));
     const restoredGroups = preserveFreshOutputGroups(graph.groups || [], groupRef.current, [...graph.nodes, ...freshOutputs], freshOutputs, addedGroups);
-    const restoredNodes = restoreFirstImageFallback(preserveRemoteImageCaptions(graph.nodes, nodeRef.current, remoteCaptions.current.added, graph.remoteCaptionVersion || 0), nodeRef.current, runs, graph);
+    const restoredNodes = preserveRemoteImageCaptions(graph.nodes, nodeRef.current, remoteCaptions.current.added, graph.remoteCaptionVersion || 0);
     putPages(graph.pages || defaultPages()); putNodes([...restoredNodes, ...freshOutputs]); putEdges([...graph.edges, ...freshEdges]); putGroups(restoredGroups); putSections(graph.sections || noSections); markDirty();
   };
 
@@ -1973,6 +1970,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const next = addEdge({ ...connection, id: id() }, edgeRef.current);
     const added = next.filter(edge => !edgeRef.current.some(item => item.id === edge.id));
     effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+    putNodes(current => nameImageConnections(current, edgeRef.current, added));
     putEdges(next); markDirty();
   };
   const connectEnd = (event, state) => {
@@ -1985,6 +1983,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const position = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
     const node = addText({ x: position.x, y: position.y - 40 });
     const edge = { id: id(), source: fromNode.id, target: node.id }; effects.createEdges([edge.id], [edge.target]);
+    putNodes(current => nameImageConnections(current, edgeRef.current, [edge]));
     putEdges(current => [...current, edge]); setFocusId(node.id); markDirty();
     if (fromNode.type === 'image') guide.report({ type: 'variation' });
   };
@@ -2282,7 +2281,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
     {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
       <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
-      <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={viewNode.data.caption || viewNode.data.label || t('Concept image')} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>
+      <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName(viewNode)} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>
       <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span>
         {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? t('Generated by') : t('Added by')}</span><AuthorBadge author={viewInfo.author}/></div>}
         {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}

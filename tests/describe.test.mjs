@@ -22,7 +22,7 @@ test('a describe node asks for a description of its images and keeps its focus o
   const inputs = collectInputs(graph, 'describe');
   assert.equal(inputs.task, 'describe');
   assert.deepEqual(inputs.images, [asset]);
-  assert.match(inputs.prompt, /Describe the attached images in detail/); assert.match(inputs.prompt, /Image 1: Robot/);
+  assert.match(inputs.prompt, /Describe the attached images in detail/); assert.match(inputs.prompt, /Attachment 1: “Robot”/);
   assert.doesNotMatch(inputs.prompt, /FOCUS/);
   graph.nodes[1] = describer('Only the lighting');
   assert.match(collectInputs(graph, 'describe').prompt, /FOCUS:\nOnly the lighting/);

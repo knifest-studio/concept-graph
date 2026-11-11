@@ -6,7 +6,23 @@ import { readFile } from 'node:fs/promises';
 import { signSession } from '../cloud/auth.mjs';
 import { signInReturn } from '../src/cloud-boards.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
-import { checkArgs, listedTools, revisionOf } from '../cloud/mcp-tools.mjs';
+import { checkArgs, listedTools, revisionOf, toolByName } from '../cloud/mcp-tools.mjs';
+
+test('add_image_node stores a unique prompt name from caption, filename or the Image fallback', () => {
+  const graph = { nodes: [], edges: [], groups: [], runs: [] }, tool = toolByName.get('add_image_node');
+  const add = args => {
+    const { nodeId } = tool.run({ graph, args: { asset: '12345678-1234-1234-1234-123456789abc.png', ...args }, prepared: {} });
+    return graph.nodes.find(node => node.id === nodeId).data;
+  };
+  assert.equal(add({}).caption, 'Image 1');
+  assert.equal(add({ label: 'image.png', caption: '  ' }).caption, 'Image 2');
+  const file = add({ label: 'Canyon.jpg' });
+  assert.deepEqual([file.caption, file.label], ['Canyon', 'Canyon.jpg']);
+  assert.equal(add({ label: 'Canyon.jpg', caption: 'Storm 3' }).caption, 'Storm 3');
+  graph.pages = [{ id: 'page-1', name: 'Page 1' }, { id: 'other', name: 'Other' }];
+  assert.equal(add({ label: 'Canyon.jpg', pageId: 'other' }).caption, 'Canyon 2');
+  assert.equal(add({ caption: 'Storm 3', pageId: 'other' }).caption, 'Storm 3 2');
+});
 
 // Only the Cloudflare base classes and KV are replaced; OAuth, routing, Yjs, SQL and the rooms run for real.
 let DatabaseSync, worker, BoardRoom, Directory;

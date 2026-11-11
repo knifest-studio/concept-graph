@@ -178,6 +178,43 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   return { nodes, edges };
 }
 
+export function imageName(node) {
+  if (node?.data?.caption?.trim()) return node.data.caption.trim();
+  const label = (node?.data?.label || '').trim().split(/[/\\]/).pop().replace(/\.[^.\s]+$/, '').trim();
+  return label && !/^(image(?: \(\d+\))?|pasted image|reference image|result \d+)$/i.test(label) ? label.slice(0, 120) : 'Image';
+}
+
+export function uniqueImageName(nodes, base, exceptId) {
+  base = (base || '').trim().slice(0, 120) || 'Image';
+  const used = new Set(nodes.filter(node => node.type === 'image' && (exceptId === undefined || node.id !== exceptId)).map(imageName));
+  if (base !== 'Image' && !used.has(base)) return base;
+  // A taken generic "Image 4" becomes the next free "Image N", not "Image 4 2".
+  if (/^image \d+$/i.test(base)) base = 'Image';
+  let number = base === 'Image' ? 1 : 2, name;
+  do { const suffix = ` ${number++}`; name = base.slice(0, 120 - suffix.length) + suffix; } while (used.has(name));
+  return name;
+}
+
+// Name legacy inputs when connected; the caller checkpoints names and edges together.
+export function nameImageConnections(nodes, edges, added) {
+  const connected = [...edges];
+  for (const edge of added) {
+    const source = nodes.find(node => node.id === edge.source), target = nodes.find(node => node.id === edge.target);
+    if (source?.type === 'image' && target?.type === 'text') {
+      const peers = new Set(connected.filter(item => item.target === edge.target && item.source !== edge.source).map(item => item.source));
+      if (!source.data.caption?.trim() || nodes.some(node => node.type === 'image' && peers.has(node.id) && imageName(node) === imageName(source))) {
+        const caption = uniqueImageName(nodes, imageName(source), source.id);
+        nodes = nodes.map(node => node === source ? { ...node, data: { ...node.data, caption } } : node);
+      }
+    }
+    connected.push(edge);
+  }
+  return nodes;
+}
+
+export const imageAttachment = (image, index) => `Attachment ${index + 1}: “${image.label}”`;
+export const imageAttachments = images => images.length ? 'Attached images, in order. Each is named as it appears on the board. When the request mentions one of these names, it means that image:\n' + images.map(imageAttachment).join('\n') : '';
+
 // What every generator receives for a prompt: the prompt and its directly connected nodes (their own ancestors are
 // not sent, to keep runs small), the reference images in order with their labels, and the connected context texts.
 export function runInputs(graph, nodeId) {
@@ -186,10 +223,10 @@ export function runInputs(graph, nodeId) {
   const target = nodes.get(nodeId);
   if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
-  const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: node.data.caption || node.data.label || 'Reference image' }]
-    : (node.data.template?.assets || []).map(asset => ({ asset, label: `${node.data.template.name} reference` })));
+  const images = ordered.flatMap(node => node.type === 'image' ? [{ asset: node.data.asset, label: imageName(node) }]
+    : (node.data.template?.assets || []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
   if (isUpscale(target)) {
-    const pictures = ordered.filter(node => node.type === 'image').map(node => ({ asset: node.data.asset, label: node.data.caption || node.data.label || 'Image' }));
+    const pictures = ordered.filter(node => node.type === 'image').map(node => ({ asset: node.data.asset, label: imageName(node) }));
     if (!pictures.length) throw new Error('Connect an image to upscale.');
     if (pictures.length > maxUpscaleImages) throw new Error(`Connect at most ${maxUpscaleImages} images to one upscale node.`);
     return { target, ordered, images: pictures, context: [] };
@@ -211,7 +248,7 @@ export function collectInputs(graph, nodeId) {
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
     ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
-    images.length ? 'Attached images, in order:\n' + images.map((image, i) => `Image ${i + 1}: ${image.label}`).join('\n') : '',
+    imageAttachments(images),
     `FINAL REQUEST:\n${promptText(target)}`,
     'Return actual images with the built-in image tool. If multiple images are requested, generate each separately. Do not use a paid API fallback.',
   ].filter(Boolean).join('\n\n');
@@ -219,11 +256,11 @@ export function collectInputs(graph, nodeId) {
   return { prompt, images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target) };
 }
 
-function describePrompt(target, images, context) {
+export function describePrompt(target, images, context) {
   return [
     'Describe the attached images in detail, so the description could be used as a prompt to recreate them.',
     ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
-    'Attached images, in order:\n' + images.map((image, i) => `Image ${i + 1}: ${image.label}`).join('\n'),
+    imageAttachments(images),
     promptText(target) ? `FOCUS:\n${promptText(target)}` : '',
     'Cover the subject, composition and framing, pose, materials and textures, colours, lighting, style, mood and background. Describe each image separately when there are several. Reply with the description only, in plain prose: no preamble, headings or questions. Do not generate images.',
   ].filter(Boolean).join('\n\n');
@@ -292,7 +329,7 @@ export function groupRunOutputs(graph, run, newOutputId) {
   return true;
 }
 
-export const captionHeight = node => node.type === 'image' && !node.data?.collapsed && node.data?.caption?.trim() ? 24 : 0;
+export const captionHeight = node => node.type === 'image' && !node.data?.collapsed ? 24 : 0;
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 

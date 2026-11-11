@@ -165,18 +165,19 @@ test('a single output is not grouped; repeated multi-image runs get separate per
   const app = await setup(t, 'ONE');
   let run = await app.run(), graph = await app.terminal(run.id);
   assert.equal(runById(graph, run.id).outputIds.length, 1);
-  assert.equal(graph.nodes.find(node => node.id === runById(graph, run.id).outputIds[0]).data.caption, undefined);
+  assert.equal(graph.nodes.find(node => node.id === runById(graph, run.id).outputIds[0]).data.caption, 'Image 1');
   assert.deepEqual(graph.groups, []);
   graph.nodes.find(node => node.id === 'prompt').data.text = 'TWO';
   await app.call(app.route + '/graph', 'PUT', graph);
   const first = await app.run(); graph = await app.terminal(first.id);
   const firstIds = runById(graph, first.id).outputIds;
   assert.equal(firstIds.length, 2); assertGroupFor(graph, firstIds);
-  assert.deepEqual(firstIds.map(id => graph.nodes.find(node => node.id === id).data.caption), ['Image 1', 'Image 2']);
+  assert.deepEqual(firstIds.map(id => graph.nodes.find(node => node.id === id).data.caption), ['Image 2', 'Image 3']);
   assert.equal(runById(graph, first.id).captionMissing, 2);
   const second = await app.run(); graph = await app.terminal(second.id);
   const secondIds = runById(graph, second.id).outputIds;
   assert.equal(secondIds.length, 2); assertGroupFor(graph, firstIds); assertGroupFor(graph, secondIds);
+  assert.deepEqual(secondIds.map(id => graph.nodes.find(node => node.id === id).data.caption), ['Image 4', 'Image 5']);
   assert.notEqual(graph.groups.find(g => g.nodeIds.includes(firstIds[0])).id, graph.groups.find(g => g.nodeIds.includes(secondIds[0])).id);
   const groups = structuredClone(graph.groups);
   await app.restart(); graph = await app.graph();
@@ -222,7 +223,7 @@ for (const caption of ['Мій підпис', '']) {
     graph.nodes.find(node => node.id === first).data.caption = caption;
     await app.call(app.route + '/graph', 'PUT', graph);
     await app.release(); graph = await app.terminal(run.id);
-    assert.deepEqual(runById(graph, run.id).outputIds.map(id => graph.nodes.find(node => node.id === id).data.caption), [caption, 'Image 2', 'Image 3']);
-    assert.equal(runById(graph, run.id).captionMissing, 2);
+    assert.deepEqual(runById(graph, run.id).outputIds.map(id => graph.nodes.find(node => node.id === id).data.caption), [caption, 'Image 1', 'Image 2']);
+    assert.equal(runById(graph, run.id).captionMissing, 3);
   });
 }

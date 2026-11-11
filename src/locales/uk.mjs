@@ -438,6 +438,9 @@ export default {
   'Connect prompt to another node': 'Під’єднати промпт до іншої ноди',
 
   // Image cards, collapsed cards, groups, slideshows, sections
+  'Image name': 'Назва зображення',
+  'Edit image name': 'Редагувати назву зображення',
+  'Some images have generic names. Click a name to edit it.': 'Деякі зображення мають загальні назви. Натисніть назву, щоб змінити її.',
   'Image caption': 'Підпис зображення',
   'Edit image caption': 'Редагувати підпис зображення',
   'Concept image': 'Концепт-зображення',

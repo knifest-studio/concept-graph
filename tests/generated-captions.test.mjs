@@ -76,7 +76,7 @@ test('automatic captions and legacy template preferences survive restart', { tim
   }
   assert.equal(graph.runs[0].status, 'completed');
   assert.equal(graph.runs[0].captionMissing, 1);
-  assert.deepEqual(graph.nodes.filter(n => n.type === 'image').map(n => n.data.caption || ''), ['Вид збоку', 'Вид спереду', 'Image 3']);
+  assert.deepEqual(graph.nodes.filter(n => n.type === 'image').map(n => n.data.caption || ''), ['Вид збоку', 'Вид спереду', 'Image 1']);
   assert.deepEqual(graph.groups.map(group => group.nodeIds), [graph.runs[0].outputIds]);
   // Legacy opt-out fields do not disable automatic captions.
   graph.nodes[0].data.labelOutputs = false;
@@ -88,11 +88,11 @@ test('automatic captions and legacy template preferences survive restart', { tim
     await delay(25);
   }
   assert.equal(graph.runs[1].status, 'completed');
-  assert.deepEqual(graph.runs[1].outputIds.map(id => graph.nodes.find(n => n.id === id)?.data.caption || ''), ['Вид збоку', 'Вид спереду', 'Image 3']);
+  assert.deepEqual(graph.runs[1].outputIds.map(id => graph.nodes.find(n => n.id === id)?.data.caption || ''), ['Вид збоку 2', 'Вид спереду 2', 'Image 2']);
   assert.deepEqual(graph.groups.map(group => group.nodeIds), graph.runs.map(run => run.outputIds));
   await stop(); base = await start();
   graph = (await call(route)).board.graph;
-  assert.deepEqual(graph.runs[0].outputIds.map(id => graph.nodes.find(n => n.id === id)?.data.caption || ''), ['Вид збоку', 'Вид спереду', 'Image 3']);
+  assert.deepEqual(graph.runs[0].outputIds.map(id => graph.nodes.find(n => n.id === id)?.data.caption || ''), ['Вид збоку', 'Вид спереду', 'Image 1']);
   assert.deepEqual(graph.groups.map(group => group.nodeIds), graph.runs.map(run => run.outputIds));
   // Simulate a legacy run that crashed before its group was created.
   await stop();

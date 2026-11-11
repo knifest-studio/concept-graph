@@ -1,10 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectInputs, validateGraph, validateTemplate, imageFormat, templatePalette, templateColor, nextTemplateColor, templateSnapshot } from '../graph.mjs';
+import { collectInputs, validateGraph, validateTemplate, imageFormat, templatePalette, templateColor, nextTemplateColor, templateSnapshot, imageName, uniqueImageName, nameImageConnections, captionHeight } from '../graph.mjs';
 
 const text = (id, value) => ({ id, type: 'text', position: { x: 0, y: 0 }, data: { text: value } });
 const image = (id, label) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: '12345678-1234-1234-1234-123456789abc.png', label } });
 const edge = (source, target) => ({ id: source + '-' + target, source, target });
+
+test('image names use trimmed captions, file stems and a neutral fallback on old boards', () => {
+  assert.equal(imageName({ data: { caption: '  Storm 3  ', label: 'clouds.png' } }), 'Storm 3');
+  assert.equal(imageName(image('a', ' Canyon.final.JPG ')), 'Canyon.final');
+  assert.equal(imageName({ data: { caption: '  ', label: 'Canyon.png' } }), 'Canyon');
+  for (const label of [undefined, '', 'image', 'image.png', 'IMAGE.JPG', 'image (1).png', 'Pasted image', 'Reference image', 'Result 12']) assert.equal(imageName(image('a', label)), 'Image');
+  assert.equal(imageName({ data: { caption: 'Image 1' } }), 'Image 1');
+  assert.equal(imageName(image('long', 'x'.repeat(150) + '.png')), 'x'.repeat(120));
+});
+
+test('new image names are unique across pages and stay within 120 characters including suffixes', () => {
+  const nodes = [image('one', 'Image 1'), { ...image('three', 'Image 3'), page: 'other' }, image('canyon', 'Canyon.png'), image('canyon2', 'Canyon 2.png')];
+  assert.equal(uniqueImageName(nodes, ''), 'Image 2');
+  assert.equal(uniqueImageName(nodes, ' Image '), 'Image 2');
+  assert.equal(uniqueImageName(nodes, 'Canyon'), 'Canyon 3');
+  assert.equal(uniqueImageName(nodes, 'Canyon', 'canyon'), 'Canyon');
+  assert.equal(uniqueImageName(nodes, 'Storm 3'), 'Storm 3');
+  // A taken generic name moves to the next free number instead of growing a second suffix.
+  assert.equal(uniqueImageName(nodes, 'Image 1'), 'Image 2');
+  assert.equal(uniqueImageName(nodes, 'Image 7'), 'Image 7');
+  const long = 'x'.repeat(120), used = [{ ...image('long', ''), data: { caption: long } }];
+  assert.equal(uniqueImageName([], long + 'extra'), long);
+  assert.equal(uniqueImageName(used, long), 'x'.repeat(118) + ' 2');
+  used.push({ ...image('long2', ''), data: { caption: 'x'.repeat(118) + ' 2' } });
+  assert.equal(uniqueImageName(used, long), 'x'.repeat(118) + ' 3');
+});
+
+test('connecting legacy images stores names and resolves target collisions in one immutable update', () => {
+  const named = { ...image('named', 'Result 1'), data: { ...image('named').data, caption: 'Canyon' } };
+  const duplicate = { ...named, id: 'duplicate' }, legacy = image('legacy', 'image.png');
+  const nodes = [text('p', 'Use Canyon'), named, duplicate, legacy], original = structuredClone(nodes), edges = [edge('named', 'p')];
+  const added = [edge('duplicate', 'p'), edge('legacy', 'p')];
+  const result = nameImageConnections(nodes, edges, added);
+  assert.deepEqual(result.filter(node => node.type === 'image').map(imageName), ['Canyon', 'Canyon 2', 'Image 1']);
+  assert.deepEqual(nodes, original);
+  assert.equal(result[1], named);
+  assert.equal(nameImageConnections(result, [...edges, ...added], [edge('named', 'p')]), result);
+  const batch = nameImageConnections([text('p', 'Describe'), image('a', 'image.png'), image('b', 'image.png')], [], [edge('a', 'p'), edge('b', 'p')]);
+  assert.deepEqual(batch.slice(1).map(node => node.data.caption), ['Image 1', 'Image 2']);
+});
+
+test('attachment ordinals never impersonate board names, including the real Image 1 collision', () => {
+  const nodes = [image('first', 'image.png'), { ...image('second', 'Result 1'), data: { ...image('second').data, caption: 'Image 1' } }, text('p', 'Take the clouds from “Image 1”')];
+  const graph = { nodes, edges: [edge('first', 'p'), edge('second', 'p')] };
+  const { prompt, snapshot } = collectInputs(graph, 'p');
+  assert.match(prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
+  assert.doesNotMatch(prompt, /Image 1:|Image 2:|image\.png/);
+  assert.match(prompt, /Take the clouds from “Image 1”/);
+  assert.deepEqual(snapshot, nodes);
+  graph.nodes[2].data.task = 'describe';
+  assert.match(collectInputs(graph, 'p').prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
+});
+
+test('every expanded image reserves name space, including unnamed legacy images', () => {
+  const node = image('a', 'image.png');
+  assert.equal(captionHeight(node), 24);
+  assert.equal(captionHeight({ ...node, data: { ...node.data, caption: '' } }), 24);
+  assert.equal(captionHeight({ ...node, data: { ...node.data, caption: 'Front' } }), 24);
+  assert.equal(captionHeight({ ...node, data: { ...node.data, collapsed: true } }), 0);
+  assert.equal(captionHeight(text('p', 'Generate')), 0);
+});
 
 test('template colours validate, balance the fixed palette and survive snapshots independently of the library', () => {
   const template = { id: 'type', name: 'Views', instructions: 'Front', assets: [] };
@@ -71,7 +132,7 @@ test('custom nodes add their saved instructions and reference images to the conn
   const result = collectInputs(graph, 'custom');
   assert.deepEqual(result.images, [asset, asset]);
   assert.match(result.prompt, /Show front, side, and back/);
-  assert.match(result.prompt, /Image 2: Multiview reference/);
+  assert.match(result.prompt, /Attachment 2: “Multiview reference 1”/);
   custom.data.template.instructions = 'Changed after run';
   assert.equal(result.target.data.template.instructions, 'Show front, side, and back');
   assert.equal(result.snapshot[1].data.template.instructions, 'Show front, side, and back');
@@ -96,12 +157,12 @@ test('optional caption settings are validated and captions describe connected im
   input.data.caption = 'Front view'; prompt.data.labelOutputs = true;
   const graph = { nodes: [input, prompt], edges: [edge('reference', 'prompt')] };
   const result = collectInputs(graph, 'prompt');
-  assert.match(result.prompt, /Image 1: Front view/);
+  assert.match(result.prompt, /Attachment 1: “Front view”/);
   assert.equal(result.target.data.labelOutputs, true);
   input.data.caption = 42; assert.throws(() => validateGraph(graph), /caption/);
   input.data.caption = 'x'.repeat(121); assert.throws(() => validateGraph(graph), /caption/);
   delete input.data.caption; prompt.data.labelOutputs = 'yes'; assert.throws(() => validateGraph(graph), /caption setting/);
-  delete prompt.data.labelOutputs; assert.match(collectInputs(graph, 'prompt').prompt, /Image 1: Original label/);
+  delete prompt.data.labelOutputs; assert.match(collectInputs(graph, 'prompt').prompt, /Attachment 1: “Original label”/);
   const template = { name: 'Views', instructions: 'Describe views', assets: [] };
   assert.deepEqual(validateTemplate({ ...template, labelOutputs: true }), { ...template, labelOutputs: true });
   assert.deepEqual(validateTemplate({ ...template, labelOutputs: false }), template);

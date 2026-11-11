@@ -1,4 +1,4 @@
-import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs } from '../graph.mjs';
+import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs, uniqueImageName } from '../graph.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
@@ -9,7 +9,7 @@ export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, bo
 
 /**
  * One generated image joins a board the same way for every generator: a node beside its prompt (or below the run's
- * earlier images), a connection from the prompt, captions once there are several, and the run's group.
+ * earlier images), a connection from the prompt, a board-unique name, and the run's group.
  * `before` is the board as read from the shared document; returns the next graph to apply against it, or null when
  * the run has finished or already shows this output. `fields` are written over the stored run (Codex reports settings).
  */
@@ -24,15 +24,11 @@ export function placeRunOutput(before, { runId, nodeId, run: current, author, fi
   if (!node) {
     node = imageNode({ id: runId, target, by: run.by }, asset, output.index, dimensions);
     node.id = id;
-    if (output.caption || output.index > 0) node.data.caption = output.caption || `Image ${output.index + 1}`;
+    node.data.caption = uniqueImageName(graph.nodes, output.caption);
     positionRunOutput(node, graph, run);
     graph.nodes.push(node);
   }
   run.outputIds.push(id); run.count = run.outputIds.length;
-  if (run.outputIds.length === 2) {
-    const index = graph.nodes.findIndex(node => node.id === run.outputIds[0]), first = graph.nodes[index];
-    if (first && !Object.hasOwn(first.data, 'caption')) graph.nodes[index] = { ...first, data: { ...first.data, caption: 'Image 1' } };
-  }
   if (samePage(graph, graph.nodes.find(item => item.id === nodeId), node) && !graph.edges.some(edge => edge.id === `${id}-edge`)) graph.edges.push({ id: `${id}-edge`, source: nodeId, target: id });
   const previousGroup = run.autoGroupId;
   groupRunOutputs(graph, run, id);

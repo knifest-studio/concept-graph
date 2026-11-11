@@ -57,7 +57,7 @@ test('generation sends collected inputs without legacy model settings; collectio
   assert.equal(updates, 3); assert.equal(run.status, 'completed'); assert.equal(run.count, 2);
   assert.equal(graph.groups.length, 1); assert.deepEqual(graph.groups[0].nodeIds, run.outputIds);
   assert.equal(graph.nodes.find(node => node.id === run.outputIds[0]).data.caption, 'Front');
-  assert.equal(graph.nodes.find(node => node.id === run.outputIds[1]).data.caption, 'Image 2');
+  assert.equal(graph.nodes.find(node => node.id === run.outputIds[1]).data.caption, 'Image 1');
   assert.equal(graph.edges.filter(edge => edge.source === 'p').length, 2); assert.doesNotThrow(() => validateGraph(graph));
   assert.equal(state.jobs.length, 0);
   generation.stop(); doc.destroy();

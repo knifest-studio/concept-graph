@@ -155,10 +155,10 @@ test('cloud jobs validate, persist, queue with local runs, cancel and acknowledg
     }
   });
 
-  await t.test('multiple outputs use generated captions and fallback labels even with labelOutputs false', async () => {
+  await t.test('helper outputs carry model captions and leave board naming to the client even with labelOutputs false', async () => {
     const { job } = await call('/api/cloud-jobs', 'POST', newJob({ prompt: 'MULTI', images: [], labelOutputs: false }));
     const result = await completed(job.id);
-    assert.deepEqual(result.outputs.map(output => output.caption), ['Image 1', 'Вид збоку', 'Image 3']);
+    assert.deepEqual(result.outputs.map(output => output.caption), [undefined, 'Вид збоку', undefined]);
   });
 
   await t.test('cloud jobs ignore legacy model and effort overrides', async () => {

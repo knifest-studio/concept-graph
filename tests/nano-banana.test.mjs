@@ -69,7 +69,7 @@ test('settings come from the Worker environment with safe defaults, and the endp
 test('the request sends the prompt, connected context and labelled references, without Codex tool instructions', () => {
   const { prompt, images, target } = nanoPrompt(seed, 'p');
   assert.equal(target.id, 'p'); assert.deepEqual(images, [{ asset: reference, label: 'Front view' }]);
-  assert.equal(prompt, 'Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nReference images, attached in this order:\nImage 1: Front view\n\nRequest:\nA courier robot at dawn');
+  assert.equal(prompt, 'Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nAttached images, in order. Each is named as it appears on the board. When the request mentions one of these names, it means that image:\nAttachment 1: “Front view”\n\nRequest:\nA courier robot at dawn');
   assert.doesNotMatch(prompt, /built-in image tool|paid API|Not connected/);
   // A lone prompt is sent as written.
   assert.equal(nanoPrompt({ nodes: [seed.nodes[0]], edges: [] }, 'p').prompt, 'A courier robot at dawn');
@@ -81,6 +81,25 @@ test('the request sends the prompt, connected context and labelled references, w
   assert.equal(init.method, 'POST'); assert.deepEqual(init.headers, { 'Content-Type': 'application/json', 'x-goog-api-key': 'secret', 'Api-Revision': '2026-05-20' });
   assert.deepEqual(JSON.parse(init.body), { model: 'gemini-nano-banana-2.1', input: [{ type: 'text', text: prompt }, { type: 'image', mime_type: 'image/png', data: 'AQID' }], store: false });
   assert.doesNotMatch(init.body, /secret/);
+});
+
+test('generation and describe interleave exact board names with the corresponding image bytes', () => {
+  const graph = structuredClone(seed);
+  graph.nodes.find(node => node.id === 'i').data.caption = 'Image 1';
+  graph.nodes.push({ id: 'first', type: 'image', position: { x: 0, y: 0 }, data: { asset: reference, label: 'image.png' } });
+  graph.edges.unshift({ id: 'e0', source: 'first', target: 'p' });
+  for (const describe of [false, true]) {
+    if (describe) graph.nodes[0].data.task = 'describe';
+    const { prompt, images } = nanoPrompt(graph, 'p');
+    assert.match(prompt, /Attachment 1: “Image”\nAttachment 2: “Image 1”/);
+    const references = images.map((image, index) => ({ ...image, mimeType: 'image/png', data: `bytes-${index}` }));
+    const { init } = nanoRequest(prompt, references, { key: 'key', endpoint: 'https://generativelanguage.googleapis.com' });
+    assert.deepEqual(JSON.parse(init.body).input, [
+      { type: 'text', text: prompt },
+      { type: 'text', text: 'Attachment 1: “Image”' }, { type: 'image', mime_type: 'image/png', data: 'bytes-0' },
+      { type: 'text', text: 'Attachment 2: “Image 1”' }, { type: 'image', mime_type: 'image/png', data: 'bytes-1' },
+    ]);
+  }
 });
 
 test('responses give every final image with its format, and failures become clear typed errors', () => {
@@ -141,7 +160,7 @@ test('one shared step places each output beside its prompt, captions and groups 
   const before = { nodes: [seed.nodes[0]], edges: [], groups: [], runs: [run] };
   const first = placeRunOutput(before, { runId: 'run', nodeId: 'p', run, author: user, output: { index: 0 }, asset: reference, dimensions: { width: 200, height: 100 } });
   const one = first.nodes.find(node => node.id === 'run-output-0');
-  assert.deepEqual(one.position, { x: 470, y: 40 }); assert.equal(one.data.caption, undefined); assert.equal(one.data.aspect, 0.5); assert.deepEqual(one.data.author, user);
+  assert.deepEqual(one.position, { x: 470, y: 40 }); assert.equal(one.data.caption, 'Image 1'); assert.equal(one.data.aspect, 0.5); assert.deepEqual(one.data.author, user);
   assert.deepEqual(first.edges, [{ id: 'run-output-0-edge', source: 'p', target: 'run-output-0' }]); assert.deepEqual(first.groups, []);
   assert.deepEqual(first.runs.at(-1), { ...run, status: 'running', outputIds: ['run-output-0'], count: 1 });
   const second = placeRunOutput(first, { runId: 'run', nodeId: 'p', run: first.runs.at(-1), author: user, output: { index: 1 }, asset: reference, dimensions: { width: 100, height: 100 } });
@@ -149,10 +168,28 @@ test('one shared step places each output beside its prompt, captions and groups 
   assert.deepEqual([a.data.caption, b.data.caption], ['Image 1', 'Image 2']);
   assert.deepEqual(b.position, { x: 470, y: 40 + 155 + 30 + 24 });
   assert.deepEqual(second.groups, [{ id: 'run-group', name: 'Group 1', nodeIds: ['run-output-0', 'run-output-1'], collapsed: false, slideshow: true }]);
-  assert.equal(second.runs.at(-1).autoGroupId, 'run-group'); assert.equal(first.nodes.find(node => node.id === 'run-output-0').data.caption, undefined);
+  assert.equal(second.runs.at(-1).autoGroupId, 'run-group'); assert.equal(first.nodes.find(node => node.id === 'run-output-0').data.caption, 'Image 1');
   assert.equal(placeRunOutput(second, { runId: 'run', nodeId: 'p', run: second.runs.at(-1), author: user, output: { index: 1 }, asset: reference }), null);
   assert.equal(placeRunOutput(second, { runId: 'run', nodeId: 'p', run: { ...second.runs.at(-1), status: 'cancelled' }, author: user, output: { index: 2 }, asset: reference }), null);
   assert.doesNotThrow(() => validateGraph(second));
+});
+
+test('output names use all pages and earlier runs without rewriting model captions or user edits', () => {
+  const before = structuredClone(seed);
+  before.nodes.find(node => node.id === 'i').data.caption = 'Image 1';
+  before.nodes.push({ id: 'old', type: 'image', position: { x: 0, y: 0 }, page: 'other', data: { asset: reference, caption: 'Front view' } });
+  const run = { id: 'run', nodeId: 'p', status: 'running' };
+  const first = placeRunOutput(before, { runId: run.id, nodeId: 'p', run, output: { index: 0 }, asset: reference });
+  assert.equal(first.nodes.at(-1).data.caption, 'Image 2');
+  const second = placeRunOutput(first, { runId: run.id, nodeId: 'p', run: first.runs.at(-1), output: { index: 1, caption: '  Front view  ' }, asset: reference });
+  assert.equal(second.nodes.at(-1).data.caption, 'Front view 2');
+  assert.equal(first.nodes.at(-1).data.caption, 'Image 2');
+  second.nodes.find(node => node.id === 'run-output-0').data.caption = 'My name';
+  const third = placeRunOutput(second, { runId: run.id, nodeId: 'p', run: second.runs.at(-1), output: { index: 2, caption: 'My name' }, asset: reference });
+  assert.equal(third.nodes.at(-1).data.caption, 'My name 2');
+  assert.equal(third.nodes.find(node => node.id === 'run-output-0').data.caption, 'My name');
+  const next = placeRunOutput(third, { runId: 'next', nodeId: 'p', output: { index: 0 }, asset: reference });
+  assert.equal(next.nodes.at(-1).data.caption, 'Image 2');
 });
 
 test('Nano Banana prompts start and cancel through the board API, never through the helper', async () => {
@@ -312,7 +349,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
   assert.equal(headers.get('x-goog-api-key'), 'test-gemini-key'); assert.equal(headers.get('api-revision'), '2026-05-20');
   assert.equal(body.model, 'gemini-nano-banana-2.1'); assert.equal(body.store, false);
-  assert.deepEqual(body.input.slice(1), [{ type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
+  assert.deepEqual(body.input.slice(1), [{ type: 'text', text: 'Attachment 1: “Front view”' }, { type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
   assert.equal(body.input[0].text, nanoPrompt(before, 'p').prompt);
   const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
   assert.equal(run.status, 'completed'); assert.equal(run.count, 2); assert.ok(Date.parse(run.finishedAt) >= Date.parse(run.startedAt));
@@ -502,7 +539,8 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
   const [{ body }] = calls, graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
   assert.equal(calls.length, 1); assert.equal(body.model, 'gemini-3.5-flash-lite');
   assert.match(body.input[0].text, /Describe the attached images in detail/); assert.match(body.input[0].text, /FOCUS:\nOnly the lighting/);
-  assert.deepEqual(body.input.slice(1).map(item => item.type), ['image']);
+  assert.deepEqual(body.input.slice(1).map(item => item.type), ['text', 'image']);
+  assert.equal(body.input[1].text, 'Attachment 1: “Front view”');
   assert.deepEqual([run.status, run.task, run.model, run.count], ['completed', 'describe', 'gemini-3.5-flash-lite', 1]);
   const output = graph.nodes.find(node => node.id === run.outputIds[0]);
   assert.deepEqual([output.type, output.data.text], ['text', 'A small courier robot lit from the left.']);
@@ -579,6 +617,7 @@ runtimeTest('Topaz upscales through fal.ai’s queue with the site key, and the 
   const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === result.run.id), output = graph.nodes.find(node => node.data.runId === result.run.id);
   assert.deepEqual({ status: run.status, model: run.model, task: run.task, scale: run.scale, label: run.label }, { status: 'completed', model: 'fal-ai/topaz/upscale/image', task: 'upscale', scale: 4, label: 'Upscale image' });
   assert.deepEqual(output.data.pixels, { width: 2560, height: 1920 });
+  assert.equal(output.data.caption, 'Front view upscaled');
   assert.ok(files.has(`assets/${output.data.asset}`));
   assert.ok(graph.edges.some(edge => edge.source === 'u' && edge.target === output.id));
   assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 1, teamSpentUsd: .08 });

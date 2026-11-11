@@ -497,7 +497,7 @@ export class BoardRoom extends YServer {
     const objects = await Promise.all(images.map(image => this.env.FILES.get(`assets/${image.asset}`)));
     if (objects.some(object => !object)) throw new NanoError('bad_request', `${upscale ? 'An image' : 'A reference image'} is missing from storage. Reconnect it and try again.`);
     if (objects.reduce((total, object) => total + object.size, 0) > maxReferenceBytes) throw new NanoError('bad_request', upscale ? 'Images to upscale can be at most 20 MB in total. Connect fewer.' : 'Reference images are too large for Nano Banana (20 MB in total). Use fewer or smaller images.');
-    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), ...(upscale ? { bytes } : {}) }; }));
+    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), ...(upscale ? { bytes } : { label: images[index].label }) }; }));
   }
 
   // Pixel sizes from the start of each file, enough to price an upscale before it runs; null where the header is unread.
@@ -585,7 +585,7 @@ export class BoardRoom extends YServer {
     let placed = false;
     this.document.transact(() => {
       const before = readCloudGraph(this.document);
-      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index }, asset, dimensions });
+      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index, ...(job.request.upscale ? { caption: `${job.request.images[index]?.label || 'Image'} upscaled` } : {}) }, asset, dimensions });
       if (graph) { applyLocalGraph(this.document, graph, before, origin); placed = true; }
     }, origin);
     return placed;

@@ -24,7 +24,7 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 - Keep unrelated Codex skills, plugins and configured MCP servers out of image-generation threads without changing global settings.
 - Export a board and its images as one `.conceptgraph` file, then import it as a new board.
 - Save custom text nodes with reusable instructions and reference images, and switch existing prompts between saved types.
-- Generated images receive captions automatically when useful; multiple images from one run always have editable captions.
+- Every expanded image shows an editable name above it. Use that exact name in prompts, such as “take the clouds from Storm 3 and the angle from Canyon”. Connected images reach every generator with their board names.
 - Connect a local MCP-capable agent to read and change boards, inspect images and start generation.
 - Sketch around your ideas as in FigJam: draw with the pen, add stickies, stamps and sections, place rectangles, ellipses, diamonds and triangles with text inside (R, O), and connect things with arrows (L) that stay attached when they move.
 - Delete a board you no longer need; you type its name to confirm. The canvas stops a little past the board's content, so you cannot scroll off and lose it.
@@ -111,7 +111,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release instructions,
 
 ## Current limits
 
-One active generation across all boards; up to 10 reference images per run, including custom-node references; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board when running from source. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA. Automatic captions describe the requested result, not verified image content; they may be inaccurate. If Codex omits a caption in a multi-image run, a generic label is used; captions can be edited manually. Custom-node exports use board format version 2; boards with captions or legacy caption settings use version 3, and boards with shapes or arrows use version 7. Older app versions cannot import newer formats.
+One active generation across all boards; up to 10 reference images per run, including custom-node references; 30 MB per image. Groups have one level. Undo history ends when you switch boards or reload. Use one browser tab per board when running from source. Generation shows elapsed seconds because Codex does not provide a reliable percentage or ETA. Automatic names describe the requested result and may be inaccurate. New image names are unique across all pages of the board. Uploads use the file name without its extension, generic clipboard images and generated outputs without a model caption get the next free `Image N`, and upscales use the source name followed by `upscaled`. Click any name to edit it. Copies retain their names. Older unnamed images show a file-derived name or `Image` and receive a stored unique name when connected to a prompt. Custom-node exports use board format version 2; boards with captions or legacy caption settings use version 3, and boards with shapes or arrows use version 7. Older app versions cannot import newer formats.
 
 The Codex app-server integration is experimental and may need changes after Codex updates. The example board was generated end-to-end with public CLI **0.163.0** and ChatGPT authentication. CI checks the app with a fake worker; account access and real generation are separate manual checks.
 
