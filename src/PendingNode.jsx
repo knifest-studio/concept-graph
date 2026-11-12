@@ -44,7 +44,7 @@ export function PendingNode({ id, data, width = 310, height = 310 }) {
   return <div className={`pending-node${data.describe ? ' pending-text' : ''}${full ? '' : ' pending-light'}${spawn ? ' pending-spawn' : ''}`} style={{ width: '100%', height: '100%', ...style }}>
     <article className="node-card pending-card">
       <div className="pending-media"><div className="pending-shimmer" aria-hidden="true"/>
-        {full && videos && !data.describe && data.clip && <WaitingVideo key={data.clip} src={data.clip}/>}
+        {videos && !data.describe && data.clip && <WaitingVideo key={data.clip} src={data.clip}/>}
       </div>
       {full && <span className="pending-status" role="status">{t(data.status)}</span>}
     </article>
