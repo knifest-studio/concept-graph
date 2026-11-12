@@ -285,3 +285,33 @@ button,a,.image-collapse,.image-prompt-from,.image-expand,.image-shade{transitio
 @keyframes pending-ring{0%{r:var(--pending-radius);stroke-width:2.6;opacity:0}1%{opacity:1}100%{r:var(--pending-radius-end);stroke-width:0;opacity:0}}
 @keyframes pending-splash{0%{transform:translate(0,0) scale(1);opacity:0}1%{opacity:1}100%{transform:translate(var(--pending-splash-x),var(--pending-splash-y)) scale(0);opacity:0}}
 @media(prefers-reduced-motion:reduce){.pending-shimmer,.pending-spawn .pending-card,.pending-spawn .pending-line{animation:none}.pending-comet,.pending-impact,.pending-pulse{display:none}}
+
+.output-reveal{position:relative;width:var(--reveal-width);height:var(--reveal-height)}
+.output-revealed .feedback-output{animation:none}
+.output-revealed .image-node button,.output-revealed .resolution-badge{animation:output-controls 150ms ease-out}
+.output-reveal .node-feedback,.output-reveal .feel-inner,.output-reveal .image-node-wrapper,.output-reveal .image-node{height:100%;width:100%}
+.output-reveal .feedback-waiting{opacity:1}
+.output-reveal .image-content{height:100%;object-fit:cover}
+.output-reveal .image-node-caption,.output-reveal .image-node button,.output-reveal .resolution-badge,.output-reveal .image-author{visibility:hidden}
+.output-reveal-cover{position:absolute;inset:0;overflow:hidden;border:1px solid var(--border);border-radius:10px;background:var(--card);pointer-events:none}
+.output-reveal-cover video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
+.output-reveal-cover video.playing{opacity:1}
+.output-reveal-sweep,.output-reveal-flash{position:absolute;pointer-events:none;opacity:0}
+.output-reveal-sweep{top:0;bottom:0;left:0;width:18%;border-radius:10px;background:linear-gradient(90deg,transparent,#EF9F2799,#FAC775,transparent);filter:blur(3px)}
+.output-reveal-flash{inset:-2px;border:2px solid #EF9F27;border-radius:12px}
+.output-revealing{height:var(--image-height);animation:output-resize 300ms ease-out both}
+.output-revealing .output-reveal-cover{animation:output-uncover 650ms ease-in-out both}
+.output-revealing .output-reveal-sweep{animation:output-sweep 650ms ease-in-out both}
+.output-revealing .output-reveal-flash{animation:output-flash 250ms ease-out 550ms both}
+.output-revealing .image-node-caption{visibility:visible;animation:output-caption 150ms ease-out 650ms both}
+.output-reveal-light.output-revealing{animation:none}
+.output-reveal-light .output-reveal-sweep,.output-reveal-light .output-reveal-flash{display:none}
+.output-reveal-light.output-revealing .output-reveal-cover{animation:output-crossfade 220ms ease-out both}
+@keyframes output-resize{from{width:var(--reveal-width);height:var(--reveal-height)}to{width:310px;height:var(--image-height)}}
+@keyframes output-uncover{from{clip-path:inset(0 0 0 0)}to{clip-path:inset(0 0 0 100%)}}
+@keyframes output-sweep{0%{left:-9%;opacity:0}8%,85%{opacity:1}100%{left:91%;opacity:0}}
+@keyframes output-flash{0%{opacity:0;transform:scale(1)}15%{opacity:.9}100%{opacity:0;transform:scale(1.035)}}
+@keyframes output-caption{from{opacity:0}to{opacity:1}}
+@keyframes output-controls{from{opacity:0}}
+@keyframes output-crossfade{from{opacity:1}to{opacity:0}}
+@media(prefers-reduced-motion:reduce){.output-reveal{animation:none;height:auto;width:310px}.output-reveal-cover,.output-reveal-sweep,.output-reveal-flash{display:none}.output-reveal .image-node-caption,.output-reveal .image-node button,.output-reveal .resolution-badge,.output-reveal .image-author{visibility:visible;animation:none}.output-revealed .image-node button,.output-revealed .resolution-badge{animation:none}}

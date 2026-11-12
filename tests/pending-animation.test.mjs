@@ -50,8 +50,18 @@ test('rerenders, queued-to-running, undo and later Codex slots never renew the i
   assert.equal(observe([], {}, seen), seen);
   assert.equal(observe([job], { now: 300 }, seen), seen);
   const projected = runPlaceholders(graph, [later], 'page-1', seen);
-  assert.equal(projected.nodes[0].data.spawnAt, undefined);
-  assert.equal(projected.edges[0].data.spawnAt, undefined);
+  assert.deepEqual(projected, { nodes: [], edges: [] });
+});
+
+test('a later explicit Codex tool call gets one fresh comet, without replay on diagnostics updates', () => {
+  const seen = observe([run()]);
+  const later = run({ outputIds: ['real'], diagnostics: { events: [{ type: 'image_completed' }, { type: 'image_started' }] } });
+  const next = observe([later], { now: 900 }, seen), projected = runPlaceholders(graph, [later], 'page-1', next);
+  assert.equal(seen.get('run').has('run-pending-1'), false);
+  assert.equal(projected.nodes[0].data.spawnAt, 900);
+  assert.equal(projected.edges[0].data.spawnAt, 900);
+  assert.equal(observe([later], { now: 1200 }, next), next);
+  assert.equal(observe([later], { now: 1500, live: false }, next), next);
 });
 
 test('node and edge share their clock; waiting videos and placement remain unchanged', () => {

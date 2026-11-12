@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { imageNode, positionRunOutput, descriptionNode } from '../graph.mjs';
-import { runPlaceholders, waitingVideo } from '../src/run-placeholders.mjs';
+import { codexImageActive, runPlaceholders, waitingVideo } from '../src/run-placeholders.mjs';
 import { waitingVideos } from '../src/waiting-videos.mjs';
 import { boxTouches, canvasView } from '../src/canvas.mjs';
 import { selectedGraph } from '../src/clipboard.mjs';
@@ -58,15 +58,30 @@ test('Nano Banana keeps the remaining slot IDs and clips as real images arrive',
   assert.equal(pending(graph(), [run({ provider: 'nano-banana' })]).nodes.length, 1);
 });
 
-test('Codex always shows exactly one next slot, even after multiple outputs or a variants field', () => {
+test('Codex shows its first slot, then waits for an active image tool signal, ignoring variants', () => {
   const board = graph(), job = run({ variants: 4 });
   for (let count = 0; count < 4; count++) {
+    if (count) assert.equal(pending(board, [job]).nodes.length, 0);
+    job.diagnostics = { events: [{ type: 'image_completed' }, { type: 'image_started' }] };
     const result = pending(board, [job]);
     assert.equal(result.nodes.length, 1); assert.equal(result.nodes[0].id, `run-pending-${count}`);
     const node = imageNode({ ...job, target: board.nodes[0] }, `image-${count}`, count);
     positionRunOutput(node, board, job); assert.deepEqual(node.position, result.nodes[0].position);
     board.nodes.push(node); job.outputIds.push(node.id);
+    job.diagnostics.events.push({ type: 'image_completed' });
   }
+  assert.equal(pending(board, [job]).nodes.length, 0);
+  assert.equal(pending(graph(), [run({ variants: 4 })]).nodes.length, 1);
+});
+
+test('Codex completion, failure and turn termination clear the active tool signal', () => {
+  for (const type of ['image_completed', 'image_failed', 'turn_completed', 'error']) {
+    const job = run({ outputIds: ['real'], diagnostics: { events: [{ type: 'image_started' }, { type: 'agent_message' }, { type }] } });
+    assert.equal(codexImageActive(job), false);
+    assert.equal(pending(graph(), [job]).nodes.length, 0);
+  }
+  assert.equal(codexImageActive(run({ diagnostics: { events: [{ type: 'image_started' }, { type: 'agent_message' }] } })), true);
+  assert.equal(pending(graph(), [run({ outputIds: ['real'], message: 'Generating image…' })]).nodes.length, 0);
 });
 
 test('upscale counts frozen inputs first, then snapshots, then distinct directly connected images, falling back to one', () => {
@@ -104,8 +119,40 @@ test('placement uses real obstacles, groups, existing output sizes, requested as
     scratch.nodes.push(output); placement.outputIds.push(output.id);
   }
   const old = { id: 'old', type: 'image', position: { x: 420, y: 800 }, measured: { width: 310, height: 900 }, data: { aspect: 700 / 310 } };
-  assert.equal(pending(graph([target, old]), [run({ outputIds: ['old'] })]).nodes[0].position.y, 1554);
+  assert.equal(pending(graph([target, old]), [run({ provider: 'nano-banana', variants: 2, outputIds: ['old'] })]).nodes[0].position.y, 1554);
   assert.equal(pending(graph([prompt('prompt', { aspect: 'invalid' })])).nodes[0].style.height, 310);
+});
+
+test('a single distinct input supplies the aspect, with frozen snapshots and explicit requests taking priority', () => {
+  const source = { id: 'source', type: 'image', position: { x: -400, y: 0 }, data: { asset: 'source', aspect: .5 } };
+  const board = graph([prompt(), source], { edges: [{ source: 'source', target: 'prompt' }, { source: 'source', target: 'prompt' }] });
+  const job = run({ provider: 'nano-banana', variants: 3 });
+  const slots = pending(board, [job]).nodes;
+  assert.deepEqual(slots.map(node => node.style.height), [155, 155, 155]);
+  const scratch = structuredClone(board), placement = { ...job, target: board.nodes[0], outputIds: [] };
+  for (let index = 0; index < 3; index++) {
+    const output = imageNode(placement, 'output', index, { width: 200, height: 100 });
+    positionRunOutput(output, scratch, placement);
+    assert.deepEqual(output.position, slots[index].position);
+    scratch.nodes.push(output); placement.outputIds.push(output.id);
+  }
+  const frozen = { ...source, data: { ...source.data, aspect: 2 } };
+  assert.equal(pending(board, [{ ...job, snapshot: [frozen] }]).nodes[0].style.height, 620);
+  assert.equal(pending(board, [{ ...job, target: prompt('prompt', { aspect: .75 }) }]).nodes[0].style.height, 232.5);
+  assert.equal(pending(board, [{ ...job, snapshot: [] }]).nodes[0].style.height, 310);
+  const second = { ...source, id: 'second' };
+  assert.equal(pending({ ...board, nodes: [...board.nodes, second], edges: [...board.edges, { source: 'second', target: 'prompt' }] }, [job]).nodes[0].style.height, 310);
+  assert.equal(pending({ ...board, nodes: [prompt(), { ...source, data: { pixels: { width: 400, height: 100 } } }] }, [job]).nodes[0].style.height, 77.5);
+});
+
+test('upscale slots follow each frozen source aspect and keep the remaining positions on completion', () => {
+  const images = [.5, 2].map((aspect, index) => ({ id: `source-${index}`, type: 'image', position: { x: -400, y: 0 }, data: { asset: `source-${index}`, aspect } }));
+  const board = graph([prompt('prompt', { task: 'upscale', aspect: 1 }), ...images], { edges: images.map(image => ({ source: image.id, target: 'prompt' })) });
+  const job = run({ task: 'upscale', snapshot: images }), before = pending(board, [job]).nodes;
+  assert.deepEqual(before.map(node => node.style.height), [155, 620]);
+  const output = imageNode({ ...job, target: board.nodes[0] }, 'result', 0, { width: 200, height: 100 });
+  positionRunOutput(output, board, job); board.nodes.push(output); job.outputIds.push(output.id);
+  assert.deepEqual(pending(board, [job]).nodes[0].position, before[1].position);
 });
 
 test('browser-only measurements do not move placeholders away from the server’s placement', () => {

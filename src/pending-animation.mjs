@@ -1,4 +1,4 @@
-import { runPlaceholders } from './run-placeholders.mjs';
+import { codexImageActive, runPlaceholders } from './run-placeholders.mjs';
 import { boardPages, nodePage } from './pages.mjs';
 
 export const pendingTiming = Object.freeze({ stagger: 150, fresh: 2500, fly: 460, impact: 440, ring: 520,
@@ -9,13 +9,15 @@ export const pendingEase = 'cubic-bezier(.645,.045,.355,1)';
 export function observePendingSpawns(seen, graph, runs, { now, live = false, local = false, userName } = {}) {
   let next = seen;
   for (const run of runs) {
-    if (next.has(run.id)) continue;
-    if (next === seen) next = new Map(seen);
-    const slots = new Map(), prompt = graph.nodes.find(node => node.id === run.nodeId);
+    const previous = next.get(run.id);
+    if (previous && !(live && run.outputIds?.length && codexImageActive(run))) continue;
+    const slots = new Map(previous), prompt = graph.nodes.find(node => node.id === run.nodeId);
     if (live && prompt && ['queued', 'running'].includes(run.status) && (local || (userName && run.by?.name === userName))) {
       const page = nodePage(prompt, boardPages(graph));
-      runPlaceholders(graph, [run], page).nodes.forEach((node, index) => slots.set(node.id, now + index * pendingTiming.stagger));
+      runPlaceholders(graph, [run], page).nodes.forEach((node, index) => { if (!slots.has(node.id)) slots.set(node.id, now + index * pendingTiming.stagger); });
     }
+    if (previous && slots.size === previous.size) continue;
+    if (next === seen) next = new Map(seen);
     next.set(run.id, slots);
   }
   return next;

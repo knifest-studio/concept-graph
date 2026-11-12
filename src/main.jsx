@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
 import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
@@ -27,6 +27,7 @@ import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
 import { PendingNode, useWaitingVideos } from './PendingNode.jsx';
+import { ImageReveal, ImageRevealContext } from './ImageReveal.jsx';
 import { runPlaceholders } from './run-placeholders.mjs';
 import { PendingEdge } from './PendingEdge.jsx';
 import { observePendingSpawns, pendingPulseKeyframes } from './pending-animation.mjs';
@@ -207,7 +208,8 @@ function ExpandedTextNode({ id, data, selected }) {
 }
 
 function ImageNode(props) {
-  return useDetail(props.id) === 'full' ? <FullImageNode {...props}/> : <LightNode {...props}/>;
+  const full = useDetail(props.id) === 'full';
+  return <ImageReveal {...props}>{full ? <FullImageNode {...props}/> : <LightNode {...props}/>}</ImageReveal>;
 }
 
 function FullImageNode(props) {
@@ -256,20 +258,20 @@ function ExpandedImageNode({ id, data }) {
 }
 
 function useOutputReady(ref, source, id) {
-  const canvas = useCanvas(), waiting = useCanvasValue(state => state.pending.has(id));
+  const canvas = useCanvas(), reveal = useContext(ImageRevealContext), waiting = useCanvasValue(state => state.pending.has(id));
   useEffect(() => {
     const image = ref.current;
-    if (!image || !waiting) return;
+    if (!image || (!waiting && !reveal)) return;
     let active = true;
     const ready = async () => {
       try { if (image.decode) await image.decode(); } catch {}
-      if (active && image.naturalWidth > 0) canvas.outputReady(id);
+      if (active && image.naturalWidth > 0) { if (reveal) reveal.ready(image); else canvas.outputReady(id); }
     };
     if (image.complete) ready();
-    const failed = () => canvas.outputFailed(id);
+    const failed = () => { if (reveal) reveal.failed(); else canvas.outputFailed(id); };
     image.addEventListener('load', ready); image.addEventListener('error', failed);
     return () => { active = false; image.removeEventListener('load', ready); image.removeEventListener('error', failed); };
-  }, [source, id, waiting]);
+  }, [source, id, waiting, reveal]);
 }
 
 function CollapsedImage({ asset, id }) {
