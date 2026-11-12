@@ -38,16 +38,25 @@ export function boundingBox(boxes) {
 }
 
 // Keep zoom and move only the axes that hide the new card. Include its source when both fit.
-export function revealViewport(box, viewport, bounds, source) {
-  const { zoom } = viewport, left = 30, right = bounds.width - 30, top = 60, bottom = bounds.height - 90;
+// `cover` is a floating panel over the canvas (the generation tray): a card under it counts as hidden.
+export function revealViewport(box, viewport, bounds, source, cover) {
+  const { zoom } = viewport, left = 30, right = bounds.width - 30, top = 60, bottom = bounds.height - 90, card = box;
+  const screen = (box, view) => ({ x: box.x * zoom + view.x, y: box.y * zoom + view.y, width: box.width * zoom, height: box.height * zoom });
+  const covered = view => { const at = screen(card, view); return !!cover && at.x < cover.x + cover.width && at.x + at.width > cover.x && at.y < cover.y + cover.height && at.y + at.height > cover.y; };
   const visible = box => box.x * zoom + viewport.x >= left && box.y * zoom + viewport.y >= top
     && (box.x + box.width) * zoom + viewport.x <= right && (box.y + box.height) * zoom + viewport.y <= bottom;
-  if (visible(box)) return null;
+  if (visible(box) && !covered(viewport)) return null;
   if (source) {
     const together = boundingBox([box, source]);
     if (together.width * zoom <= right - left && together.height * zoom <= bottom - top) box = together;
   }
   const axis = (start, size, offset, low, high) => size * zoom > high - low ? low - start * zoom
     : Math.max(low - start * zoom, Math.min(high - (start + size) * zoom, offset));
-  return { x: axis(box.x, box.width, viewport.x, left, right), y: axis(box.y, box.height, viewport.y, top, bottom), zoom };
+  const target = { x: axis(box.x, box.width, viewport.x, left, right), y: axis(box.y, box.height, viewport.y, top, bottom), zoom };
+  if (covered(target)) {
+    // Slide the card out from under the panel: below it when that still fits, otherwise to its left.
+    const at = screen(card, target), down = cover.y + cover.height + 12 - at.y;
+    if (at.y + at.height + down <= bottom) target.y += down; else target.x += cover.x - 12 - (at.x + at.width);
+  }
+  return target;
 }

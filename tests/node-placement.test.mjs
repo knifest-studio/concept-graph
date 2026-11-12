@@ -40,3 +40,11 @@ test('camera includes the prompt when both fit, prioritizes the new card otherwi
   assert.deepEqual(revealViewport(output, viewport, bounds, distant), revealViewport(output, viewport, bounds));
   assert.deepEqual(revealViewport({ x: 800, y: 2000, width: 310, height: 4000 }, viewport, bounds), { x: -140, y: -1940, zoom: 1 });
 });
+
+test('a new card under a floating panel slides out from under it', () => {
+  const viewport = { x: 0, y: 0, zoom: 1 }, bounds = { width: 1000, height: 800 }, cover = { x: 640, y: 10, width: 340, height: 150 };
+  // Fully inside the canvas, but its top-right corner sits under the panel: move it just below.
+  assert.deepEqual(revealViewport({ x: 600, y: 100, width: 310, height: 310 }, viewport, bounds, undefined, cover), { x: 0, y: 72, zoom: 1 });
+  // Clear of the panel: the camera stays.
+  assert.equal(revealViewport({ x: 600, y: 200, width: 310, height: 310 }, viewport, bounds, undefined, cover), null);
+});

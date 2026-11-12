@@ -28,6 +28,8 @@ import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
 import { PendingNode, useWaitingVideos } from './PendingNode.jsx';
 import { runPlaceholders } from './run-placeholders.mjs';
+import { PendingEdge } from './PendingEdge.jsx';
+import { observePendingSpawns, pendingPulseKeyframes } from './pending-animation.mjs';
 import { generationFocusNodes } from './generation-tray.mjs';
 import { switchNodeTemplate, templateFromNode } from './node-template.mjs';
 import { GettingStarted, useGettingStarted } from './GettingStarted.jsx';
@@ -489,7 +491,7 @@ function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
 }
-const edgeTypes = { feedback: FeedbackEdge };
+const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge };
 // Constant props: React Flow copies changed props into its store, and every copy re-runs every card's and edge's selector.
 // As in FigJam, Shift (or ⌘) toggles a card in or out of the selection, and a Shift drag starts on empty canvas like any box.
 const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
@@ -669,6 +671,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const feedbackSeeded = useRef(false);
   const [fileOver, setFileOver] = useState(false);
   const runRef = useRef(runs); runRef.current = runs;
+  const pendingSpawns = useRef(new Map());
   const [groups, setGroups] = useState([]), [focusId, setFocusId] = useState(null);
   const [sections, setSections] = useState(noSections), [renaming, setRenaming] = useState(null), [tool, setTool] = useState('select');
   const [viewerSlides, setViewerSlides] = useState(() => new Map()), [learnedAspects, setLearnedAspects] = useState(() => new Map());
@@ -795,6 +798,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const putSections = value => { sectionRef.current = typeof value === 'function' ? value(sectionRef.current) : value; setSections(sectionRef.current); };
   const deselectSections = () => putSections(current => current.some(section => section.selected) ? current.map(deselected) : current);
   const currentGraph = () => ({ nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, sections: sectionRef.current });
+  const observeSpawns = (graph, nextRuns, live = false) => {
+    pendingSpawns.current = observePendingSpawns(pendingSpawns.current, graph, nextRuns, { now: performance.now(), live, local: !cloud, userName: cloudSession?.user.name });
+  };
   // What undo snapshots: the whole board, every page.
   const boardContent = () => ({ ...currentGraph(), pages: pagesRef.current });
   // User-level actions see only the open page; saves, sync and history always keep the whole board.
@@ -843,7 +849,10 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const revealCreated = (node, source) => {
     if (!alive.current || !canvasElement.current || nodePage(node, pagesRef.current) !== activePageRef.current) return;
     viewerMoved.current = true;
-    const bounds = canvasElement.current.getBoundingClientRect(), target = revealViewport(cardBox(node), flow.getViewport(), bounds, source && cardBox(source));
+    const bounds = canvasElement.current.getBoundingClientRect(), tray = canvasElement.current.querySelector('.generation-tray')?.getBoundingClientRect(),
+      target = revealViewport(cardBox(node), flow.getViewport(), bounds, source && cardBox(source), source && (tray ? { x: tray.x - bounds.x, y: tray.y - bounds.y, width: tray.width, height: tray.height }
+        // A run's tray may render a frame after its placeholder: reserve its usual corner.
+        : { x: bounds.width - 367, y: 24, width: 340, height: 122 }));
     if (target) flow.setViewport(target, { duration: 220 });
   };
   const focusNode = (nodeId, control = 'text', preserveSelection = false, preserveZoom = false) => {
@@ -919,6 +928,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try {
       if (dirty.current) cloudSession.apply({ nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, sections: sectionRef.current, runs: cloudBase.current.runs, pages: storedPages(pagesRef.current, cloudBase.current.pages) }, cloudBase.current);
       const graph = cloudSession.read({ nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, sections: sectionRef.current });
+      observeSpawns(graph, graph.runs, feedback?.live ?? (feedbackSeeded.current && cloudSession.feedbackLive));
       if (!feedbackSeeded.current || feedback) effects.observeGraph(graph, feedback || {});
       feedbackSeeded.current = true;
       cloudBase.current = graph; dirty.current = false;
@@ -1106,6 +1116,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     };
     const replaceGraph = async graph => {
       effects.observeGraph(graph);
+      observeSpawns(graph, graph.runs);
       base.current = graph;
       flushSync(() => { putPages(boardPages(graph)); putNodes(graph.nodes); putEdges(graph.edges); putGroups(graph.groups || []); putSections(graph.sections || noSections); setRuns(graph.runs); setSaved('All changes saved'); });
       if (openingViewDone.current) { viewport.current = graph.viewport; await flow.setViewport(graph.viewport); }
@@ -1144,11 +1155,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       });
       events.addEventListener('graph', event => {
         if (mcpEnabled && !editorReady.current) { synchronize(); return; }
-        const graph = JSON.parse(event.data); effects.observeGraph(graph, { live: feedbackLive }); feedbackLive = true; mergeRemote(graph); setRuns(graph.runs);
+        const graph = JSON.parse(event.data); effects.observeGraph(graph, { live: feedbackLive }); observeSpawns(graph, graph.runs, feedbackLive); feedbackLive = true; mergeRemote(graph); setRuns(graph.runs);
       });
       events.addEventListener('run', event => {
         const run = JSON.parse(event.data);
         effects.observeRun(run, feedbackLive);
+        observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [run], feedbackLive);
         setRuns(current => { const old = current.find(r => r.id === run.id); return old ? current.map(r => r.id === run.id ? { ...r, ...run } : r) : [...current, run]; });
         if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify(t('Some images have generic names. Click a name to edit it.'));
       });
@@ -1253,6 +1265,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       const { board: { graph }, status: nextStatus } = await api(boardPath);
       if (disposed) return;
       effects.observeGraph(graph);
+      observeSpawns(graph, graph.runs);
       base.current = graph; putPages(boardPages(graph)); putNodes(graph.nodes); putEdges(graph.edges); putGroups(graph.groups || []); putSections(graph.sections || noSections); setRuns(graph.runs); setStatus(nextStatus);
       setLoaded(true); setSaved('All changes saved'); connect();
     })().catch(error => { if (!disposed) { setSaved('Could not load'); notify(error.message); } });
@@ -1971,6 +1984,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (editorId.current) options.headers['X-Concept-Graph-UI-Session'] = editorId.current;
       const result = await api(boardPath + '/runs', options);
       trackOwnRun(result.id);
+      observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [result], true);
       setRuns(current => current.some(r => r.id === result.id) ? current : [...current, result]);
     } catch (error) {
       effects.failedStart();
@@ -2166,7 +2180,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const viewCache = useRef(null); viewCache.current ||= createViewCache();
   const shownGroups = useMemo(() => viewerSlides.size ? scoped.groups.map(group => viewerSlides.has(group.id) ? { ...group, slide: viewerSlides.get(group.id) } : group) : scoped.groups, [scoped.groups, viewerSlides]);
   // Only the canvas projection sees pending slots; board state and every persistence path keep real nodes only.
-  const placeholders = useMemo(() => runPlaceholders({ nodes, edges, groups, pages }, runs, activePage), [nodes, edges, groups, pages, runs, activePage]);
+  const placeholders = useMemo(() => runPlaceholders({ nodes, edges, groups, pages }, runs, activePage, pendingSpawns.current), [nodes, edges, groups, pages, runs, activePage]);
   const displayed = useMemo(() => placeholders.nodes.length ? { ...scoped, nodes: [...scoped.nodes, ...placeholders.nodes], edges: [...scoped.edges, ...placeholders.edges] } : scoped, [scoped, placeholders]);
   const view = useMemo(() => { viewCache.current.aspects = learnedAspects; return canvasView(displayed.nodes, displayed.edges, shownGroups, viewCache.current, displayed.sections); }, [displayed, shownGroups, learnedAspects]);
   const extent = useMemo(() => boardExtent(displayed, measureView(viewCache.current)), [displayed]);
@@ -2268,7 +2282,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
-    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled };
+    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
@@ -2306,6 +2320,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
   return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
+    <style>{pendingPulseKeyframes}</style>
     <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
     {cloudSession?.panels}
     <aside className="sidebar" inert={!!transfer || switching ? true : undefined}>

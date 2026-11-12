@@ -25,6 +25,8 @@ test('active local summaries and shared runs produce canvas-only, inert slots wi
     assert.equal(node.data.status, index ? 'Queued' : 'Generating');
     assert.ok(waitingVideos.includes(node.data.clip));
     assert.equal(result.edges[index].target, node.id); assert.equal(result.edges[index].selectable, false);
+    assert.equal(result.edges[index].type, 'pending'); assert.deepEqual(result.edges[index].data, {});
+    assert.equal(node.data.spawnAt, undefined);
   }
   assert.deepEqual(pending(board, runs), result);
 });

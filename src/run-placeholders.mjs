@@ -8,7 +8,7 @@ export function waitingVideo(id, clips = waitingVideos) {
   return clips[hash % clips.length];
 }
 
-export function runPlaceholders(graph, runs, page) {
+export function runPlaceholders(graph, runs, page, spawns) {
   const nodes = [], edges = [], pages = boardPages(graph), byId = new Map(graph.nodes.map(node => [node.id, node]));
   for (const run of runs) {
     if (!['running', 'queued'].includes(run.status)) continue;
@@ -25,10 +25,10 @@ export function runPlaceholders(graph, runs, page) {
       const id = `${run.id}-pending-${slot}`, output = { id, type: describe ? 'text' : 'image',
         position: { x: target.position.x + 390, y: target.position.y + (describe ? 0 : slot * 340) }, data: { aspect, runId: run.id } };
       positionRunOutput(output, scratch, placement);
-      const size = nodeSize(output);
+      const size = nodeSize(output), spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
       nodes.push({ ...output, type: 'pending', selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
-        measured: size, style: size, data: { ...output.data, describe, status: run.status === 'queued' ? 'Queued' : describe ? 'Describing' : upscale ? 'Upscaling' : 'Generating', clip: describe ? undefined : waitingVideo(id) } });
-      edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, className: 'pending-edge', selectable: false, deletable: false, focusable: false });
+        measured: size, style: size, data: { ...output.data, ...animation, describe, status: run.status === 'queued' ? 'Queued' : describe ? 'Describing' : upscale ? 'Upscaling' : 'Generating', clip: describe ? undefined : waitingVideo(id) } });
+      edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, type: 'pending', data: animation, className: 'pending-edge', selectable: false, deletable: false, focusable: false });
       scratch.nodes.push(output); placement.outputIds.push(id);
     }
   }
