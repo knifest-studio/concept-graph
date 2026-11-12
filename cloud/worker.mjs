@@ -11,6 +11,7 @@ import { helperDownloadType } from '../src/helper-download.mjs';
 import { mcpApi } from './mcp.mjs';
 import { agentScopes, authorize } from './oauth.mjs';
 import { purgeTrash } from './trash.mjs';
+import { voiceIce } from './voice.mjs';
 
 export { BoardRoom } from './board-room.mjs';
 export { Directory } from './directory.mjs';
@@ -50,6 +51,7 @@ function admitted(request, role, user) {
   next.headers.set('x-concept-graph-role', role); next.headers.set('x-concept-graph-email', user.email);
   // The display name, for the board's version history; headers carry ASCII only.
   next.headers.set('x-concept-graph-name', encodeURIComponent(user.name || ''));
+  next.headers.set('x-concept-graph-color', user.color || '#6b6e89');
   return next;
 }
 
@@ -163,6 +165,16 @@ async function route(request, env) {
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), fal: upscaleSettings(env).fal }) : error('Method not allowed.', 405);
+  const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
+  if (voiceMatch) {
+    if (method !== 'POST') return error('Method not allowed.', 405);
+    if (request.headers.get('Origin') && request.headers.get('Origin') !== url.origin) return error('Invalid origin.', 403);
+    const board = boardPattern.test(voiceMatch[1]) && await directory(env).boardFor(voiceMatch[1], user.email);
+    if (!board) return error('Board not found.', 404);
+    if (!board.role) return error('You don’t have access to this board.', 403);
+    try { return json(await voiceIce(env)); }
+    catch { return error('Voice credentials are unavailable. Try again.', 503); }
+  }
   const nanoMatch = path.match(/^\/api\/boards\/([^/]+)\/nano(?:\/([^/]+)\/cancel)?$/);
   if (nanoMatch) return nanoRoute(request, env, user, url, nanoMatch[1], nanoMatch[2]);
   if (path === '/api/templates') {

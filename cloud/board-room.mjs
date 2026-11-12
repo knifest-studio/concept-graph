@@ -9,6 +9,8 @@ import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
 import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
+import { BoardChat } from './chat.mjs';
+import { voiceHasSpace, voiceSignal } from './voice.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 import { reframePng } from './png-frame.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
@@ -81,7 +83,7 @@ export class BoardRoom extends YServer {
     const role = ctx.request.headers.get('x-concept-graph-role');
     let name = null;
     try { name = decodeURIComponent(ctx.request.headers.get('x-concept-graph-name') || '') || null; } catch {}
-    connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email'), name }));
+    connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email'), name, color: ctx.request.headers.get('x-concept-graph-color') }));
     super.onConnect(connection, ctx);
     this.sendCustomMessage(connection, JSON.stringify({ type: 'access', role: connection.state.role }));
   }
@@ -285,6 +287,8 @@ export class BoardRoom extends YServer {
   }
 
   async onClose(connection, code, reason, wasClean) {
+    // After hibernation the room may have no awareness state to remove; tell peers this voice socket is gone anyway.
+    if (Number.isSafeInteger(connection.state?.voiceId)) this.broadcastCustomMessage(JSON.stringify({ type: 'voice-left', from: connection.state.voiceId }));
     super.onClose(connection, code, reason, wasClean);
     for (const ask of [...this.agentAsks.values()]) if (ask.connection === connection.id) ask.done({ error: 'The board in your browser was closed before it answered.' });
     if (this.deleted) return;
@@ -366,6 +370,12 @@ export class BoardRoom extends YServer {
     const tool = toolByName.get(name);
     if (!tool || tool.account) return { error: 'Unknown tool.' };
     try {
+      if (name === 'list_chat') return { value: this.chat().history(args, user.email) };
+      if (name === 'send_chat') {
+        const { message } = this.chat().send(args, user, { agent: true, sender: `agent:${user.email}` });
+        this.broadcastCustomMessage(JSON.stringify({ type: 'chat-message', message }));
+        return { value: { message } };
+      }
       if (name === 'start_run') return await this.mcpStart(args.nodeId, user);
       if (name === 'cancel_run') return await this.mcpCancel(args.runId, user);
       if (name === 'list_versions') return { value: { versions: (await this.listVersions()).slice(0, args.limit || 50) } };
@@ -440,11 +450,60 @@ export class BoardRoom extends YServer {
   onCustomMessage(connection, message) {
     let value;
     try { value = JSON.parse(message); } catch { return; }
+    if (typeof value?.type === 'string' && value.type.startsWith('chat-')) return this.chatMessage(connection, value);
+    if (typeof value?.type === 'string' && value.type.startsWith('voice-')) return this.voiceMessage(connection, value);
     if (value?.type === 'attention') return this.callAttention(connection, value);
     if (value?.type === 'attention-reply') return this.answerAttention(connection, value);
     const ask = value?.type === 'agent-answer' && this.agentAsks.get(value.requestId);
     if (!ask || ask.connection !== connection.id) return;
     ask.done(typeof value.error === 'string' ? { error: value.error.slice(0, 500) || 'Generation could not start.' } : { runId: typeof value.runId === 'string' && value.runId.length <= 120 ? value.runId : null });
+  }
+
+  chat() { return this.boardChat ||= new BoardChat(this.ctx.storage.sql); }
+
+  chatMessage(connection, value) {
+    if (!connection.state?.email || !connection.state?.role) return;
+    const reply = value => this.sendCustomMessage(connection, JSON.stringify(value)), now = Date.now();
+    try {
+      if (value.type === 'chat-send') {
+        const { message, duplicate } = this.chat().send(value, connection.state, { key: value.key, sender: `socket:${connection.id}` });
+        if (!duplicate) this.broadcastCustomMessage(JSON.stringify({ type: 'chat-message', message }));
+        reply({ type: 'chat-message', message, key: value.key });
+      } else if (value.type === 'chat-history') {
+        if (now - (connection.state.chatHistoryAt || 0) < 200) throw new Error('Wait a moment before loading more messages.');
+        connection.setState(state => ({ ...state, chatHistoryAt: now }));
+        reply({ type: 'chat-history', ...this.chat().history(value, connection.state.email), before: value.before, after: value.after ?? 0 });
+      } else if (value.type === 'chat-delete') {
+        if (now - (connection.state.chatDeleteAt || 0) < 300) throw new Error('Wait a moment before deleting another message.');
+        connection.setState(state => ({ ...state, chatDeleteAt: now }));
+        this.broadcastCustomMessage(JSON.stringify({ type: 'chat-deleted', ...this.chat().delete(value.id, connection.state) }));
+      }
+    } catch (cause) { reply({ type: 'chat-failed', key: typeof value.key === 'string' ? value.key.slice(0, 120) : undefined, reason: cause.message, operation: value.type }); }
+  }
+
+  // Socket attachment state survives hibernation; awareness alone cannot arbitrate simultaneous joins.
+  voiceMessage(connection, value) {
+    if (!connection.state?.email || !connection.state?.role) return;
+    const reply = value => this.sendCustomMessage(connection, JSON.stringify(value));
+    const own = connection.state.voiceId, connections = [...this.getConnections()];
+    if (value.type === 'voice-join') {
+      const id = value.clientId;
+      const key = typeof value.key === 'string' ? value.key.slice(0, 120) : undefined;
+      if (!Number.isSafeInteger(id) || !presenceIds(connection).includes(id)) return reply({ type: 'voice-failed', key, reason: 'Voice is still connecting. Try again.' });
+      const occupied = connections.filter(item => item.id !== connection.id).map(item => item.state?.voiceId).filter(Number.isSafeInteger);
+      if (occupied.includes(id)) return reply({ type: 'voice-failed', key, reason: 'Voice is still connecting. Try again.' });
+      if (!voiceHasSpace(occupied)) return reply({ type: 'voice-failed', key, reason: 'Voice is full (8 people). Try again when someone leaves.' });
+      connection.setState(state => ({ ...state, voiceId: id }));
+      return reply({ type: 'voice-joined', clientId: id, key });
+    }
+    if (value.type === 'voice-leave') { connection.setState(state => ({ ...state, voiceId: null })); return; }
+    if (value.type !== 'voice-signal' || !Number.isSafeInteger(own) || !presenceIds(connection).includes(own) || !voiceSignal(value)) return;
+    const target = connections.find(item => item.id !== connection.id && item.state?.voiceId === value.to && presenceIds(item).includes(value.to));
+    if (!target) return;
+    const now = Date.now(), rate = connection.state.voiceRate;
+    if (rate && now - rate.at < 1000 && rate.count >= 100) return;
+    connection.setState(state => ({ ...state, voiceRate: !rate || now - rate.at >= 1000 ? { at: now, count: 1 } : { ...rate, count: rate.count + 1 } }));
+    this.sendCustomMessage(target, JSON.stringify({ type: 'voice-signal', from: own, data: value.data }));
   }
 
   // Someone asks one person (every tab of theirs) or everyone else to come to them. The room names the caller from the

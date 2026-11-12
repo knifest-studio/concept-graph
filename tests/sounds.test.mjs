@@ -83,7 +83,7 @@ test('step pitches rise, remove sweeps down, and confirmation meanings have dist
   assert.ok(steps.every((pitch, index) => !index || pitch > steps[index - 1]));
   await audio.playSound('remove');
   const sweep = audio.filters.at(-1).frequency.points; assert.ok(sweep[1][0] < sweep[0][0]);
-  for (const kind of ['success', 'celebrate', 'drop', 'tick-up', 'tick-down', 'connect', 'create']) {
+  for (const kind of ['success', 'celebrate', 'drop', 'tick-up', 'tick-down', 'connect', 'create', 'chat', 'voice-join', 'voice-leave']) {
     const before = audio.oscillators.length; await audio.playSound(kind); assert.ok(audio.oscillators.length > before, kind);
   }
   const before = audio.oscillators.length; await audio.playSound('unknown'); assert.equal(audio.oscillators.length, before);

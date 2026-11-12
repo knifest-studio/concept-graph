@@ -177,6 +177,23 @@ Owners, access settings, invitations and visits live in the board-directory Dura
 
 The routes are `GET /api/cloud/boards` (the boards you can open, with your role), `GET /api/cloud/boards/<board>` (open a board: your role and who has access; a 403 names the owner), `GET` and `PATCH /api/cloud/boards/<board>/sharing` (owner only for changes: `{ "access": "private" | "link" | "everyone", "linkRole": "view" | "edit", "member": { "email": "…", "role": "view" | "edit" | null } }`, where a null role removes the invitation) and `PATCH /api/cloud/boards/<board>` (rename, owner only).
 
+## Text and voice chat
+
+Cloud boards have **Chat** and **Voice** in the toolbar, also for viewers. Chat keeps the newest 5,000 messages in the board room's SQLite, outside Yjs, board exports and versions. History is paged by 50, with unread state per board/account on this device, quiet alerts following **Sounds**, safe web links, and optional links to nodes. Authors may delete their own messages; owners may delete any. Deletion clears text and node links but keeps an author/time marker. Messages include author names, colors and emails, visible to everyone with board access and their MCP agents. Permanently erasing a board erases its chat; restoring a canvas version does not rewind chat.
+
+Voice is audio-only WebRTC mesh for up to eight people. Awareness shows muted/speaking state; the room admits participants and relays bounded signals only between their sockets. Socket state survives room hibernation. Negotiation follows [MDN's perfect negotiation pattern](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation). Leaving the board or closing the tab releases the microphone. During a board-connection drop, voice keeps the microphone and peer connections for up to 20 seconds and automatically requests room admission again after reconnect. Failed admission or a longer drop releases the microphone and shows the disconnect message. Peers also allow a missing socket 20 seconds to return with the same presence ID. Audio is never recorded. Participants may see each other's IP address; restrictive networks may relay audio through Cloudflare TURN. Desktop mode has neither feature.
+
+Without TURN secrets, `POST /api/boards/<board>/voice/ice` returns `stun:stun.cloudflare.com:3478` only; some networks will not connect. It requires sign-in and board access, including view access. To enable TURN, set **both** Worker secrets (or add them to local `cloud/.dev.vars`):
+
+```sh
+npx wrangler secret put TURN_KEY_ID -c cloud/wrangler.jsonc
+npx wrangler secret put TURN_KEY_API_TOKEN -c cloud/wrangler.jsonc
+```
+
+The key remains server-side. The endpoint obtains one-day browser credentials through the [Cloudflare TURN credential API](https://developers.cloudflare.com/realtime/turn/generate-credentials/) and filters port 53 URLs. Responses are not cached; a configured TURN API failure is reported instead of silently falling back to STUN. Join again to obtain fresh credentials for calls exceeding one day. Verify a real restrictive-network call before relying on TURN.
+
+For manual verification, build with `node node_modules/vite/bin/vite.js build --mode cloud --outDir dist-cloud`, then start `node node_modules/wrangler/bin/wrangler.js dev -c cloud/wrangler.jsonc --port 8787`. Use separate signed-in browser profiles/devices and test: viewer posting; late arrival and reload with over 50 messages; own/owner deletion; unread and sounds with chat closed, hidden and scrolled up; links to another page and deleted nodes; microphone denial/missing device; simultaneous voice joins, mute, leave, board navigation, tab close and reconnect; blocked autoplay; eight participants and a refused ninth. Inspect both light/dark themes and a narrow screen. Test TURN with real credentials and peers on a restrictive network; mocked negotiation and route tests do not prove real audio delivery or TURN reachability.
+
 ## Calling teammates
 
 Choosing a person's avatar in the board's top bar offers **Go to {name}** and **Call {name} here**; the bell beside the avatars (also at the top of the **+N** list) is **Call everyone here**. As in Figma's spotlight, Miro's *Bring everyone to me* and Mural's summon:
@@ -224,6 +241,7 @@ An agent acts as the person who connected it, with that person's role on each bo
 
 - boards: list, create, rename, delete (with the exact name; the board goes to its owner's Recently deleted for 30 days), and who the agent is signed in as with the Nano Banana allowance left today;
 - version history: `list_versions` and `restore_version` (see [Version history, deleted boards and backups](#version-history-deleted-boards-and-backups)); one call can delete at most 200 nodes;
+- board chat: `list_chat` (50 recent messages, newest first, optional numeric `before` cursor) and `send_chat` (text, optional `nodeId`); both allow viewers, and posts are marked **via agent**;
 - seeing a board: `get_board` (pages, nodes with their estimated size, connections, groups, sections, custom nodes, recent generations) and `get_image`, which returns images as image content, using the shared preview when one exists;
 - prompts, describe nodes, reference images (uploaded as base64), custom-node prompts, stickies, shapes, arrows (ends can hold on to nodes), stamps and drawings;
 - moving, editing, restacking, folding, copying, connecting and deleting nodes; groups and slideshows; pages; sections (moving one carries what lies inside it); auto-align; and `apply_graph`, which replaces a board's graph in one step and refuses if the board changed since the agent read it;

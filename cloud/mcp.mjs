@@ -11,6 +11,7 @@ const versions = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const maxRequest = 30 * 1024 * 1024, maxUpload = 20 * 1024 * 1024, maxShown = 4.5 * 1024 * 1024;
 const instructions = 'Concept Graph team boards: prompts, images and notes on a shared canvas. Start with list_boards, then get_board; look at images with get_image. '
   + 'Every change appears at once for everyone on the board, made in the name of the person who connected you, so ask before deleting boards, pages or much content. '
+  + 'list_chat reads persistent board chat (50 per page); send_chat posts as this person, marked via agent, with an optional nodeId link. Viewers can use both. Chat is separate from canvas versions. '
   + 'start_run generates like the Generate button: Nano Banana on the team key, Codex on this person\'s own computer through the board they have open in a browser.';
 const directory = env => env.Directory.get(env.Directory.idFromName('boards'));
 const json = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });

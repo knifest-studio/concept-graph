@@ -44,10 +44,10 @@ const graphPage = object({ id: text('Page ID', { minLength: 1, maxLength: 120 })
 
 export const tools = [];
 // `access` is the role a board tool needs: view or edit; account tools are answered by the Worker (cloud/mcp.mjs).
-function define(name, description, properties, required, { access = 'edit', account = false, run, prepare, destructive = false } = {}) {
+function define(name, description, properties, required, { access = 'edit', account = false, run, prepare, destructive = false, writes = access !== 'view' } = {}) {
   const board = !account;
   tools.push({ name, description, inputSchema: object(board ? { boardId, ...properties } : properties, board ? ['boardId', ...required] : required),
-    annotations: { readOnlyHint: access === 'view', destructiveHint: destructive, idempotentHint: access === 'view', openWorldHint: false }, access, account, run, prepare });
+    annotations: { readOnlyHint: !writes, destructiveHint: destructive, idempotentHint: !writes, openWorldHint: false }, access, account, run, prepare });
 }
 export const toolByName = new Map();
 
@@ -393,6 +393,8 @@ define('start_run', 'Generate from a prompt, as the person’s Generate button w
 define('list_versions', 'List the board’s saved versions, newest first: a copy every ten minutes while it changes, one kept just before any large deletion or restore, and a daily backup. Each says when, why, how many nodes and images it held, and who edited.', { limit: integer('How many (1–500, default 50)', { minimum: 1, maximum: 500 }) }, [], { access: 'view' });
 define('restore_version', 'Put the whole board back as it was in a saved version, for everyone. The board as it is now is saved first, so this can be undone by restoring that copy. Generation history is kept. Ask the user first.', { versionId: text('Version ID from list_versions', { minLength: 1, maxLength: 64 }) }, ['versionId'], { destructive: true });
 define('cancel_run', 'Stop a generation this person started. A Codex run is stopped through their open board. Images that already arrived stay.', { runId }, ['runId'], { destructive: true });
+define('list_chat', 'Read board chat, newest first, 50 messages per page. Pass the oldest message ID as before for earlier messages. Viewers may also read and post chat.', { before: integer('Oldest message ID from the previous page', { minimum: 1 }) }, [], { access: 'view' });
+define('send_chat', 'Post to board chat in this person’s name, marked via agent, visible live to everyone with access. Optional nodeId links to a canvas node. Viewers may post too.', { text: text('Message text (1–2000 characters)', { minLength: 1, maxLength: 2000 }), nodeId: itemId }, ['text'], { access: 'view', writes: true });
 for (const tool of tools) toolByName.set(tool.name, tool);
 
 export const listedTools = tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));

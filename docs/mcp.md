@@ -2,6 +2,8 @@
 
 This guide covers the desktop app's local boards. For cloud team boards, connect agents to the site's remote MCP server instead; see [Agents over MCP](cloud-preview.md#agents-over-mcp).
 
+Cloud-only chat tools: `list_chat {boardId, before?}` returns up to 50 messages newest first plus `more`; pass the last message's numeric `id` as `before` to page backward. `send_chat {boardId, text, nodeId?}` posts 1–2000 trimmed characters in the signed-in person's name, marked `agent: true` (**via agent**), and broadcasts live. Both tools allow viewers. Messages expose their author's name, color and email to board participants and their agents. Chat is stored with the board outside the canvas document, exports and version history; the newest 5,000 entries are kept, including deletion markers. An author deletes their own messages through the board UI; the owner can delete any. There is no MCP voice or chat-deletion tool.
+
 Concept Graph can expose its local boards to MCP-capable agents through a local stdio server. Open the desktop app before asking an agent to use it. The MCP process connects to that running app and its selected data folder; it does not start a second copy or create another library. Keep both the agent and Concept Graph on the same computer and user account.
 
 The desktop package includes the required Node runtime and MCP server. You do not need to install Node.js, clone this repository, or provide an API key for the MCP connection. Image generation still uses the account signed into Concept Graph and its available Codex limits.

@@ -12,6 +12,8 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 
 ## What you can do
 
+- On cloud team boards, use **Chat** for saved messages, unread alerts and links to nodes, and **Voice** for audio calls with up to eight people. Viewers can participate; cloud MCP agents can read and send chat. Voice is peer-to-peer, may use Cloudflare TURN, and is not recorded. [Cloud setup and privacy](docs/cloud-preview.md#text-and-voice-chat).
+
 - Connect text and image nodes to build context for a generation or edit.
 - Paste text or images directly onto the canvas; duplicate nodes, copy images, and copy node IDs for agents.
 - Branch by dragging an output into empty space, then type the next prompt.

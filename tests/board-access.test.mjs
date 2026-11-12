@@ -5,7 +5,7 @@ import * as Y from 'yjs';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
-import { signSession } from '../cloud/auth.mjs';
+import { signSession, userColor } from '../cloud/auth.mjs';
 import { boardRole, canEdit } from '../cloud/access.mjs';
 import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { templatePalette } from '../graph.mjs';
@@ -257,7 +257,7 @@ runtimeTest('board connections admit only people with a role and carry the role 
   const owner = await person('owner@studio.example', 'Owner'), guest = await person('guest@mail.example', 'Guest'), stranger = await person('stranger@mail.example', 'Stranger');
   const board = directory.createBoard('Robots', owner), path = `/parties/board-room/${board.id}`;
   directory.changeSharing(board.id, owner.email, { member: { email: guest.email, role: 'view' } });
-  const forged = { Upgrade: 'websocket', Origin: 'http://localhost:8787', 'X-Concept-Graph-Role': 'owner', 'X-Concept-Graph-Email': owner.email, 'X-Partykit-Props': '{"role":"owner"}' };
+  const forged = { Upgrade: 'websocket', Origin: 'http://localhost:8787', 'X-Concept-Graph-Role': 'owner', 'X-Concept-Graph-Email': owner.email, 'X-Concept-Graph-Color': '#ffffff', 'X-Concept-Graph-Name': 'Imposter', 'X-Partykit-Props': '{"role":"owner"}' };
   const denied = await request(path, { cookie: stranger.cookie, headers: forged });
   assert.equal(denied.status, 403); assert.deepEqual(await denied.json(), { error: 'You don’t have access to this board.' });
   assert.equal((await request(`/parties/board-room/${crypto.randomUUID()}`, { cookie: guest.cookie, headers: forged })).status, 404);
@@ -266,6 +266,7 @@ runtimeTest('board connections admit only people with a role and carry the role 
   assert.equal(await (await request(path, { cookie: owner.cookie, headers: { Upgrade: 'websocket' } })).text(), 'routed');
   assert.deepEqual(routed.map(item => [item.headers.get('x-concept-graph-role'), item.headers.get('x-concept-graph-email'), item.headers.get('x-partykit-props'), item.headers.get('x-partykit-namespace')]),
     [['view', guest.email, null, 'board-room'], ['owner', owner.email, null, 'board-room']]);
+  assert.deepEqual(routed.map(item => [item.headers.get('x-concept-graph-name'), item.headers.get('x-concept-graph-color')]), [['Guest', userColor(guest.email)], ['Owner', userColor(owner.email)]]);
   directory.changeSharing(board.id, owner.email, { member: { email: guest.email, role: null } });
   assert.equal((await request(path, { cookie: guest.cookie, headers: forged })).status, 403);
 });
@@ -282,7 +283,7 @@ runtimeTest('the room ignores a viewer’s document updates but keeps their pres
     return socket;
   };
   const viewer = connect('view', 'viewer@mail.example'), unknown = connect('admin', 'odd@mail.example'), missing = connect();
-  assert.deepEqual([viewer.state, unknown.state, missing.state], [{ role: 'view', email: 'viewer@mail.example', name: null }, { role: 'view', email: 'odd@mail.example', name: null }, { role: 'view', email: null, name: null }]);
+  assert.deepEqual([viewer.state, unknown.state, missing.state], [{ role: 'view', email: 'viewer@mail.example', name: null, color: null }, { role: 'view', email: 'odd@mail.example', name: null, color: null }, { role: 'view', email: null, name: null, color: null }]);
   assert.equal(viewer.sent.at(-1), access('view'));
   for (const socket of [viewer, unknown, missing]) { boardRoom.handleMessage(socket, update); boardRoom.handleMessage(socket, step2); }
   assert.equal(boardRoom.document.getMap('nodes').size, 0);

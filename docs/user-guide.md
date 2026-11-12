@@ -2,6 +2,10 @@
 
 Install the app using the [setup guide](setup.md).
 
+On cloud team boards, **Chat** opens a non-modal panel. Enter sends; Shift+Enter adds a line. **Load earlier** pages through the newest 5,000 messages. Authors can delete their messages; the board owner can delete any. Select a node, then **Attach selected node** to add a link that switches page, selects and highlights it. A removed node's link is disabled. The unread badge remembers your place per board and account on this device; a quiet alert plays when chat is closed or the tab is hidden, subject to **Sounds** and browser audio permission. Viewers can chat too. Connected cloud MCP agents can read and post, marked **via agent**.
+
+**Voice → Join voice** requests microphone access and joins an audio-only call for up to eight participants. **Mute microphone** silences your track; **Leave voice** releases the mic. Speaking/muted marks appear on participant avatars before you join. If the browser blocks remote audio, choose **Play voice audio**. Leaving the board leaves voice. A short board-connection drop keeps the microphone and peer connections for up to 20 seconds and automatically requests admission again after reconnect. Failed admission or a longer drop leaves voice and releases the microphone. Voice is peer-to-peer (participants may see each other's IP address), may use Cloudflare TURN, and is not recorded. Both features are cloud-only. See [cloud configuration](cloud-preview.md#text-and-voice-chat).
+
 The desktop preview and source-run browser app share the canvas controls below. The desktop preview includes Node.js, uses an existing or separately downloaded Codex CLI, and runs in a native window; see [desktop preview setup](desktop-preview.md) for platform support and current limitations.
 
 ## Use

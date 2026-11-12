@@ -38,6 +38,17 @@ if (nodeModule.registerHooks) {
   finally { hooks.deregister(); }
 }
 const runtimeTest = nodeModule.registerHooks ? test : test.skip;
+
+test('chat MCP schemas distinguish viewer-access writes from read-only tools', () => {
+  assert.equal(toolByName.get('list_chat').annotations.readOnlyHint, true);
+  assert.equal(toolByName.get('send_chat').access, 'view');
+  assert.equal(toolByName.get('send_chat').annotations.readOnlyHint, false);
+  assert.equal(toolByName.get('send_chat').annotations.idempotentHint, false);
+  const boardId = '12345678-1234-1234-1234-123456789abc';
+  checkArgs({ boardId, text: 'hi', nodeId: 'node' }, toolByName.get('send_chat').inputSchema);
+  for (const args of [{ boardId, text: '' }, { boardId, text: 'x'.repeat(2001) }, { boardId, text: 'hi', agent: true }]) assert.throws(() => checkArgs(args, toolByName.get('send_chat').inputSchema));
+  assert.throws(() => checkArgs({ boardId, before: '1' }, toolByName.get('list_chat').inputSchema));
+});
 const site = 'http://localhost:8787', redirect = 'http://localhost:9999/callback';
 
 function png(width = 1, height = 1) {
@@ -78,7 +89,9 @@ function setup(t) {
     ASSETS: { fetch: async () => new Response('static') },
   };
   const room = name => {
-    const values = new Map(), storage = { kv: { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) }, transactionSync: callback => callback(),
+    const roomDatabase = new DatabaseSync(':memory:'); t.after(() => roomDatabase.close());
+    const roomSql = { exec(query, ...bindings) { const rows = roomDatabase.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
+    const values = new Map(), storage = { sql: roomSql, kv: { get: key => values.get(key), put: (key, value) => values.set(key, value), delete: key => values.delete(key) }, transactionSync: callback => callback(),
       get: async key => values.get(key), put: async (key, value) => { values.set(key, value); }, deleteAll: async () => values.clear(), getAlarm: async () => null, setAlarm: async () => {} };
     const created = new BoardRoom({ storage, id: { name }, waitUntil: promise => waits.push(promise), blockConcurrencyWhile: callback => callback(), getWebSockets: () => [] }, env);
     created.onSave = async () => {};
@@ -285,10 +298,81 @@ runtimeTest('an agent sees and edits a board live, within the person’s role', 
   const stranger = await connect(request, 'stranger@mail.example', 'Stranger');
   assert.match((await stranger.tool('get_board', { boardId })).error, /access/);
 
+  // Chat is a viewer-access write without changing the canvas revision or saving a board version.
+  const beforeChat = (await lead.tool('get_board', { boardId })).revision, liveChat = [];
+  boardRoom.broadcastCustomMessage = message => liveChat.push(JSON.parse(message));
+  const posted = await viewer.tool('send_chat', { boardId, text: '  Review this  ', nodeId: prompt.nodeId });
+  assert.equal(posted.message.author.email, 'viewer@studio.example'); assert.equal(posted.message.author.name, 'Viewer'); assert.equal(posted.message.agent, true);
+  assert.equal(posted.message.text, 'Review this'); assert.equal(liveChat.at(-1).type, 'chat-message');
+  assert.equal((await lead.tool('get_board', { boardId })).revision, beforeChat);
+  assert.equal((await lead.tool('list_chat', { boardId })).messages[0].id, posted.message.id);
+  for (let index = 0; index < 7; index++) assert.ok((await viewer.tool('send_chat', { boardId, text: `Again ${index}` })).message);
+  assert.match((await viewer.tool('send_chat', { boardId, text: 'Ninth' })).error, /Wait/);
+  assert.match((await stranger.tool('list_chat', { boardId })).error, /access/);
+  assert.match((await stranger.tool('send_chat', { boardId, text: 'No' })).error, /access/);
+  assert.match((await lead.tool('send_chat', { boardId, text: '   ' })).error, /1–2000/);
+  for (let index = 1; index <= 55; index++) boardRoom.chat().send({ text: `Page ${index}` }, { name: 'Lead', email: 'lead@studio.example' }, { now: index * 2000 });
+  const recentChat = await viewer.tool('list_chat', { boardId }); assert.equal(recentChat.messages.length, 50); assert.equal(recentChat.more, true);
+  const earlierChat = await viewer.tool('list_chat', { boardId, before: recentChat.messages.at(-1).id }); assert.equal(earlierChat.messages.length, 13); assert.equal(earlierChat.more, false);
+
   assert.match((await lead.tool('delete_board', { boardId, confirmName: 'robots' })).error, /exact current name/);
   const deleted = await lead.tool('delete_board', { boardId, confirmName: 'Robots' });
   assert.equal(deleted.deleted, boardId); assert.ok(Date.parse(deleted.restorableUntil) > Date.now() + 29 * 24 * 60 * 60 * 1000);
   assert.deepEqual(directory.trashFor('lead@studio.example').map(board => board.id), [boardId]);
   assert.deepEqual((await lead.tool('list_boards')).boards, []);
   assert.ok(files.size >= 1);
+});
+
+runtimeTest('room chat authenticates viewers, owns deletion, persists across hibernation and stamps live echoes', async t => {
+  const { room } = setup(t), board = room(crypto.randomUUID()), sent = [], broadcasts = [];
+  board.sendCustomMessage = (connection, value) => sent.push({ connection, ...JSON.parse(value) });
+  board.broadcastCustomMessage = value => broadcasts.push(JSON.parse(value));
+  const connection = { id: 'viewer', state: { name: 'Viewer', color: '#aabbcc', email: 'viewer@example.com', role: 'view' }, setState(update) { this.state = update(this.state); } };
+  board.onCustomMessage(connection, JSON.stringify({ type: 'chat-send', key: 'one', text: 'hello', author: { name: 'Fake' }, agent: true }));
+  assert.equal(sent.at(-1).message.author.name, 'Viewer'); assert.equal(sent.at(-1).message.agent, undefined); assert.equal(sent.at(-1).key, 'one');
+  const id = sent.at(-1).message.id;
+  board.boardChat = null;
+  board.onCustomMessage(connection, JSON.stringify({ type: 'chat-send', key: 'one', text: 'hello' }));
+  assert.equal(broadcasts.length, 1); assert.equal(sent.at(-1).message.id, id);
+  const other = { ...connection, id: 'other', state: { name: 'Other', email: 'other@example.com', role: 'view' } };
+  board.onCustomMessage(other, JSON.stringify({ type: 'chat-delete', id })); assert.equal(sent.at(-1).type, 'chat-failed');
+  board.onCustomMessage(connection, JSON.stringify({ type: 'chat-delete', id })); assert.equal(broadcasts.at(-1).type, 'chat-deleted');
+  assert.equal(board.chat().history().messages[0].text, '');
+});
+
+runtimeTest('room arbitrates eight voice slots and relays bounded signals from their real presence only', async t => {
+  const { room } = setup(t), board = room(crypto.randomUUID()), sent = [];
+  const connections = Array.from({ length: 9 }, (_, index) => ({ id: `socket-${index}`, state: { role: 'view', email: `${index}@example.com`, __ypsAwarenessIds: [index + 1] }, setState(update) { this.state = update(this.state); } }));
+  board.getConnections = () => connections;
+  board.sendCustomMessage = (connection, message) => sent.push({ connection: connection.id, ...JSON.parse(message) });
+  connections.forEach((connection, index) => board.voiceMessage(connection, { type: 'voice-join', clientId: index + 1, key: `key-${index}` }));
+  assert.equal(sent.filter(item => item.type === 'voice-joined').length, 8); assert.match(sent.at(-1).reason, /full/);
+  // Clearing all transient room fields changes neither socket admission nor ownership.
+  board.voiceMessage(connections[0], { type: 'voice-signal', to: 2, from: 999, data: { candidate: 'ice' } });
+  assert.equal(sent.at(-1).connection, 'socket-1'); assert.equal(sent.at(-1).from, 1);
+  const count = sent.length;
+  board.voiceMessage(connections[8], { type: 'voice-signal', to: 2, data: { candidate: 'no slot' } });
+  board.voiceMessage(connections[0], { type: 'voice-signal', to: 9, data: { candidate: 'not admitted' } });
+  board.voiceMessage(connections[0], { type: 'voice-signal', to: 2, data: { sdp: 'x'.repeat(25000) } });
+  assert.equal(sent.length, count);
+  board.voiceMessage(connections[8], { type: 'voice-join', clientId: 2 }); assert.match(sent.at(-1).reason, /connecting/);
+  board.voiceMessage(connections[0], { type: 'voice-leave' });
+  board.voiceMessage(connections[8], { type: 'voice-join', clientId: 9 }); assert.equal(sent.at(-1).type, 'voice-joined');
+  let gone;
+  board.broadcastCustomMessage = value => { gone = JSON.parse(value); };
+  // Awareness is empty just as after hibernation; socket ownership still permits prompt peer cleanup.
+  await board.onClose(connections[8], 1000, 'closed', true); assert.deepEqual(gone, { type: 'voice-left', from: 9 });
+});
+
+runtimeTest('ICE endpoint requires authentication and board access, including viewers', async t => {
+  const { request, directory } = setup(t);
+  const owner = { name: 'Lead', email: 'lead@studio.example' }, board = await directory.createBoard('Voice', owner), path = `/api/boards/${board.id}/voice/ice`;
+  assert.equal((await request(path, { method: 'POST' })).status, 401);
+  const cookie = async email => `cg_session=${await signSession({ name: 'Person', email }, 'session-test')}`;
+  assert.equal((await request(path, { method: 'POST', headers: { Cookie: await cookie('other@studio.example') } })).status, 403);
+  directory.changeSharing(board.id, owner.email, { member: { email: 'viewer@studio.example', role: 'view' } });
+  const headers = { Cookie: await cookie('viewer@studio.example') };
+  assert.deepEqual(await (await request(path, { method: 'POST', headers })).json(), { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+  assert.equal((await request(path, { method: 'POST', headers: { ...headers, Origin: 'https://elsewhere.example' } })).status, 403);
+  assert.equal((await request(path, { headers })).status, 405);
 });

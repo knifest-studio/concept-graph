@@ -1,6 +1,9 @@
 GOOGLE_CLIENT_ID="replace-with-your-web-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET="replace-with-your-google-client-secret"
 SESSION_SECRET="replace-with-a-long-random-secret"
+# Optional Cloudflare TURN for voice on restrictive networks. Without both, voice uses STUN only.
+# TURN_KEY_ID="replace-with-your-turn-key-id"
+# TURN_KEY_API_TOKEN="replace-with-your-turn-api-token"
 # Optional: the site owner's Google email. They own the boards made before sharing and can share them.
 # SITE_OWNER_EMAIL="you@example.com"
 # Optional localhost/127.0.0.1-only test sign-in. Never enable in deployed vars.

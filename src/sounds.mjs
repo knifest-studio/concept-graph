@@ -16,6 +16,9 @@ let context, master, alert, resuming;
 const volume = .55;
 // [frequency from, to, delay s, length s, wave, peak gain]; each note decays exponentially like a soft mallet.
 const sounds = {
+  chat: [[880, 990, 0, .12, 'sine', .055]],
+  'voice-join': [[523, 659, 0, .15, 'sine', .065]],
+  'voice-leave': [[659, 440, 0, .15, 'sine', .055]],
   start: [[330, 660, 0, .14, 'triangle', .32], [660, 1320, 0, .1, 'sine', .08]],
   arrival: [[1046.5, 1046.5, 0, .45, 'sine', .3], [1318.5, 1318.5, .08, .45, 'sine', .28], [1568, 1568, .16, .6, 'sine', .26], [523.25, 523.25, 0, .5, 'triangle', .1]],
   error: [[440, 415, 0, .18, 'sine', .28], [349, 330, .14, .26, 'sine', .26]],
@@ -41,7 +44,7 @@ export function unlockSounds() {
       const compressor = context.createDynamicsCompressor();
       compressor.threshold.value = -12; compressor.knee.value = 16; compressor.ratio.value = 6; compressor.attack.value = .003; compressor.release.value = .2;
       master.gain.value = volume; master.connect(compressor); compressor.connect(context.destination);
-      // A call is the one sound that also plays in a background tab, where it is most needed.
+      // Collaboration alerts also play in background tabs, where they are most needed.
       alert = context.createGain(); alert.gain.value = volume; alert.connect(compressor);
       document.addEventListener('visibilitychange', () => { master.gain.value = document.hidden ? 0 : volume; });
     }

@@ -6,7 +6,7 @@ import { ReactFlowProvider, ViewportPortal } from '@xyflow/react';
 import * as Y from 'yjs';
 import YProvider from 'y-partyserver/provider';
 import * as encoding from 'lib0/encoding';
-import { encodeAwarenessUpdate } from 'y-protocols/awareness';
+import { encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
@@ -26,6 +26,10 @@ import { TeamAccessDialog } from './TeamAccessDialog.jsx';
 import { AccountMenu } from './AccountMenu.jsx';
 import { defaultPages } from './pages.mjs';
 import { BoardPresence } from './BoardPresence.jsx';
+import { BoardChatPanel, ChatButton } from './BoardChat.jsx';
+import { VoiceAudio, VoiceControl } from './BoardVoice.jsx';
+import { ChatClient } from './board-chat.mjs';
+import { cloudVoice } from './cloud-voice.mjs';
 import { fireFeel, mountFeelOverlay, presets } from './feel.mjs';
 import { soundPreferenceKey, readSoundPreference, unlockSounds, playSound } from './sounds.mjs';
 import './cloud.css';
@@ -176,6 +180,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
   const [shareOpen, setShareOpen] = useState(false), shareButton = useRef(null), [teamOpen, setTeamOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false), historyButton = useRef(null);
+  const [chatOpen, setChatOpen] = useState(false), chatButton = useRef(null);
   // A teammate's call waiting for this person's answer; a newer call replaces it.
   const [call, setCall] = useState(null);
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted };
@@ -239,6 +244,16 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
         return () => { doc.off('afterTransaction', listener); cancelAnimationFrame(frame); clearTimeout(timer); };
       },
     };
+    const collaborationSound = kind => {
+      const key = soundPreferenceKey(`cloud:${user.name}`);
+      if (readSoundPreference(localStorage, key)) { unlockSounds(); playSound(kind, () => readSoundPreference(localStorage, key), { background: true }); }
+    };
+    next.chatStore = store(null); next.chatSelection = store([]);
+    next.chat = new ChatClient({ boardId, email: account.email, storage: localStorage, hidden: () => document.hidden,
+      send: value => { if (provider.wsconnected) provider.sendMessage(JSON.stringify(value)); }, sound: () => collaborationSound('chat'), changed: value => next.chatStore.set(value) });
+    next.voiceStore = store({ online: false, busy: false, joined: false, muted: false, speaking: false, people: [], streams: [], error: '' });
+    const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => next.voiceStore.set(value), sound: collaborationSound });
+    next.voice = voice.mesh; next.joinVoice = voice.join; next.leaveVoice = voice.leave;
     next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, can: feature => !!helperRef.current?.features?.includes(feature), read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(t(message)); if (failure?.status === 403) unpair(); } });
     // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
     next.sharing = sharing;
@@ -279,7 +294,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     next.view = view => provider.awareness.setLocalStateField('view', view);
     next.selection = selection => {
       const value = JSON.stringify(selection);
-      if (value !== lastSelection) { lastSelection = value; provider.awareness.setLocalStateField('selection', selection); }
+      if (value !== lastSelection) { lastSelection = value; next.chatSelection.set(selection); provider.awareness.setLocalStateField('selection', selection); }
     };
     // Calling a teammate (a presence ID) or everyone ('all') to where this person is looking. The room names the caller and
     // answers with how many it reached; each person called later says whether they are coming.
@@ -317,11 +332,12 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       const states = [...provider.awareness.getStates()].filter(([id, state]) => id !== doc.clientID && state.user);
       cursors.set(states.map(([id, state]) => ({ id, user: state.user, page: state.page, cursor: state.cursor, view: state.view })));
       // The board re-renders only when someone joins, leaves, renames or changes page, not when a cursor moves.
-      const roster = states.map(([id, state]) => ({ id, user: state.user, page: state.page }));
+      const roster = states.map(([id, state]) => ({ id, user: state.user, page: state.page, voice: state.voice }));
       setPeers(current => JSON.stringify(current) === JSON.stringify(roster) ? current : roster);
+      voice.refresh();
     };
-    const status = ({ status }) => { if (status !== 'connected') next.feedbackLive = false; setConnection(status === 'connected' ? (provider.synced ? 'live' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'); share(); };
-    const sync = synced => { next.feedbackLive = synced; if (synced) { next.loaded = true; setConnection('live'); } share(); };
+    const status = ({ status }) => { if (status !== 'connected') { next.feedbackLive = false; next.chat.connected(false); voice.connected(false); } setConnection(status === 'connected' ? (provider.synced ? 'live' : 'connecting') : status === 'connecting' ? 'connecting' : 'offline'); share(); };
+    const sync = synced => { next.feedbackLive = synced; if (synced) { next.loaded = true; setConnection('live'); next.chat.connected(true); voice.connected(true); } share(); };
     const hidden = () => { if (document.hidden) next.pointer(null); };
     // Background tabs throttle the awareness renewal timer until peers time us out (and end Codex grants);
     // incoming messages are not throttled, so renew from them while hidden.
@@ -346,6 +362,9 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     const accessMessage = message => {
       let value;
       try { value = JSON.parse(message); } catch { return; }
+      if (typeof value?.type === 'string' && value.type.startsWith('chat-')) next.chat.receive(value);
+      if (typeof value?.type === 'string' && value.type.startsWith('voice-')) voice.receive(value);
+      if (value?.type === 'voice-left' && Number.isSafeInteger(value.from) && value.from !== doc.clientID) removeAwarenessStates(provider.awareness, [value.from], 'voice-left');
       if (value?.type === 'access') latest.current.onAccess(value.role);
       if (typeof value?.type === 'string' && value.type.startsWith('attention')) callMessage(value);
       if (['agent-generate', 'agent-cancel'].includes(value?.type) && typeof value.requestId === 'string') agentRequest(value);
@@ -360,16 +379,19 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     provider.awareness.setLocalState({ user, cursor: null });
     provider.awareness.on('change', presence); provider.awareness.on('change', greet); provider.awareness.on('change', shareLater); provider.awareness.on('update', keepAlive); provider.on('status', status); provider.on('sync', sync);
     document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('pagehide', voice.leave);
     setSession(next);
     return () => {
       next.flush?.(); next.closed = true;
+      next.chat.destroy();
+      voice.leave(); window.removeEventListener('pagehide', voice.leave);
       next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
       document.removeEventListener('visibilitychange', hidden);
       provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
       provider.off('custom-message', accessMessage); provider.off('connection-close', closed);
       undo.destroy(); provider.destroy(); doc.destroy();
     };
-  }, [boardId, user.name, user.color]);
+  }, [boardId, account.email, user.name, user.color]);
   useEffect(() => {
     if (!session || !paired || !editable) return;
     session.jobs.startPolling();
@@ -384,11 +406,14 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   session.cursors = visible => <Cursors cursors={session.cursorStore} pings={session.pingStore} visible={visible}/>;
   session.toolbar = <>
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
+    <ChatButton session={session} open={chatOpen} button={chatButton} onClick={() => setChatOpen(value => !value)}/>
+    <VoiceControl session={session}/>
     {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
     <button ref={historyButton} type="button" className="cloud-history-button" aria-haspopup="dialog" aria-label={t('Version history')} data-tooltip={t('Version history')} onClick={() => setHistoryOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span>{t('Versions')}</span></button>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>{t('Share')}</button>
   </>;
   session.account = <AccountMenu user={account} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
+  session.panels = <>{chatOpen && <BoardChatPanel session={session} onClose={() => { setChatOpen(false); chatButton.current?.focus(); }}/>}<VoiceAudio session={session}/></>;
   return <>
     <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>
     {editable && <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>}
