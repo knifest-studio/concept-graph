@@ -1,4 +1,4 @@
-import { nodeSize, captionHeight } from '../graph.mjs';
+import { nodeSize, captionHeight, textNodeSize } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, canAttachArrow, arrowPad, arrowPosition, reconcileStampAttachments } from './annotations.mjs';
 import { layerIndex, sameShape } from './layers.mjs';
 import { sectionMinimum, sectionPadding } from './sections.mjs';
@@ -192,9 +192,7 @@ export const promptSquare = 310;
 export const promptOverflows = node => 58 + 22.1 * String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0) > (node.data?.height || promptSquare) + 4;
 export function estimatedSize(node, inputs = false) {
   if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
-  if (node.data?.height) return { width: 310, height: node.data.height };
-  const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
-  return { width: 310, height: Math.min(promptSquare, Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0))) };
+  return textNodeSize(node, inputs);
 }
 
 // React Flow draws a connection only between handles it knows. These match the CSS: 10px dots centred on the card's

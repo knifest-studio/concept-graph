@@ -2,6 +2,7 @@ import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAutho
 import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
 import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
 import { validateSections } from './src/sections.mjs';
+import { nearestFreePosition } from './src/node-placement.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
@@ -338,6 +339,13 @@ export const captionHeight = node => node.type === 'image' && !node.data?.collap
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
+// Shared with the canvas, so a server can reserve a prompt's text and Inputs row without browser measurements.
+export function textNodeSize(node, inputs = false) {
+  if (node.data?.height) return { width: 310, height: node.data.height };
+  const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
+  return { width: 310, height: Math.min(310, Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0))) };
+}
+
 // Outputs stay on the page frozen when the run was submitted, or the first page if it is gone.
 export const runOutputPage = (graph, run) => resolvePage(boardPages(graph), run.page ?? defaultPageId);
 export function positionRunOutput(node, graph, run) {
@@ -351,9 +359,11 @@ export function positionRunOutput(node, graph, run) {
   node.position = { x: previous[0].position.x, y: Math.max(...previous.map(item => item.position.y + nodeSize(item).height)) + 30 + captionHeight(node) };
 }
 
-// Leave room for the first result and its frame without jumping past distant content.
+// Stay beside the prompt when free; compare nearby rows and columns when its column is occupied.
 export function positionFirstOutput(node, graph) {
-  const bounds = graph.nodes.map(item => ({ id: item.id, x: item.position.x, y: item.position.y - captionHeight(item), width: nodeSize(item).width, height: nodeSize(item).height + captionHeight(item) }));
+  const fed = new Set((graph.edges || []).map(edge => edge.target));
+  const layoutSize = item => item.type === 'text' && !item.data?.collapsed ? textNodeSize(item, fed.has(item.id) || !!item.data?.template?.assets?.length) : nodeSize(item);
+  const bounds = graph.nodes.map(item => ({ id: item.id, x: item.position.x, y: item.position.y - captionHeight(item), width: layoutSize(item).width, height: layoutSize(item).height + captionHeight(item) }));
   const byId = new Map(bounds.map(item => [item.id, item]));
   for (const group of graph.groups || []) {
     const members = group.nodeIds.map(id => byId.get(id)).filter(Boolean);
@@ -361,10 +371,9 @@ export function positionFirstOutput(node, graph) {
     const x = Math.min(...members.map(item => item.x)) - 24, y = Math.min(...members.map(item => item.y)) - 72;
     bounds.push({ x, y, width: Math.max(...members.map(item => item.x + item.width)) - x + 24, height: Math.max(...members.map(item => item.y + item.height)) - y + 24 });
   }
-  const obstacles = bounds.filter(box => box.x < node.position.x + 334 && box.x + box.width > node.position.x - 24).sort((a, b) => a.y - b.y);
-  for (const box of obstacles) {
-    if (box.y < node.position.y + nodeSize(node).height + 24 && box.y + box.height > node.position.y - 72) node.position.y = box.y + box.height + 72;
-  }
+  const size = layoutSize(node), wanted = node.position;
+  const obstacles = bounds.map(box => ({ x: box.x - 24, y: box.y - 24, width: box.width + 48, height: box.height + 96 }));
+  node.position = nearestFreePosition(wanted, size, obstacles, { minX: wanted.x, minY: wanted.y - Math.min(200, size.height + 24) });
 }
 
 // Read only image headers; usable with both browser Uint8Arrays and Node Buffers.

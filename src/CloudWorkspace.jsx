@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { LanguageSelect } from './LanguageSelect.jsx';
+import { Preferences } from './Preferences.jsx';
+import { useWaitingVideos } from './PendingNode.jsx';
 import { plural, t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
 import { ReactFlowProvider, ViewportPortal } from '@xyflow/react';
@@ -31,7 +33,7 @@ import { VoiceAudio, VoiceControl } from './BoardVoice.jsx';
 import { ChatClient } from './board-chat.mjs';
 import { cloudVoice } from './cloud-voice.mjs';
 import { fireFeel, mountFeelOverlay, presets } from './feel.mjs';
-import { soundPreferenceKey, readSoundPreference, unlockSounds, playSound } from './sounds.mjs';
+import { soundPreferenceKey, readSoundPreference, writeSoundPreference, unlockSounds, playSound } from './sounds.mjs';
 import './cloud.css';
 
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -60,6 +62,9 @@ function BoardAccess({ board }) {
 
 function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLogout, theme, toggleTheme, error }) {
   const [teamOpen, setTeamOpen] = useState(false);
+  const waiting = useWaitingVideos(`cloud:${user.name}`), soundKey = soundPreferenceKey(`cloud:${user.name}`);
+  const [sounds, setSounds] = useState(() => readSoundPreference(localStorage, soundKey));
+  const toggleSounds = () => { const next = !sounds; writeSoundPreference(localStorage, soundKey, next); setSounds(next); if (next) unlockSounds(); };
   const [loading, setLoading] = useState(true), [loaded, setLoaded] = useState(false), [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState(false), [name, setName] = useState(''), [busy, setBusy] = useState(false), [createError, setCreateError] = useState('');
   const [now, setNow] = useState(Date.now);
@@ -133,6 +138,7 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
     <header className="app-header cloud-home-header"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
       <button className="theme-button" type="button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} title={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{theme === 'dark' ? <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></> : <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>}</svg></button>
       <LanguageSelect/>
+      <Preferences theme={theme} toggleTheme={toggleTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
       <AccountMenu user={user} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
     </div></header>
     {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}

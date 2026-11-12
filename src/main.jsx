@@ -7,7 +7,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
+import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -16,7 +16,7 @@ import { detectPlatform } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
 import { AnnotationTools, ArrowNode, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, ShapeNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
-import { arrowPalette, arrowPosition, boardAuthor, stamps, drawingFromStroke, isAnnotation, penPalette, reconcileArrows, shapeDefault, shapePalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
+import { arrowPalette, arrowPosition, shiftArrow, boardAuthor, stamps, drawingFromStroke, isAnnotation, penPalette, reconcileArrows, shapeDefault, shapePalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from './sections.mjs';
 import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSignature } from './history.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
@@ -26,6 +26,8 @@ import { nanoState, usesNano } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
+import { PendingNode, useWaitingVideos } from './PendingNode.jsx';
+import { runPlaceholders } from './run-placeholders.mjs';
 import { generationFocusNodes } from './generation-tray.mjs';
 import { switchNodeTemplate, templateFromNode } from './node-template.mjs';
 import { GettingStarted, useGettingStarted } from './GettingStarted.jsx';
@@ -34,6 +36,8 @@ import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx'
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
 import { BoardPages } from './BoardPages.jsx';
 import { LanguageSelect } from './LanguageSelect.jsx';
+import { Preferences } from './Preferences.jsx';
+import { boundingBox, revealViewport } from './node-placement.mjs';
 import { plural, t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
 import { arrangeLayers, layerShortcut, nextLayer, stackOnTop } from './layers.mjs';
@@ -480,7 +484,7 @@ function AnnotationNode(props) {
   const canvas = useCanvas(), Component = useDetail(props.id) === 'full' ? { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode, shape: ShapeNode, arrow: ArrowNode }[props.type] : LightAnnotation;
   return <Component {...props} actions={canvas}/>;
 }
-const nodeTypes = { text: TextNode, image: ImageNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode, shape: AnnotationNode, arrow: AnnotationNode };
+const nodeTypes = { text: TextNode, image: ImageNode, pending: PendingNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode, shape: AnnotationNode, arrow: AnnotationNode };
 function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
@@ -659,6 +663,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const [nodes, setNodes] = useState([]), [edges, setEdges] = useState([]), [runs, setRuns] = useState([]);
   const dictationLanguage = useDictationLanguage();
   const effects = useInteractionFeedback(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local');
+  const waiting = useWaitingVideos(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local');
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const userGeneration = useRef(null), runsToReveal = useRef(new Set());
   const feedbackSeeded = useRef(false);
   const [fileOver, setFileOver] = useState(false);
   const runRef = useRef(runs); runRef.current = runs;
@@ -722,7 +729,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const pairing = !!(cloudSession?.pairing || helperSession?.pairing), helperNeeded = cloud || hosted;
   // A viewer of a shared board sees it live and can select, copy and look around but change nothing; the room ignores their edits too.
   const readOnly = cloud && cloudSession.role === 'view', readOnlyRef = useRef(readOnly), canRename = !cloud || cloudSession.role === 'owner'; readOnlyRef.current = readOnly;
-  modalOpen.current = !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
+  modalOpen.current = !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   const flow = useReactFlow();
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
   const scoped = useMemo(() => pageContent({ nodes, edges, groups, sections }, activePage, pages), [nodes, edges, groups, sections, activePage, pages]);
@@ -819,7 +826,27 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     requestAnimationFrame(() => requestAnimationFrame(action));
     setTimeout(action, 350);
   };
-  const focusNode = (nodeId, control = 'text', preserveSelection = false) => {
+  const visiblePlacementBounds = () => {
+    const bounds = canvasElement.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const zoom = flow.getViewport().zoom, start = flow.screenToFlowPosition({ x: bounds.left + 30, y: bounds.top + 60 });
+    return { ...start, width: Math.max(0, bounds.width - 60) / zoom, height: Math.max(0, bounds.height - 150) / zoom };
+  };
+  const creationGraph = (page = activePageRef.current) => {
+    const graph = { ...currentGraph(), pages: pagesRef.current }, scoped = pageContent(graph, page);
+    return { ...scoped, nodes: [...scoped.nodes, ...runPlaceholders(graph, runRef.current, page).nodes] };
+  };
+  const cardBox = node => {
+    const size = measureView(viewCache.current)(node), caption = captionHeight(node);
+    return { x: node.position.x, y: node.position.y - caption, width: size.width, height: size.height + caption };
+  };
+  const revealCreated = (node, source) => {
+    if (!alive.current || !canvasElement.current || nodePage(node, pagesRef.current) !== activePageRef.current) return;
+    viewerMoved.current = true;
+    const bounds = canvasElement.current.getBoundingClientRect(), target = revealViewport(cardBox(node), flow.getViewport(), bounds, source && cardBox(source));
+    if (target) flow.setViewport(target, { duration: 220 });
+  };
+  const focusNode = (nodeId, control = 'text', preserveSelection = false, preserveZoom = false) => {
     const node = nodeRef.current.find(node => node.id === nodeId);
     if (!node || !alive.current) return;
     if (showPage(nodePage(node, pagesRef.current), false)) preserveSelection = false;
@@ -837,12 +864,16 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     highlightTimer.current = setTimeout(() => setHighlight(null), 6000);
     requestAnimationFrame(() => {
       if (!alive.current || !canvasElement.current) return;
+      if (preserveZoom) { revealCreated(nodeRef.current.find(node => node.id === nodeId) || node); return; }
       const bounds = canvasElement.current.getBoundingClientRect(), card = canvasElement.current.querySelector('.getting-started')?.getBoundingClientRect();
       const target = focusViewport(nodeRef.current.find(node => node.id === nodeId) || node, flow.getViewport(), { width: bounds.width, height: bounds.height, occlusion: card ? { x: card.left - bounds.left, y: card.top - bounds.top, width: card.width, height: card.height } : null });
       if (target) flow.setCenter(target.x, target.y, { zoom: target.zoom, duration: 180 });
     });
   };
-  const trackOwnRun = runId => { effects.ownRun(runId); guide.report({ type: 'run-started', id: runId }); };
+  const trackOwnRun = runId => {
+    effects.ownRun(runId); guide.report({ type: 'run-started', id: runId });
+    if (userGeneration.current) runsToReveal.current.add(runId);
+  };
   useEffect(() => {
     if (cloudSession) { cloudSession.onOwnRun = trackOwnRun; cloudSession.onAgentRun = nodeId => agentRunRef.current(nodeId); }
     return () => { if (cloudSession) cloudSession.onOwnRun = cloudSession.onAgentRun = null; };
@@ -1150,13 +1181,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         if (value.action === 'screenshot') {
           if (mcpLocked.current || !editorReady.current || screenshotId) { await send({ error: 'The editor is busy.' }).catch(() => {}); return; }
           screenshotId = id;
-          screenshotTimer = setTimeout(() => { screenshotId = null; send({ error: 'Screenshot timed out.' }).catch(() => {}); }, 26000);
+          screenshotTimer = setTimeout(() => { screenshotId = null; document.documentElement.classList.remove('mcp-screenshot'); send({ error: 'Screenshot timed out.' }).catch(() => {}); }, 26000);
           try {
+            // Native MCP screenshots also omit ephemeral canvas slots, without restarting their videos.
+            document.documentElement.classList.add('mcp-screenshot');
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            if (screenshotId !== id) return;
             const message = { type: 'mcp-screenshot', id };
             if (window.webkit?.messageHandlers?.conceptGraph) window.webkit.messageHandlers.conceptGraph.postMessage(message);
             else if (window.chrome?.webview) window.chrome.webview.postMessage(message);
             else throw new Error('Native screenshot is unavailable.');
-          } catch (error) { clearTimeout(screenshotTimer); screenshotId = null; await send({ error: error.message }).catch(() => {}); }
+          } catch (error) { clearTimeout(screenshotTimer); screenshotId = null; document.documentElement.classList.remove('mcp-screenshot'); await send({ error: error.message }).catch(() => {}); }
           return;
         }
         if (value.action === 'select_board') {
@@ -1196,7 +1231,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (helperSession) helperSession.reconnect = () => { events?.close(); connect(); saveFn.current().catch(error => notify(error.message)); };
     window.conceptGraphScreenshotResult = value => {
       if (!value || value.id !== screenshotId) return;
-      const id = screenshotId; screenshotId = null; clearTimeout(screenshotTimer);
+      const id = screenshotId; screenshotId = null; clearTimeout(screenshotTimer); document.documentElement.classList.remove('mcp-screenshot');
       api('/api/desktop/ui-results', jsonOptions('POST', { editorId: editorId.current, id, ...(value.error ? { error: String(value.error).slice(0, 500) } : { mimeType: value.mimeType, data: value.data }) })).catch(() => {});
     };
     (async () => {
@@ -1222,7 +1257,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       setLoaded(true); setSaved('All changes saved'); connect();
     })().catch(error => { if (!disposed) { setSaved('Could not load'); notify(error.message); } });
     return () => {
-      disposed = true; events?.close(); clearTimeout(retryTimer); clearTimeout(recoveryTimer); clearTimeout(screenshotTimer); clearTimeout(saveTimer.current); clearTimeout(toastTimer.current);
+      disposed = true; events?.close(); clearTimeout(retryTimer); clearTimeout(recoveryTimer); clearTimeout(screenshotTimer); clearTimeout(saveTimer.current); clearTimeout(toastTimer.current); document.documentElement.classList.remove('mcp-screenshot');
       if (helperSession) helperSession.reconnect = null;
       if (mcpEnabled) window.removeEventListener('pagehide', pagehide);
       if (!pageHiding) {
@@ -1235,16 +1270,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
 
   const addText = (position, text = '', template = null, extra = {}) => {
     checkpoint();
-    const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || freeSpot(pageGraph(), flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 })), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}), ...extra } });
+    const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 }), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}), ...extra } });
+    node.position = freeSpot(creationGraph(), node.position, visiblePlacementBounds(), { width: 310, height: Math.max(150, cardBox(node).height) });
     effects.createNodes([node.id]);
     putNodes(current => [...current.map(deselected), { ...node, selected: true }]); markDirty();
-    focusNode(node.id); guide.report({ type: 'prompt' });
+    focusNode(node.id, 'text', false, true); guide.report({ type: 'prompt' });
     return node;
   };
   // From a folded slideshow a new prompt goes beside the card, not beside the hidden image.
   const promptSpot = sourceId => {
     const graph = pageGraph(), folded = graph.groups.find(group => group.collapsed && group.slideshow && group.nodeIds.includes(sourceId)), box = folded && frameBox(folded, graph.nodes);
-    return box ? freeSpot(graph, { x: box.x + box.width + 90, y: box.y }) : freePromptPosition(graph, sourceId);
+    return box ? { x: box.x + box.width + 90, y: box.y } : freePromptPosition(graph, sourceId, visiblePlacementBounds());
   };
   // A describe node fed by the given images; from the sidebar, by the selected ones.
   const addDescribe = (sourceIds = pageGraph().nodes.filter(node => node.selected && node.type === 'image').map(node => node.id)) => {
@@ -1327,7 +1363,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const addImages = async (files, position) => {
     if (readOnlyRef.current) return;
     checkpoint(); uploads.current++; setUploading(true);
-    const page = activePageRef.current;
+    const page = activePageRef.current, added = [];
     try { for (const [index, file] of [...files].entries()) {
       try {
         const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
@@ -1339,18 +1375,25 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         // On team boards an image shows who added it, as a generated one shows who generated it.
         const author = boardAuthor(cloudSession?.user);
         const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { asset, caption: uniqueImageName(nodeRef.current, imageName({ data: { label: file.name } })), label: file.name || 'Pasted image', createdAt: new Date().toISOString(), ...shape, ...(author ? { author } : {}) } }, page);
+        const caption = captionHeight(node), renderedSize = nodeSize(node);
+        const spot = freeSpot(creationGraph(page), { x: node.position.x, y: node.position.y - caption }, page === activePageRef.current ? visiblePlacementBounds() : undefined, { width: renderedSize.width, height: renderedSize.height + caption });
+        node.position = { x: spot.x, y: spot.y + caption }; added.push(node);
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
-    } } finally { uploads.current--; setUploading(uploads.current > 0); }
+    } } finally { uploads.current--; setUploading(uploads.current > 0); if (added.length) requestAnimationFrame(() => revealCreated(added.at(-1))); }
   };
   const insertSelection = (selection, position, duplicate = false) => {
     if (!selection.nodes.length && !selection.sections?.length) return;
     let copied;
     try { copied = cloneSelection(selection, position, duplicate ? { nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, pages: pagesRef.current } : selection); }
     catch (error) { notify(error.message); return; }
-    const copiedSections = (copied.sections || []).map(placeOnPage);
+    let copiedSections = (copied.sections || []).map(placeOnPage);
     if (sectionRef.current.length + copiedSections.length > maxSections) { notify(t('A board can have at most {count} sections.', { count: maxSections })); return; }
     copied = { ...copied, nodes: stackOnTop(nodeRef.current, copied.nodes).map(placeOnPage) };
+    const box = boundingBox([...copied.nodes.map(cardBox), ...copiedSections]);
+    const spot = freeSpot(creationGraph(), box, visiblePlacementBounds(), box), dx = spot.x - box.x, dy = spot.y - box.y;
+    copied.nodes = copied.nodes.map(node => ({ ...node, position: { x: node.position.x + dx, y: node.position.y + dy }, ...(node.type === 'arrow' ? { data: shiftArrow(node.data, dx, dy) } : {}) }));
+    copiedSections = copiedSections.map(section => ({ ...section, x: section.x + dx, y: section.y + dy }));
     checkpoint();
     effects.createNodes(copied.nodes.map(node => node.id)); effects.createEdges(copied.edges.map(edge => edge.id), copied.edges.map(edge => edge.target));
     putNodes(current => [...current.map(deselected), ...copied.nodes]);
@@ -1359,7 +1402,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     putSections(current => [...current.map(deselected), ...copiedSections]);
     markDirty();
     const prompt = copied.nodes.find(node => node.type === 'text');
-    if (prompt) { focusNode(prompt.id, 'text', true); guide.report({ type: 'prompt' }); }
+    if (prompt) { focusNode(prompt.id, 'text', true, true); guide.report({ type: 'prompt' }); }
+    else { const page = activePageRef.current; requestAnimationFrame(() => revealCreated({ position: spot, measured: box, page })); }
   };
   // Deleting a section deletes what it holds, as in FigJam; Remove section keeps it. Stamps go with their nodes.
   const removal = ids => {
@@ -1736,6 +1780,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // Shift-click in a text field extends its text selection; it must not also add or remove the card.
   const shiftTextClick = event => { if (event.shiftKey && event.target.closest?.('textarea,input,[contenteditable="true"]')) event.stopPropagation(); };
   const nodesChanged = changes => {
+    changes = changes.filter(change => flow.getNode(change.id)?.type !== 'pending');
+    if (!changes.length) return;
     if (mcpLocked.current && changes.some(change => ['position', 'remove', 'add', 'replace', 'select'].includes(change.type) || (change.type === 'dimensions' && change.resizing !== undefined))) return;
     const groupIds = new Set(groupRef.current.map(group => group.id)), sectionIds = new Set(sectionRef.current.map(section => section.id)), moved = new Set();
     const before = nodeRef.current;
@@ -1912,6 +1958,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       return;
     }
     effects.start(nodeId, event);
+    userGeneration.current = { nodeId };
+    viewerMoved.current = true;
     generationStarting.current = true;
     setStarting(nodeId);
     try {
@@ -1934,7 +1982,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       }
       notify(error.message);
     }
-    finally { generationStarting.current = false; setStarting(null); }
+    finally { userGeneration.current = null; generationStarting.current = false; setStarting(null); }
   };
   runAction.current = run;
   // An agent the person connected over MCP generates through this tab, on whatever Codex Generate would use. Nothing opens
@@ -2117,15 +2165,30 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const viewCache = useRef(null); viewCache.current ||= createViewCache();
   const shownGroups = useMemo(() => viewerSlides.size ? scoped.groups.map(group => viewerSlides.has(group.id) ? { ...group, slide: viewerSlides.get(group.id) } : group) : scoped.groups, [scoped.groups, viewerSlides]);
-  const view = useMemo(() => { viewCache.current.aspects = learnedAspects; return canvasView(scoped.nodes, scoped.edges, shownGroups, viewCache.current, scoped.sections); }, [scoped, shownGroups, learnedAspects]);
-  const extent = useMemo(() => boardExtent(scoped, measureView(viewCache.current)), [scoped]);
+  // Only the canvas projection sees pending slots; board state and every persistence path keep real nodes only.
+  const placeholders = useMemo(() => runPlaceholders({ nodes, edges, groups, pages }, runs, activePage), [nodes, edges, groups, pages, runs, activePage]);
+  const displayed = useMemo(() => placeholders.nodes.length ? { ...scoped, nodes: [...scoped.nodes, ...placeholders.nodes], edges: [...scoped.edges, ...placeholders.edges] } : scoped, [scoped, placeholders]);
+  const view = useMemo(() => { viewCache.current.aspects = learnedAspects; return canvasView(displayed.nodes, displayed.edges, shownGroups, viewCache.current, displayed.sections); }, [displayed, shownGroups, learnedAspects]);
+  const extent = useMemo(() => boardExtent(displayed, measureView(viewCache.current)), [displayed]);
+  useEffect(() => {
+    for (const runId of runsToReveal.current) {
+      const run = runs.find(run => run.id === runId);
+      if (!run) continue;
+      runsToReveal.current.delete(runId);
+      if (!busy(run)) continue;
+      const target = view.nodes.find(node => node.id === run.outputIds?.[0]) || view.nodes.find(node => node.type === 'pending' && node.data.runId === runId);
+      if (!target || target.hidden) continue;
+      const prompt = view.nodes.find(node => node.id === run.nodeId && !node.hidden);
+      revealCreated(target, prompt);
+    }
+  });
   // Gestures stop at 0.15 (light cards), but never before the zoom that shows the whole page, as opening the board does.
   const minZoom = useMemo(() => {
-    const box = canvasElement.current?.getBoundingClientRect(), [[left, top], [right, bottom]] = boardExtent(scoped, measureView(viewCache.current), 0);
+    const box = canvasElement.current?.getBoundingClientRect(), [[left, top], [right, bottom]] = boardExtent(displayed, measureView(viewCache.current), 0);
     if (!box?.width || right <= left) return .15;
     const fit = Math.min(box.width / ((right - left) * 1.36), box.height / ((bottom - top) * 1.36));
     return Math.max(fitFloor(), Math.min(.15, fit * .9));
-  }, [scoped]);
+  }, [displayed]);
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
   const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
@@ -2142,7 +2205,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const lookups = useMemo(() => runLookups(runs), [runs]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
   const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
-  const edgesChanged = changes => { if (mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
+  const edgesChanged = changes => { changes = changes.filter(change => flow.getEdge(change.id)?.className !== 'pending-edge'); if (!changes.length || mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
   const connectStart = (_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === slideSource(params.nodeId))?.type || 'text'); };
   const nodeDragStart = (event, node, dragged = [node]) => {
     if (mcpLocked.current) return;
@@ -2205,7 +2268,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
-    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded };
+    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
@@ -2243,7 +2306,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
   return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
-    <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
+    <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
     {cloudSession?.panels}
     <aside className="sidebar" inert={!!transfer || switching ? true : undefined}>
       <div className="board-heading"><span className="eyebrow">{t('YOUR BOARDS')}</span><div className="board-picker"><select data-tooltip={t('Switch board')} aria-label={t('Board')} value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip={t('Rename board')} aria-label={t('Rename board')} className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}{canRename && <button data-tooltip={t('Delete board')} aria-label={t('Delete board')} className="icon-button board-delete" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setDeleteName(''); setBoardForm('delete'); }}><Icon name="trash" size={15}/></button>}</div><button className="new-board" data-tooltip={t('Create a new board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> {t('New board')}</button>{!cloud && <div className="board-transfer"><button data-tooltip={t('Save this board with its images')} aria-label={t('Export board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> {t('Export')}</button><button data-tooltip={t('Import a .conceptgraph file as a new board')} aria-label={t('Import board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> {t('Import')}</button></div>}</div>

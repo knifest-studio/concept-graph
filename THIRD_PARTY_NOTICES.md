@@ -2,6 +2,19 @@
 
 Production dependencies used by Concept Graph. Copyrights and licenses belong to their respective owners. The source release does not bundle Node.js or Codex. Desktop previews include Node.js and its license; a separately installed Codex CLI is governed by its own license and notices.
 
+## Waiting videos
+
+The clips in `public/waiting/` are cropped, shortened and re-encoded stock videos from Pexels, used under the [Pexels License](https://www.pexels.com/license/) (free to use and modify, attribution not required):
+
+- `01.mp4`: https://www.pexels.com/video/a-person-squeezing-the-slime-6150663/
+- `02.mp4`: https://www.pexels.com/video/a-hand-under-yellow-tinted-sand-5871931/
+- `03.mp4`: https://www.pexels.com/video/close-up-of-clay-handcraft-shaping-12690275/
+- `04.mp4`: https://www.pexels.com/video/close-up-shot-of-paints-mixing-4365145/
+- `05.mp4`: https://www.pexels.com/video/video-of-a-fluid-art-painting-6617307/
+- `06.mp4`: https://www.pexels.com/video/close-up-view-of-flowing-colorful-liquid-5915047/
+- `07.mp4`: https://www.pexels.com/video/colored-paint-mixing-5877408/
+- `08.mp4`: https://www.pexels.com/video/close-up-footage-of-glitters-flowing-on-a-water-3971198/
+
 ## @types/d3-color 3.1.3
 
 License: MIT

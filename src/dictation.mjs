@@ -2,6 +2,10 @@ import { t } from './i18n.mjs';
 
 const languages = { uk: 'uk-UA', ru: 'ru-RU', en: 'en-US' };
 const browserLanguage = locale => languages[locale?.toLowerCase().split('-')[0]] || 'en-US';
+export const dictationPreferenceKey = 'concept-graph-dictation-preference';
+export function readDictationPreference(storage) {
+  try { const value = storage.getItem(dictationPreferenceKey); return Object.values(languages).includes(value) ? value : ''; } catch { return ''; }
+}
 
 export function typedLanguage(text, previous = '', locale = '') {
   for (const letter of text || '') {
@@ -23,7 +27,8 @@ export function layoutLanguage(layout) {
   return '';
 }
 
-export function dictationLanguage(layout, typed = '', locale = '', text = '') {
+export function dictationLanguage(layout, typed = '', locale = '', text = '', preferred = '') {
+  if (Object.values(languages).includes(preferred)) return preferred;
   const mapped = layoutLanguage(layout);
   // Chrome's Keyboard Map usually reports the ASCII layout even while Cyrillic is active,
   // so trust it only for Cyrillic; then the prompt's own language, then the last language used.

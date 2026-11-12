@@ -1,9 +1,32 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { dictationError, dictationLanguage, dictationResults, insertDictation, nextDictationLanguage, typedLanguage } from './dictation.mjs';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { dictationError, dictationLanguage, dictationResults, insertDictation, nextDictationLanguage, typedLanguage, dictationPreferenceKey, readDictationPreference } from './dictation.mjs';
 
 const storageKey = 'concept-graph-dictation-language';
 const readLanguage = () => { try { return localStorage.getItem(storageKey) || ''; } catch { return ''; } };
 const lastTypedLanguage = { current: readLanguage() };
+const listeners = new Set();
+let preferredLanguage = (() => { try { return readDictationPreference(localStorage); } catch { return ''; } })();
+const subscribePreference = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+const setDictationPreference = value => {
+  preferredLanguage = value;
+  try { localStorage.setItem(dictationPreferenceKey, value); } catch {}
+  for (const listener of listeners) listener();
+};
+export function useDictationPreference() {
+  const value = useSyncExternalStore(subscribePreference, () => preferredLanguage);
+  useEffect(() => {
+    preferredLanguage = readDictationPreference(localStorage);
+    for (const listener of listeners) listener();
+    const changed = event => {
+      if (event.key !== dictationPreferenceKey && event.key !== null) return;
+      preferredLanguage = readDictationPreference(localStorage);
+      for (const listener of listeners) listener();
+    };
+    window.addEventListener('storage', changed);
+    return () => window.removeEventListener('storage', changed);
+  }, []);
+  return [value, setDictationPreference];
+}
 // Remembered across reloads: Chrome cannot report a Cyrillic layout until the user types.
 const rememberLanguage = lang => {
   if (!lang || lang === lastTypedLanguage.current) return;
@@ -102,7 +125,7 @@ export function usePromptDictation(editor, value, onChange, language, effects) {
       let layout;
       try { if (navigator.keyboard?.getLayoutMap) layout = await navigator.keyboard.getLayoutMap(); } catch { /* Use the last typed language when the map is blocked. */ }
       if (session.current !== current) return;
-      begin(current, dictationLanguage(layout, language.current, navigator.language, latest.current.value));
+      begin(current, dictationLanguage(layout, language.current, navigator.language, latest.current.value, preferredLanguage));
     } catch (error) {
       if (session.current !== current) return;
       cancel();
@@ -115,6 +138,7 @@ export function usePromptDictation(editor, value, onChange, language, effects) {
     if (!current?.lang || current.stopping) return;
     const lang = nextDictationLanguage(current.lang);
     rememberLanguage(lang);
+    if (preferredLanguage) setDictationPreference(lang);
     detach(current.recognition);
     Object.assign(current, { recognition: null, started: false, committed: 0 });
     try { begin(current, lang); } catch { cancel(); setState(state => ({ ...state, error: dictationError('') })); }

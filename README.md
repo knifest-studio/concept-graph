@@ -6,6 +6,8 @@
 
 Write a prompt, connect references, and run it. Generated images appear as connected nodes. Branch from any result, compare directions, and keep the path that led there.
 
+Active runs show temporary output nodes with looping muted videos (text descriptions use a shimmer), and the personal **Videos while generating** switch in **Preferences** or your system’s reduced-motion setting replaces videos with a calm shimmer.
+
 ![A real courier robot concept branching into city and forest variations](docs/images/canvas.jpg)
 
 Concept Graph is available as a desktop preview with a local server that uses Codex CLI, or can be run from source in a browser. It is an independent project, not an OpenAI product.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyChecklist, readChecklist, writeChecklist, checklistEvent, checklistSteps, directInputs, inputLabel, freePromptPosition, focusViewport, generationIntent, intentUnchanged, generationReadiness } from '../src/onboarding.mjs';
+import { emptyChecklist, readChecklist, writeChecklist, checklistEvent, checklistSteps, directInputs, inputLabel, freePromptPosition, freeSpot, focusViewport, generationIntent, intentUnchanged, generationReadiness } from '../src/onboarding.mjs';
 
 const text = (id, value = 'A bird', x = 0, y = 0) => ({ id, type: 'text', position: { x, y }, data: { text: value } });
 const asset = '12345678-1234-1234-1234-123456789abc.png';
@@ -17,9 +17,20 @@ test('input chip counts directly connected nodes once and excludes ancestors and
 test('variation placement finds space to the right without moving nodes or group frames', () => {
   const graph = { nodes: [image('source'), text('block', '', 400, 0), image('tall', 400, 300)], edges: [], groups: [{ id: 'g', name: 'Group', collapsed: false, nodeIds: ['block', 'tall'] }] };
   const before = structuredClone(graph), position = freePromptPosition(graph, 'source');
-  assert.equal(position.x, 400); assert.ok(position.y >= 640); assert.deepEqual(graph, before);
+  assert.equal(position.x, 400); assert.ok(position.y < 0); assert.ok(Math.abs(position.y) < 640); assert.deepEqual(graph, before);
   assert.deepEqual(freePromptPosition({ nodes: [image('source')], edges: [] }, 'source'), { x: 400, y: 0 });
   assert.throws(() => freePromptPosition(graph, 'missing'), /no longer exists/);
+});
+
+test('new nodes prefer an available spot inside the viewport and fall back nearby when it is full', () => {
+  const bounds = { x: 0, y: 0, width: 1000, height: 600 }, board = { nodes: [text('block', '', 500, 0)], edges: [], groups: [] };
+  const spot = freeSpot(board, { x: 12000, y: 12000 }, bounds);
+  assert.ok(spot.x >= 0 && spot.x + 310 <= 1000 && spot.y >= 0 && spot.y + 150 <= 600);
+  const full = { nodes: [{ ...image('full'), measured: { width: 1000, height: 600 } }], edges: [], groups: [] };
+  const outside = freeSpot(full, { x: 500, y: 200 }, bounds);
+  assert.ok(outside.x >= 1030 || outside.x + 310 <= -30 || outside.y >= 630 || outside.y + 150 <= -54);
+  const portrait = freeSpot(board, { x: 200, y: 400 }, bounds, { width: 310, height: 500 });
+  assert.ok(portrait.y >= 0 && portrait.y + 500 <= 600);
 });
 
 test('focus keeps a readable visible viewport and recenters only an off-screen or tiny prompt', () => {

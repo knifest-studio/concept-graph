@@ -29,5 +29,5 @@ export function generationRows(runs, previous = [], now = Date.now(), dismissed 
 export function generationFocusNodes(run, nodes, groups) {
   const ids = new Set([run.nodeId, ...(run.outputIds || [])]);
   for (const group of groups) if (group.collapsed && group.nodeIds.some(id => ids.has(id))) ids.add(group.id);
-  return nodes.filter(node => !node.hidden && ids.has(node.id)).map(node => ({ id: node.id }));
+  return nodes.filter(node => !node.hidden && (ids.has(node.id) || (node.type === 'pending' && node.data.runId === run.id))).map(node => ({ id: node.id }));
 }

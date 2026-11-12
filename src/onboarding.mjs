@@ -1,6 +1,7 @@
-import { collectInputs, isDescribe } from '../graph.mjs';
+import { collectInputs, isDescribe, nodeSize as graphNodeSize, captionHeight } from '../graph.mjs';
 import { groupBounds } from './canvas.mjs';
 import { plural, t } from './i18n.mjs';
+import { nearestFreePosition } from './node-placement.mjs';
 
 export const gettingStartedKey = viewer => `concept-graph-getting-started:${viewer}`;
 export const emptyChecklist = () => ({ done: { helper: false, prompt: false, generate: false, variation: false }, ownRuns: [], dismissed: false });
@@ -80,22 +81,20 @@ export function intentUnchanged(intent, graph, boardId) {
   catch { return false; }
 }
 
-const nodeSize = node => node.data.collapsed ? { width: 72, height: 72 } : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'image' ? 310 : 150) };
+const nodeSize = node => node.type === 'text' && !node.data.collapsed ? { width: node.measured?.width || 310, height: node.measured?.height || node.data.height || 150 } : graphNodeSize(node);
 
-export function freePromptPosition(graph, sourceId) {
+export function freePromptPosition(graph, sourceId, bounds) {
   const source = graph.nodes.find(node => node.id === sourceId);
   if (!source) throw new Error(t('Reference node no longer exists.'));
-  return freeSpot(graph, { x: source.position.x + nodeSize(source).width + 90, y: source.position.y });
+  return freeSpot(graph, { x: source.position.x + nodeSize(source).width + 90, y: source.position.y }, bounds);
 }
 
-// Moves a new prompt down from the wanted spot until it overlaps no node or group.
-export function freeSpot(graph, wanted) {
-  const position = { ...wanted }, width = 310, height = 150, gap = 30;
-  const boxes = [...graph.nodes.map(node => ({ ...node.position, ...nodeSize(node) })), ...(graph.groups || []).map(group => groupBounds(group, graph.nodes))];
-  for (const box of boxes.filter(box => box.x < position.x + width + gap && box.x + box.width + gap > position.x).sort((a, b) => a.y - b.y)) {
-    if (position.y < box.y + box.height + gap && position.y + height + gap > box.y) position.y = box.y + box.height + gap;
-  }
-  return position;
+// Prefer a free spot in the visible canvas, then the nearest space outside it.
+export function freeSpot(graph, wanted, bounds, size = { width: 310, height: 150 }) {
+  const boxes = [...graph.nodes.map(node => { const size = nodeSize(node), caption = captionHeight(node); return { x: node.position.x, y: node.position.y - caption, width: size.width, height: size.height + caption }; }), ...(graph.groups || []).map(group => groupBounds(group, graph.nodes))];
+  const obstacles = boxes.map(box => ({ x: box.x - 30, y: box.y - 30, width: box.width + 60, height: box.height + 60 }));
+  const limits = bounds && { minX: bounds.x, maxX: bounds.x + bounds.width - size.width, minY: bounds.y, maxY: bounds.y + bounds.height - size.height };
+  return (bounds && nearestFreePosition(wanted, size, obstacles, limits)) || nearestFreePosition(wanted, size, obstacles);
 }
 
 export function focusViewport(node, viewport, bounds) {

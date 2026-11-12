@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { imageSize, imageNode, nodeSize, captionHeight, positionRunOutput, validateGraph } from '../graph.mjs';
+import { imageSize, imageNode, nodeSize, captionHeight, positionRunOutput, positionFirstOutput, validateGraph } from '../graph.mjs';
 import { alignNodes, groupBounds } from '../src/canvas.mjs';
 
 const asset = '12345678-1234-1234-1234-123456789abc.png';
@@ -59,7 +59,42 @@ test('mixed portrait, landscape, measured and legacy outputs stack with a 30px g
   assert.deepEqual(graph.nodes.map(node => node.position.y), [40, 714, 923, 1427]);
   const next = imageNode(run, asset, 0, { width: 100, height: 200 });
   positionRunOutput(next, graph, run);
-  assert.ok(next.position.y > graph.nodes.at(-1).position.y + 310);
+  assert.deepEqual(next.position, { x: 804, y: 40 });
+});
+
+test('a first output takes a nearer right column instead of falling below a tall column', () => {
+  const blocker = imageNode(run, asset, 0); blocker.position = { x: 470, y: 0 }; blocker.measured = { width: 310, height: 4000 };
+  const graph = { nodes: [blocker], edges: [], groups: [] }, before = structuredClone(graph);
+  const output = imageNode(run, asset, 0);
+  positionFirstOutput(output, graph);
+  assert.deepEqual(output.position, { x: 804, y: 40 }); assert.deepEqual(graph, before);
+  const secondColumn = { ...blocker, id: 'second', position: { x: 804, y: 0 } };
+  const next = imageNode(run, asset, 0);
+  positionFirstOutput(next, { ...graph, nodes: [secondColumn, blocker] });
+  assert.deepEqual(next.position, { x: 1138, y: 40 });
+});
+
+test('first outputs compare short downward and upward moves, preserving a free wanted position', () => {
+  const blocker = { id: 'block', type: 'text', position: { x: 470, y: 100 }, measured: { width: 310, height: 100 }, data: { text: '', height: 100 } };
+  const output = imageNode(run, asset, 0);
+  positionFirstOutput(output, { nodes: [blocker], groups: [] });
+  assert.deepEqual(output.position, { x: 470, y: 272 });
+  const up = imageNode(run, asset, 0);
+  positionFirstOutput(up, { nodes: [{ ...blocker, position: { x: 470, y: 330 } }], groups: [] });
+  assert.deepEqual(up.position, { x: 470, y: -4 });
+  const free = imageNode(run, asset, 0);
+  positionFirstOutput(free, { nodes: [{ ...blocker, position: { x: 2000, y: 0 } }], groups: [] });
+  assert.deepEqual(free.position, { x: 470, y: 40 });
+});
+
+test('placement avoids group frames and is deterministic under obstacle reordering', () => {
+  const members = [0, 1].map(index => ({ id: `member-${index}`, type: 'text', position: { x: 450 + index * 400, y: index * 500 }, data: { text: '' } }));
+  const groups = [{ id: 'g', name: 'G', nodeIds: members.map(node => node.id) }];
+  const first = imageNode(run, asset, 0), second = imageNode(run, asset, 0);
+  positionFirstOutput(first, { nodes: members, groups }); positionFirstOutput(second, { nodes: [...members].reverse(), groups });
+  assert.deepEqual(first.position, second.position);
+  const frame = groupBounds(groups[0], members);
+  assert.ok(first.position.x >= frame.x + frame.width || first.position.x + 310 <= frame.x || first.position.y >= frame.y + frame.height || first.position.y + 310 <= frame.y);
 });
 
 test('Auto-align repairs expanded group overlaps using measured heights and captions without mutating inputs', () => {

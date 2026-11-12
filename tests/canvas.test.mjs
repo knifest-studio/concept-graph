@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
+test('server first-output placement clears the same multiline prompt bounds the canvas draws', () => {
+  const prompt = { id: 'prompt', type: 'text', position: { x: 400, y: 0 }, data: { text: 'A long prompt. '.repeat(150) } };
+  const output = { id: 'output', type: 'image', position: { x: 400, y: 100 }, data: {} };
+  positionFirstOutput(output, { nodes: [prompt], edges: [], groups: [] });
+  const size = estimatedSize(prompt);
+  assert.equal(size.height, 310);
+  assert.ok(output.position.x >= prompt.position.x + size.width || output.position.y >= prompt.position.y + size.height || output.position.y + 310 <= prompt.position.y);
+});
+
 test('undo preserves only a subsequently merged generation caption, without undoing manual edits', () => {
   const image = caption => ({ id: 'image', type: 'image', data: { runId: 'run', ...(caption === undefined ? {} : { caption }) } });
   const snapshot = [image(undefined)], merged = mergeRemoteImageCaptions(snapshot, [image('Front view')], snapshot);
@@ -119,15 +128,15 @@ test('a save returns its assigned revision even when generation changes the grap
   assert.equal(graph.revision, 5);
 });
 
-test('first output is placed below existing content and group frames in its column', () => {
+test('first output chooses nearby free columns clear of existing content and group frames', () => {
   const output = image('out', 400, 0);
   const graph = { nodes: [image('a', 400, 200), image('b', 800, 900)], groups: [] };
   positionFirstOutput(output, graph);
-  assert.equal(output.position.y, 892);
+  assert.deepEqual(output.position, { x: 734, y: 0 });
   const grouped = image('next', 400, 0);
   graph.groups = [{ id: 'group', name: 'Group', nodeIds: ['a', 'b'], collapsed: false }];
   positionFirstOutput(grouped, graph);
-  assert.equal(grouped.position.y, 1616);
+  assert.deepEqual(grouped.position, { x: 1158, y: 0 });
   const nearby = image('nearby', 400, 0);
   positionFirstOutput(nearby, { nodes: [image('far', 400, 1000000)], groups: [] });
   assert.equal(nearby.position.y, 0);

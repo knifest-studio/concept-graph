@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { dictationPreferenceKey, readDictationPreference } from '../src/dictation.mjs';
 import assert from 'node:assert/strict';
 import { dictationError, dictationLanguage, dictationResults, insertDictation, layoutLanguage, typedLanguage } from '../src/dictation.mjs';
 
@@ -81,4 +82,15 @@ test('the prompt language beats an ASCII keyboard map, and the language tag cycl
   assert.equal(dictationLanguage(ascii, 'ru-RU', 'en-US', ''), 'ru-RU');
   assert.equal(dictationLanguage(new Map([['KeyS', 'ы']]), '', 'en-US', 'стилі'), 'ru-RU');
   assert.deepEqual(['uk-UA', 'en-US', 'ru-RU'].map(nextDictationLanguage), ['en-US', 'ru-RU', 'uk-UA']);
+});
+
+test('a saved dictation choice overrides detection and automatic mode preserves existing detection', () => {
+  for (const preferred of ['uk-UA', 'en-US', 'ru-RU']) {
+    const storage = { getItem: key => key === dictationPreferenceKey ? preferred : null };
+    assert.equal(readDictationPreference(storage), preferred);
+    assert.equal(dictationLanguage(null, 'uk-UA', 'en-US', 'English prompt', preferred), preferred);
+  }
+  assert.equal(readDictationPreference({ getItem: () => 'invalid' }), '');
+  assert.equal(readDictationPreference({ getItem() { throw Error('Denied'); } }), '');
+  assert.equal(dictationLanguage(null, 'uk-UA', 'en-US', 'English prompt', ''), 'en-US');
 });

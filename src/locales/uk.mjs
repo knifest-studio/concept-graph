@@ -1,5 +1,18 @@
 // Ukrainian interface text, keyed by the English it replaces. Plurals list the one, few, many and other forms.
 export default {
+  'Preferences': 'Налаштування',
+  'Theme': 'Тема',
+  'Light': 'Світла',
+  'Dark': 'Темна',
+  'Interface language': 'Мова інтерфейсу',
+  'Sounds': 'Звуки',
+  'Dictation language': 'Мова диктування',
+  'Automatic': 'Автоматично',
+  'Ukrainian': 'Українська',
+  'English': 'Англійська',
+  'Russian': 'Російська',
+  'Your system’s reduced-motion setting turns videos off.': 'Системне налаштування зменшення руху вимикає відео.',
+  'Videos while generating': 'Відео під час генерації',
   // Board conversation
   'Chat': 'Чат',
   'Board chat': 'Чат дошки',
