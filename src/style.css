@@ -253,7 +253,7 @@ button,a,.image-collapse,.image-prompt-from,.image-expand,.image-shade{transitio
 .pending-text .pending-card{border-color:color-mix(in srgb,var(--blue) 32%,var(--border))}
 .pending-media{position:absolute;inset:0;overflow:hidden;border-radius:inherit}
 .pending-shimmer{position:absolute;inset:0;background:linear-gradient(110deg,var(--card) 20%,var(--bg) 45%,var(--card) 70%);background-size:250% 100%;animation:pending-shimmer 3.5s ease-in-out infinite}
-.pending-node video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;opacity:0}
+.pending-node video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;opacity:0;transition:opacity .25s ease}
 .pending-node video.playing{opacity:1}
 .pending-status{position:absolute;left:12px;bottom:12px;padding:5px 9px;border:1px solid var(--border);border-radius:20px;background:var(--card);color:var(--muted);font-size:11px;line-height:1.3}
 .pending-node .react-flow__handle{visibility:hidden}

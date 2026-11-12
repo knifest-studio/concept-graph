@@ -4,6 +4,7 @@ import { useCanvasValue, useDetail } from './canvas-context.jsx';
 import { readSoundPreference, writeSoundPreference } from './sounds.mjs';
 import { usePendingAnimation } from './PendingEdge.jsx';
 import { t } from './i18n.mjs';
+import { waitingVideos } from './waiting-videos.mjs';
 
 export function useWaitingVideos(viewer) {
   const key = `concept-graph-waiting-videos:${viewer}`;
@@ -22,10 +23,18 @@ export function useWaitingVideos(viewer) {
   }) };
 }
 
+// One clip on repeat gets dull on a long run: when it ends, the next one in the list fades in. Neighbouring
+// placeholders start on different clips and step together, so they keep showing different ones.
 function WaitingVideo({ src }) {
-  const [playing, setPlaying] = useState(false), [failed, setFailed] = useState(false);
-  return !failed && <video src={src} muted loop autoPlay playsInline preload="auto" aria-hidden="true" className={playing ? 'playing' : ''}
-    onPlaying={() => setPlaying(true)} onWaiting={() => setPlaying(false)} onPause={() => setPlaying(false)} onError={() => setFailed(true)}/>;
+  const start = Math.max(0, waitingVideos.indexOf(src));
+  const [step, setStep] = useState(0), [playing, setPlaying] = useState(false), [errors, setErrors] = useState(0);
+  const clip = waitingVideos[(start + step) % waitingVideos.length], next = waitingVideos[(start + step + 1) % waitingVideos.length];
+  // Fetch the following clip while this one plays, so the switch does not wait for the network.
+  useEffect(() => { const ahead = document.createElement('video'); ahead.muted = true; ahead.preload = 'auto'; ahead.src = next; return () => ahead.removeAttribute('src'); }, [next]);
+  // A missing file is skipped; when none of them load the shimmer stays.
+  return errors < waitingVideos.length && <video src={clip} muted loop={waitingVideos.length < 2} autoPlay playsInline preload="auto" aria-hidden="true" className={playing ? 'playing' : ''}
+    onPlaying={() => { setPlaying(true); setErrors(0); }} onWaiting={() => setPlaying(false)} onPause={() => setPlaying(false)}
+    onEnded={() => setStep(step + 1)} onError={() => { setErrors(errors + 1); setStep(step + 1); }}/>;
 }
 
 function PendingSplash({ spawnAt, height }) {
