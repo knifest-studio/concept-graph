@@ -100,3 +100,11 @@ export function writePagePreference(storage, key, { page, viewports }, pages) {
 }
 
 export const peersOnPage = (peers, pages, pageId) => peers.filter(peer => resolvePage(pages, peer.page) === pageId);
+
+// A remembered view reopens only while it still shows some of the page's content (boxes in flow coordinates);
+// otherwise, or when nothing is remembered, the caller fits the page instead.
+export function openingViewport(view, boxes, size) {
+  if (!view || !['x', 'y', 'zoom'].every(name => Number.isFinite(view[name])) || !(view.zoom > 0) || !(size?.width > 0) || !(size?.height > 0)) return null;
+  const left = -view.x / view.zoom, top = -view.y / view.zoom, right = left + size.width / view.zoom, bottom = top + size.height / view.zoom;
+  return boxes.some(box => box.x < right && box.x + box.width > left && box.y < bottom && box.y + box.height > top) ? { x: view.x, y: view.y, zoom: view.zoom } : null;
+}

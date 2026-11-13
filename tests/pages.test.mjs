@@ -16,7 +16,7 @@ import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { exportBoardArchive, importBoardArchive } from '../board-archive.mjs';
 import { createBoard, loadWorkspace, writeWorkspace } from '../workspace.mjs';
-import { assignPage, boardPages, mergePages, nextPageName, nodePage, pageContent, peersOnPage, readPagePreference, storedPages, targetPage, writePagePreference } from '../src/pages.mjs';
+import { assignPage, boardPages, mergePages, nextPageName, nodePage, openingViewport, pageContent, peersOnPage, readPagePreference, storedPages, targetPage, writePagePreference } from '../src/pages.mjs';
 
 const asset = '12345678-1234-1234-1234-123456789abc.png';
 const first = { id: 'page-1', name: 'Page 1' }, second = { id: 'b', name: 'Backgrounds' }, pages = [first, second];
@@ -321,4 +321,17 @@ test('local server freezes the run page, keeps pages for editors that omit them 
   const { pages: kept, ...older } = graph;
   assert.equal((await request(route + '/graph', 'PUT', older)).status, 200);
   assert.deepEqual((await request(route)).value.board.graph.pages, kept);
+});
+
+test('a remembered view reopens only while it still shows some of the page', () => {
+  const boxes = [{ x: 1000, y: 500, width: 300, height: 200 }], size = { width: 800, height: 600 };
+  // Zoom 0.5 at (-400, -200) shows flow x 800–2400, y 400–1600: the card is on screen.
+  assert.deepEqual(openingViewport({ x: -400, y: -200, zoom: .5 }, boxes, size), { x: -400, y: -200, zoom: .5 });
+  // Panned far away, nothing on screen: fit instead.
+  assert.equal(openingViewport({ x: 5000, y: 5000, zoom: 1 }, boxes, size), null);
+  assert.equal(openingViewport(undefined, boxes, size), null);
+  assert.equal(openingViewport(false, boxes, size), null);
+  assert.equal(openingViewport({ x: 0, y: 0, zoom: 0 }, boxes, size), null);
+  assert.equal(openingViewport({ x: -400, y: -200, zoom: .5 }, boxes, { width: 0, height: 0 }), null);
+  assert.equal(openingViewport({ x: -400, y: -200, zoom: .5 }, [], size), null);
 });

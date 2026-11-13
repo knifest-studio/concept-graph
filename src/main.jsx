@@ -47,7 +47,7 @@ import { boundingBox, revealViewport } from './node-placement.mjs';
 import { plural, t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
 import { arrangeLayers, layerShortcut, nextLayer, stackOnTop } from './layers.mjs';
-import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
+import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, openingViewport, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
 import { gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
 import { CanvasContext, useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
 import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual } from './canvas-store.mjs';
@@ -771,6 +771,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (!nodesInitialized || !flow.viewportInitialized) return;
     openingViewDone.current = true;
     const page = activePageRef.current, fit = () => flow.fitView({ padding: .18, minZoom: fitFloor(), maxZoom: 1 });
+    // Reopening returns to this person's last view of the page while it still shows something; first visits fit the page.
+    const size = measureView(viewCache.current), { width, height } = flowStore.getState();
+    const boxes = [...scoped.nodes.map(node => ({ ...node.position, ...size(node) })), ...scoped.sections];
+    const kept = openingViewport(pagePreference.current.viewports[page] || (page === defaultPageId && !cloud && base.current.viewport), boxes, { width, height });
+    if (kept) { viewerMoved.current = true; flow.setViewport(kept); return; }
     fit();
     // Image nodes grow as their pictures load, so refit briefly unless the viewer has moved the canvas.
     [400, 1000, 2000, 3500].forEach(ms => setTimeout(() => { if (!viewerMoved.current && activePageRef.current === page) fit(); }, ms));
