@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, isGptImage, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -219,6 +219,7 @@ define('update_node', 'Change a node: move it, restack it, fold it, or edit what
     if (only('generator', ['text'])) setGenerator(item.data, args.generator);
     if (only('variants', ['text'])) setVariants(item.data, args.variants);
     if (only('describe', ['text'])) { if (args.describe) item.data.task = describeTask; else delete item.data.task; }
+    if (args.generator !== undefined) { const main = mainImageFor(graph.nodes, graph.edges, item); if (main) item.data.mainImage = main; }
     if (only('caption', ['image'])) { if (args.caption) item.data.caption = args.caption; else delete item.data.caption; }
     if (only('label', ['image'])) item.data.label = args.label;
     if (only('color', ['sticky', 'shape', 'arrow', 'drawing'])) item.data.color = args.color;

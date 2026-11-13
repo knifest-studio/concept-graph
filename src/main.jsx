@@ -8,7 +8,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
+import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -1742,7 +1742,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const node = nodeRef.current.find(item => item.id === nodeId);
     if (mcpLocked.current || node?.type !== 'text' || (node.data.generator || null) === (generator || null)) return;
     checkpoint();
-    putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (generator) data.generator = generator; else delete data.generator; return { ...item, data }; }));
+    putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (generator) data.generator = generator; else delete data.generator; const main = mainImageFor(current, edgeRef.current, { ...item, data }); if (main) data.mainImage = main; return { ...item, data }; }));
     markDirty();
     if (generator) cloudSession?.refreshNano?.();
   };

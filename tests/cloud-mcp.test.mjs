@@ -31,6 +31,13 @@ test('connect_nodes can promote an existing image to main without duplicating ed
   assert.throws(() => connect(cycle, 'i'), /loop/); assert.equal(cycle.nodes[0].data.mainImage, undefined);
 });
 
+test('update_node switching a prompt to GPT Image makes its first connected image main', () => {
+  const image = id => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: '12345678-1234-1234-1234-123456789abc.png' } });
+  const graph = { nodes: [{ id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'Edit', generator: 'nano-banana' } }, image('a'), image('b')], edges: [{ id: 'bp', source: 'b', target: 'p' }, { id: 'ap', source: 'a', target: 'p' }], groups: [], runs: [] };
+  const switched = runBoardTool(toolByName.get('update_node'), { graph, templates: [], revision: 'test', args: { nodeId: 'p', generator: 'gpt-image' } }).graph.nodes[0];
+  assert.equal(switched.data.generator, 'gpt-image'); assert.equal(switched.data.mainImage, 'b');
+});
+
 test('get_board and update_node preserve image edits and validate malformed masks through the shared graph validator', () => {
   const asset = '12345678-1234-1234-1234-123456789abc.png', mask = { asset, marked: asset, base: asset, source: asset };
   const uncropped = { asset, pixels: { width: 10, height: 10 }, rect: { x: 1, y: 1, width: 8, height: 8 } };

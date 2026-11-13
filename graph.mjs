@@ -18,6 +18,13 @@ export const isDescribe = node => node?.type === 'text' && node.data?.task === d
 export const upscaleTask = 'upscale';
 export const isUpscale = node => node?.type === 'text' && node.data?.task === upscaleTask;
 export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node);
+// A prompt switched to GPT Image keeps a connected main image, or takes the first image connected to it.
+export function mainImageFor(nodes, edges, node) {
+  if (!isGptImage(node)) return undefined;
+  const images = new Set(nodes.filter(item => item.type === 'image').map(item => item.id));
+  const inputs = edges.filter(edge => edge.target === node.id && images.has(edge.source)).map(edge => edge.source);
+  return inputs.includes(node.data.mainImage) ? node.data.mainImage : inputs[0];
+}
 export const upscalers = Object.freeze({ topaz: 'topaz', seedvr: 'seedvr', nanoBanana: 'nano-banana' });
 export const upscalerOf = node => Object.values(upscalers).includes(node?.data?.upscaler) ? node.data.upscaler : upscalers.topaz;
 export const upscaleScale = node => node?.data?.scale === 4 ? 4 : 2;

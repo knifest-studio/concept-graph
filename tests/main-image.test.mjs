@@ -57,3 +57,16 @@ test('the canvas connect handler promotes, replaces and clears main in one undo 
   edgeRef.current = [{ id: 'pa', source: 'p', target: 'a' }]; attach('a', 'main');
   assert.equal(checkpoints.length, 0); assert.match(notifications.pop(), /loop/);
 });
+
+test('switching a prompt to GPT Image makes its first connected image the main one', async () => {
+  const { mainImageFor } = await import('../graph.mjs');
+  const nodes = [{ ...prompt(), data: { text: 'Edit' } }, image('a'), image('b'), { id: 'note', type: 'text', position: { x: 0, y: 0 }, data: { text: 'Context' } }];
+  const edges = [{ id: 'np', source: 'note', target: 'p' }, { id: 'bp', source: 'b', target: 'p' }, { id: 'ap', source: 'a', target: 'p' }];
+  const as = data => ({ ...nodes[0], data: { ...nodes[0].data, ...data } });
+  assert.equal(mainImageFor(nodes, edges, as({ generator: 'gpt-image' })), 'b');
+  assert.equal(mainImageFor(nodes, edges, as({ generator: 'gpt-image', mainImage: 'a' })), 'a');
+  assert.equal(mainImageFor(nodes, edges, as({ generator: 'gpt-image', mainImage: 'gone' })), 'b');
+  assert.equal(mainImageFor(nodes, edges, as({ generator: 'nano-banana' })), undefined);
+  assert.equal(mainImageFor(nodes, [edges[0]], as({ generator: 'gpt-image' })), undefined);
+  assert.match(source, /const main = mainImageFor\(current, edgeRef\.current, \{ \.\.\.item, data \}\); if \(main\) data\.mainImage = main;/);
+});
