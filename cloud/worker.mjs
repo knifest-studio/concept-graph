@@ -158,13 +158,8 @@ async function route(request, env) {
     return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }
   // Board links load the app, which signs the person in and then opens the board.
-  if (path === '/admin/analytics') {
-    const admin = await sessionUser(request, env.SESSION_SECRET);
-    if (!admin) return error('Sign in required.', 401);
-    if (!await directory(env).siteRole(admin.email)) return error('Only site admins can view analytics.', 403);
-    return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
-  }
-  if (/^\/b\/[^/]+\/?$/.test(path)) return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
+  // The analytics page is the app: it signs the person in and shows data only to site admins; /api/analytics checks again.
+  if (/^\/b\/[^/]+\/?$/.test(path) || path === '/admin/analytics') return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
   if (path === '/oauth/authorize') return authorize(request, env);
   if (path === '/api/auth/google') return method === 'GET' ? googleSignIn(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/google/callback') return method === 'GET' ? googleCallback(request, env) : error('Method not allowed.', 405);
