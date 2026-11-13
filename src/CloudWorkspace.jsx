@@ -192,7 +192,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted };
   const [nano, setNano] = useState(undefined), nanoSoon = useRef(() => {});
   useEffect(() => {
-    // What Nano Banana allows this person; teammates' runs change the team's spend and the day rolls over, so it is re-read.
+    // Shared site-provider allowances change with teammates' runs and the UTC day, so they are re-read.
     let request = 0, timer = 0;
     const refresh = async () => {
       const id = ++request;
@@ -287,7 +287,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     const shareLater = () => { if (!shareSoon) shareSoon = setTimeout(() => { shareSoon = 0; share(); }, 200); };
     const shareTimer = setInterval(share, 2000), runsChanged = shareLater;
     doc.getMap('runs').observe(runsChanged);
-    const nanoFinished = event => { if ([...event.keysChanged].some(id => { const run = doc.getMap('runs').get(id); return run?.provider === generators.nanoBanana && terminalRun(run.status); })) next.refreshNano?.(); };
+    const nanoFinished = event => { if ([...event.keysChanged].some(id => { const run = doc.getMap('runs').get(id); return Object.values(generators).includes(run?.provider) && terminalRun(run.status); })) next.refreshNano?.(); };
     doc.getMap('runs').observe(nanoFinished);
     let lastPointer = 0, lastSelection = '';
     next.pointer = position => {

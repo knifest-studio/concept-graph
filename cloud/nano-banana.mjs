@@ -32,7 +32,7 @@ const limit = (value, fallback) => {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 };
 // The endpoint override exists for a local fake server only, so the key can never be sent to another host by mistake.
-const localEndpoint = value => {
+export const localEndpoint = value => {
   try { const url = new URL(value); return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && ['http:', 'https:'].includes(url.protocol) ? url.origin : null; }
   catch { return null; }
 };
@@ -60,9 +60,9 @@ export function nanoPrompt(graph, nodeId) {
   return { prompt, images, target };
 }
 
-// Usage figures are shown only to people who may use the site's Gemini key.
-export async function nanoStatus(user, env, directory) {
-  const settings = nanoSettings(env), allowed = await directory.nanoAllowed(user.email);
+// Usage figures are shown only to people who may use the site's API keys.
+export async function nanoStatus(user, env, directory, settings = nanoSettings(env)) {
+  const allowed = await directory.nanoAllowed(user.email);
   if (!settings.configured || !allowed) return { configured: settings.configured, allowed };
   const { usedToday, teamSpentUsd } = await directory.nanoUsage(user.email);
   return { configured: true, allowed: true, dailyImages: settings.dailyImages, usedToday, monthlyUsd: settings.monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
@@ -104,12 +104,12 @@ export function nanoError(status, code, message) {
   return new NanoError('upstream', `Nano Banana failed${status ? ` (${status})` : ''}. Try again.`);
 }
 
-function decodeImage(data) {
+export function decodeImage(data, name = 'Nano Banana') {
   let bytes, format;
   try { const binary = atob(data); bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); }
-  catch { throw new NanoError('upstream', 'Nano Banana returned an unreadable image. Try again.'); }
+  catch { throw new NanoError('upstream', `${name} returned an unreadable image. Try again.`); }
   try { format = imageFormat(bytes); }
-  catch { throw new NanoError('upstream', 'Nano Banana returned an image format the board cannot show.'); }
+  catch { throw new NanoError('upstream', `${name} returned an image format the board cannot show.`); }
   return { bytes, format, contentType: imageTypes[format] };
 }
 

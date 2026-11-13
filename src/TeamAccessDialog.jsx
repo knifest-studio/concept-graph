@@ -5,7 +5,7 @@ import { plural, t } from './i18n.mjs';
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const domainOf = address => `@${address.split('@').pop()}`;
 
-// Site admins choose who may generate with Nano Banana on the team's Gemini key; the site owner also chooses the admins.
+// Site admins choose who may generate with the team's Gemini and OpenAI keys; the site owner also chooses the admins.
 // People are listed once they have signed in; anyone else can be added by email, and a whole domain as @example.com.
 export function TeamAccessDialog({ services, onClose }) {
   const [access, setAccess] = useState(null), [entry, setEntry] = useState(''), [filter, setFilter] = useState('');
@@ -38,9 +38,9 @@ export function TeamAccessDialog({ services, onClose }) {
   return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="team-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
     <div className="share-card team-card">
       <h2 id="team-title">{t('Team access')}</h2>
-      <p className="share-note">{owner ? t('Choose who can generate with Nano Banana on the team’s Gemini key, and who else can manage this.') : t('Choose who can generate with Nano Banana on the team’s Gemini key.')}</p>
+      <p className="share-note">{owner ? t('Choose who can generate with Nano Banana and GPT Image on the team’s API keys, and who else can manage this.') : t('Choose who can generate with Nano Banana and GPT Image on the team’s API keys.')}</p>
       <form className="share-invite team-add" onSubmit={add}>
-        <label htmlFor="team-entry">{t('Give Nano Banana access')}</label>
+        <label htmlFor="team-entry">{t('Give Nano Banana and GPT Image access')}</label>
         <div><input ref={first} id="team-entry" autoComplete="off" placeholder="name@example.com, @example.com" maxLength={254} value={entry} disabled={busy} onChange={event => setEntry(event.target.value)}/>
           <button className="primary-button" disabled={busy || !entry.trim()}>{t('Add')}</button></div>
         <small>{t('People appear below once they sign in. A domain such as @example.com gives everyone with that address access.')}</small>
@@ -54,8 +54,8 @@ export function TeamAccessDialog({ services, onClose }) {
           {shown.map(person => <li key={person.email}>
             <span><b>{person.name || person.email}</b><small>{[person.name && person.email, person.waiting && t('Hasn’t signed in yet'), person.used > 0 && plural(person.used, '{count} image today', '{count} images today')].filter(Boolean).join(' · ')}</small></span>
             <span>
-              <label className="team-toggle" title={!person.direct && person.domain ? t('Through {domain}', { domain: person.domain }) : undefined}><input type="checkbox" aria-label={t('Nano Banana for {name}', { name: person.name || person.email })} checked={person.direct || !!person.domain} disabled={busy || (!person.direct && !!person.domain)}
-                onChange={event => change({ nano: { entry: person.email, allowed: event.target.checked } })}/>Nano Banana</label>
+              <label className="team-toggle" title={!person.direct && person.domain ? t('Through {domain}', { domain: person.domain }) : undefined}><input type="checkbox" aria-label={t('Nano Banana and GPT Image for {name}', { name: person.name || person.email })} checked={person.direct || !!person.domain} disabled={busy || (!person.direct && !!person.domain)}
+                onChange={event => change({ nano: { entry: person.email, allowed: event.target.checked } })}/>Nano Banana / GPT Image</label>
               {person.owner ? <span className="share-role">{t('Owner')}</span> : owner ? <label className="team-toggle"><input type="checkbox" aria-label={t('Admin rights for {name}', { name: person.name || person.email })} checked={person.admin} disabled={busy}
                 onChange={event => change({ admin: { email: person.email, admin: event.target.checked } })}/>{t('Admin')}</label> : person.admin && <span className="share-role">{t('Admin')}</span>}
             </span></li>)}

@@ -4,6 +4,7 @@ import { getServerByName } from 'partyserver';
 import { sessionIdentity, validateName } from './auth.mjs';
 import { imageFormat, imageTypes, readBody } from './assets.mjs';
 import { base64, nanoStatus } from './nano-banana.mjs';
+import { gptImageStatus } from './gpt-image.mjs';
 import { canEdit } from './access.mjs';
 import { checkArgs, fail, listedTools, toolByName } from './mcp-tools.mjs';
 
@@ -12,7 +13,7 @@ const maxRequest = 30 * 1024 * 1024, maxUpload = 20 * 1024 * 1024, maxShown = 4.
 const instructions = 'Concept Graph team boards: prompts, images and notes on a shared canvas. Start with list_boards, then get_board; look at images with get_image. '
   + 'Every change appears at once for everyone on the board, made in the name of the person who connected you, so ask before deleting boards, pages or much content. '
   + 'list_chat reads persistent board chat (50 per page); send_chat posts as this person, marked via agent, with an optional nodeId link. Viewers can use both. Chat is separate from canvas versions. '
-  + 'start_run generates like the Generate button: Nano Banana on the team key, Codex on this person\'s own computer through the board they have open in a browser.';
+  + 'start_run generates like the Generate button: Nano Banana or GPT Image on the team API keys with shared access and limits, Codex on this person\'s own computer through their open board.';
 const directory = env => env.Directory.get(env.Directory.idFromName('boards'));
 const json = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 const rpc = (id, result) => ({ jsonrpc: '2.0', id, result });
@@ -37,7 +38,7 @@ const boardName = value => { try { return validateName(value, 80); } catch (caus
 
 // Account tools: what the Worker answers without opening a board.
 const account = {
-  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)) }),
+  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)) }),
   list_boards: async (env, user) => ({ boards: (await directory(env).boardsFor(user.email)).map(brief) }),
   create_board: async (env, user, args) => {
     const store = directory(env), board = await store.createBoard(boardName(args.name), user);

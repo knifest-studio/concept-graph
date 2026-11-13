@@ -140,7 +140,7 @@ test('cost follows the usage Google returns, with a conservative estimate when i
   assert.ok(estimate > nanoCost(usage, { images: 1 }) / 2 && nanoEstimate() > 0.0336);
 });
 
-test('prompts may choose Nano Banana; any other generator value is rejected', () => {
+test('prompts may choose site generators; unknown generator values are rejected', () => {
   assert.doesNotThrow(() => validateGraph(seed));
   assert.throws(() => validateGraph({ nodes: [{ ...seed.nodes[0], data: { text: 'x', generator: 'dall-e' } }], edges: [] }), /Invalid image generator/);
 });
@@ -306,8 +306,8 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   const lead = await cookie('lead@studio.example'), outsider = await cookie('guest@gmail.example', 'Guest'), path = `/api/boards/${board.id}/nano`;
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, fal: false });
-  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);
@@ -331,7 +331,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal(budget.status, 429); assert.deepEqual(await budget.json(), { error: 'Team budget for this month is used up.' });
   delete env.GEMINI_API_KEY;
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 503);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true, gptImage: { configured: false, allowed: true }, fal: false });
   assert.equal(directory.nanoUsage('solo@mail.example').usedToday, 0);
 });
 

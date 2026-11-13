@@ -38,7 +38,7 @@ function setup(t, extra = {}) {
   const env = {
     SESSION_SECRET: 'session-test', ...extra,
     Directory: { idFromName: name => name, get: () => directory },
-    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); }, trash: async () => { trashed.push(name); } }) },
+    BoardRoom: { idFromName: name => name, get: name => ({ fetch: async request => { routed.push(request); return new Response('routed'); }, setName: async () => {}, refreshAccess: async () => { refreshed.push(name); }, trash: async () => { trashed.push(name); }, startNano: async () => ({ error: 'Nano Banana isn’t set up on this site.', status: 503 }) }) },
     FILES: { async head() { return null; }, async get() { return null; }, async put() {} },
     ASSETS: { fetch: async request => { served.push(new URL(request.url).pathname); return new Response('app'); } },
   };

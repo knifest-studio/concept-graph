@@ -284,7 +284,7 @@ runtimeTest('an agent sees and edits a board live, within the person’s role', 
   await lead.tool('update_node', { boardId, nodeId: prompt.nodeId, generator: 'nano-banana' });
   assert.match((await lead.tool('start_run', { boardId, nodeId: prompt.nodeId })).error, /isn’t set up/);
   Object.assign(env, { GEMINI_API_KEY: 'test-key', NANO_BANANA_ALLOWED: '@elsewhere.example' });
-  assert.match((await lead.tool('start_run', { boardId, nodeId: prompt.nodeId })).error, /not available for this account/);
+  assert.match((await lead.tool('start_run', { boardId, nodeId: prompt.nodeId })).error, /not available for your account/);
 
   const images = await lead.tool('get_image', { assets: [asset] });
   assert.equal(images[1].type, 'image'); assert.equal(images[1].mimeType, 'image/png');

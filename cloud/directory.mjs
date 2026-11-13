@@ -35,10 +35,10 @@ export class Directory extends DurableObject {
     const siteOwner = email(env?.SITE_OWNER_EMAIL);
     if (siteOwner) ctx.storage.sql.exec('UPDATE boards SET owner = ? WHERE owner IS NULL', siteOwner);
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    // Nano Banana usage: one row per Generate, open (a reservation) until the room settles it with what the call returned.
+    // Shared site-provider usage: one row per paid call, open until the room settles it. Keep existing rows and limits.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_usage (id TEXT PRIMARY KEY, email TEXT NOT NULL, day TEXT NOT NULL, month TEXT NOT NULL, images INTEGER NOT NULL, usd REAL NOT NULL, open INTEGER NOT NULL, createdAt INTEGER NOT NULL)');
     ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS nano_usage_month ON nano_usage (month, email, day)');
-    // Who may use the site's Gemini key (emails and @domains), and the admins who decide it. The list used to be the
+    // Who may use the site's Gemini and OpenAI keys (emails and @domains), and the admins who decide it. The list used to be the
     // NANO_BANANA_ALLOWED variable: it is copied in once, and from then on admins keep it on the site.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_admins (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');

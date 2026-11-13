@@ -1,5 +1,5 @@
 import { getState } from 'yjs';
-import { collectInputs, generationSettings, generators, imageSize } from '../graph.mjs';
+import { collectInputs, generationSettings, imageSize, isSiteGenerator } from '../graph.mjs';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { t } from './i18n.mjs';
@@ -78,7 +78,7 @@ export class CloudGeneration {
     this.tick();
     return run.id;
   }
-  // Nano Banana runs in the board's room on the server, which writes the run and places its images; no helper is involved.
+  // Site API generators share this route; the room reads the provider from the prompt and places the images.
   // The room first waits for this client's own latest edits (its clock), so it reads the prompt as it is shown here.
   async startNano(nodeId) {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
@@ -88,11 +88,11 @@ export class CloudGeneration {
     this.onStart?.(run);
   }
   // Runs that need no local helper to start or cancel.
-  remote(id) { const run = this.doc.getMap('runs').get(id); return !!run?.delegate || run?.provider === generators.nanoBanana; }
+  remote(id) { const run = this.doc.getMap('runs').get(id); return !!run?.delegate || isSiteGenerator(run?.provider); }
   async cancel(id) {
     const run = this.doc.getMap('runs').get(id);
     if (!run || run.by?.name !== this.user.name || terminal(run.status)) return;
-    if (run.provider === generators.nanoBanana) return void await this.api(`/api/boards/${this.boardId}/nano/${id}/cancel`, { method: 'POST' });
+    if (isSiteGenerator(run.provider)) return void await this.api(`/api/boards/${this.boardId}/nano/${id}/cancel`, { method: 'POST' });
     // The board is the only channel to a teammate's helper; their client stops the job when it sees this.
     if (run.delegate) {
       if (!this.ready()) throw new Error(t('Wait for a live board connection before cancelling.'));

@@ -3,7 +3,8 @@ import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
 import { assetPattern, imageFormat, imageTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
-import { nanoSettings, nanoStatus } from './nano-banana.mjs';
+import { nanoStatus } from './nano-banana.mjs';
+import { gptImageStatus } from './gpt-image.mjs';
 import { upscaleSettings } from './upscale.mjs';
 import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
@@ -94,9 +95,7 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
     const result = await (await getServerByName(env.BoardRoom, boardId)).cancelNano({ runId, email: user.email });
     return result.error ? error(result.error, result.status) : json({ ok: true });
   }
-  // Upscaling with Topaz or SeedVR2 needs only the fal.ai key; the room checks which key the node needs.
-  if (!nanoSettings(env).configured && !upscaleSettings(env).fal) return error('Nano Banana isn’t set up on this site.', 503);
-  if (!await directory(env).nanoAllowed(user.email)) return error('Nano Banana is not available for your account. Ask a site admin for access.', 403);
+  // The room checks setup and the shared allowed list for the provider saved on this prompt.
   const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
   const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
@@ -164,7 +163,7 @@ async function route(request, env) {
   if (path === '/api/cloud/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url) });
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
-  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), fal: upscaleSettings(env).fal }) : error('Method not allowed.', 405);
+  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal }) : error('Method not allowed.', 405);
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
   if (voiceMatch) {
     if (method !== 'POST') return error('Method not allowed.', 405);

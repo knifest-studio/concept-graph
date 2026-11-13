@@ -31,7 +31,7 @@ const pageId = text('Page ID from get_board. Needed for new items on boards with
 const ids = (description, minItems = 1) => array(description, itemId, { minItems, maxItems: 2000, uniqueItems: true });
 const hex = (description, palette) => text(`${description} as #rrggbb${palette ? `; the board's own: ${palette.join(', ')}` : ''}`, { pattern: '^#[0-9a-fA-F]{6}$' });
 const layer = number('Layer order on its page; higher draws in front', { minimum: -maxLayer, maximum: maxLayer });
-const generator = choice('Who makes the images: codex (the person\'s own Codex, through their open board) or nano-banana (the team\'s Gemini key)', ['codex', generators.nanoBanana]);
+const generator = choice('Who makes the images: codex (the person\'s own Codex), nano-banana (the team\'s Gemini key), or gpt-image (the team\'s OpenAI key). Describe nodes use codex or nano-banana (Gemini) only.', ['codex', generators.nanoBanana, generators.gptImage]);
 const variants = integer(`How many images one run makes, 1–${maxVariants}`, { minimum: 1, maximum: maxVariants });
 const end = object({ x: number('Canvas x of a free end'), y: number('Canvas y of a free end'), nodeId: text('Node this end holds on to: a prompt, image, sticky or shape', { minLength: 1, maxLength: 120 }) }, [], { description: 'An arrow end: a node to hold on to, or a point' });
 const templateFields = { name: text('Custom node name', { minLength: 1, maxLength: 80 }), instructions: text('Instructions added to every prompt made from it', { maxLength: 100000 }),
@@ -96,7 +96,7 @@ function addNode(ctx, type, data, page, where, { author = true } = {}) {
 }
 const node = (ctx, nodeId) => ensure(ctx.graph.nodes, [nodeId], 'Node').get(nodeId);
 const centre = item => { const { width, height } = sizeOf(item); return { x: item.position.x + width / 2, y: item.position.y + height / 2 }; };
-function setGenerator(data, value) { if (value === generators.nanoBanana) data.generator = value; else delete data.generator; }
+function setGenerator(data, value) { if (Object.values(generators).includes(value)) data.generator = value; else delete data.generator; }
 function setVariants(data, value) { if (value > 1) data.variants = value; else delete data.variants; }
 // What the agent reads: every item with its page, and nodes with the size the canvas gives them before measuring.
 const shownNode = (item, pages) => ({ ...item, page: nodePage(item, pages), size: sizeOf(item) });
@@ -124,7 +124,7 @@ async function assetsExist(env, assets = []) {
 }
 const templateOf = (ctx, value) => ctx.templates.find(item => item.id === value) || fail('Custom node not found. Use list_templates.');
 
-define('whoami', 'Show who this agent is signed in as and whether they may use Nano Banana, with what is left today.', {}, [], { access: 'view', account: true });
+define('whoami', 'Show who this agent is signed in as, Nano Banana and GPT Image setup and access, and their shared allowance left today.', {}, [], { access: 'view', account: true });
 define('list_boards', 'List the cloud boards this person can open, newest first, with their role on each (owner, edit or view).', {}, [], { access: 'view', account: true });
 define('create_board', 'Create an empty private board owned by this person.', { name: text('Board name', { minLength: 1, maxLength: 80 }) }, ['name'], { account: true });
 define('rename_board', 'Rename a board. Only its owner can.', { boardId, name: text('New board name', { minLength: 1, maxLength: 80 }) }, ['boardId', 'name'], { account: true });
@@ -389,7 +389,7 @@ define('clear_node_template', 'Turn a prompt made from a custom node back into a
   ctx.graph.nodes = ctx.graph.nodes.map(value => value.id === item.id ? switchNodeTemplate(value, null) : value);
   return { nodeId: item.id };
 } });
-define('start_run', 'Generate from a prompt, as the person’s Generate button would. Nano Banana runs on the team’s Gemini key within their daily allowance. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
+define('start_run', 'Generate from a prompt, as the person’s Generate button would. Nano Banana and GPT Image run on the team’s API keys with shared access, daily images and monthly budget. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
 define('list_versions', 'List the board’s saved versions, newest first: a copy every ten minutes while it changes, one kept just before any large deletion or restore, and a daily backup. Each says when, why, how many nodes and images it held, and who edited.', { limit: integer('How many (1–500, default 50)', { minimum: 1, maximum: 500 }) }, [], { access: 'view' });
 define('restore_version', 'Put the whole board back as it was in a saved version, for everyone. The board as it is now is saved first, so this can be undone by restoring that copy. Generation history is kept. Ask the user first.', { versionId: text('Version ID from list_versions', { minLength: 1, maxLength: 64 }) }, ['versionId'], { destructive: true });
 define('cancel_run', 'Stop a generation this person started. A Codex run is stopped through their open board. Images that already arrived stay.', { runId }, ['runId'], { destructive: true });

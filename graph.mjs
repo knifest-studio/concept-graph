@@ -6,8 +6,9 @@ import { nearestFreePosition } from './src/node-placement.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
-// A prompt without `generator` uses Codex; cloud prompts can pick server-side Nano Banana instead.
-export const generators = Object.freeze({ nanoBanana: 'nano-banana' });
+// A prompt without `generator` uses Codex; cloud prompts can use a site API key instead.
+export const generators = Object.freeze({ nanoBanana: 'nano-banana', gptImage: 'gpt-image' });
+export const isSiteGenerator = value => Object.values(generators).includes(value);
 // A describe node is a text node whose run writes a description of its connected images into a new text node.
 export const describeTask = 'describe';
 export const isDescribe = node => node?.type === 'text' && node.data?.task === describeTask;
@@ -26,14 +27,15 @@ export function resolutionLabel(pixels) {
   return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2900, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
 }
 export const maxDescription = 20000;
-// A Nano Banana prompt can ask for up to this many variants: separate images generated side by side.
+// A site-generated prompt can ask for up to this many variants, arriving as one slideshow.
 export const maxVariants = 4;
 export const promptVariants = node => Number.isInteger(node?.data?.variants) && node.data.variants >= 2 && node.data.variants <= maxVariants ? node.data.variants : 1;
 export const nanoModel = 'gemini-nano-banana-2.1';
+export const gptImageModel = 'gpt-image-2.5-flare';
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2' });
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -87,7 +89,8 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.effort !== undefined && (typeof node.data.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(node.data.effort))) throw new Error('Invalid reasoning effort.');
     if (node.type === 'text' && node.data.template !== undefined) validateTemplate(node.data.template);
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
-    if (node.type === 'text' && node.data.generator !== undefined && node.data.generator !== generators.nanoBanana) throw new Error('Invalid image generator.');
+    if (node.type === 'text' && node.data.generator !== undefined && !isSiteGenerator(node.data.generator)) throw new Error('Invalid image generator.');
+    if (node.type === 'text' && node.data.generator === generators.gptImage && [describeTask, upscaleTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
     if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask].includes(node.data.task)) throw new Error('Invalid node task.');
     if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
     if (node.type === 'text' && node.data.scale !== undefined && ![2, 4].includes(node.data.scale)) throw new Error('Invalid upscale size.');

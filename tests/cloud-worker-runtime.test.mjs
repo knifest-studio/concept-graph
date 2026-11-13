@@ -68,7 +68,7 @@ runtimeTest('privacy is public without cookies, Google configuration, D1 or stat
   assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
   assert.equal(response.headers.has('Set-Cookie'), false);
   const html = await response.text();
-  for (const text of ['<html lang="en">', 'Privacy Policy', 'Google account ID', 'Cloudflare', 'OpenAI', 'Codex/ChatGPT', 'private to the person who created it', 'email addresses and roles of the people invited', 'sign-in count', "Google's Gemini API under the site owner's account", 'mailto:knifest17@gmail.com']) assert.ok(html.includes(text), text);
+  for (const text of ['<html lang="en">', 'Privacy Policy', 'Google account ID', 'Cloudflare', 'OpenAI', 'Codex/ChatGPT', 'private to the person who created it', 'email addresses and roles of the people invited', 'sign-in count', "Google's Gemini API for Nano Banana", "OpenAI's Images API for GPT Image under the site owner's accounts", 'shared daily and monthly limits', 'mailto:knifest17@gmail.com']) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /<script|<link|<iframe|<img/i);
   const head = await request('/privacy', { method: 'HEAD' });
   assert.equal(head.status, 200); assert.equal(await head.text(), '');

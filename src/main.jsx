@@ -7,7 +7,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
+import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -22,7 +22,7 @@ import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSigna
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
-import { nanoState, usesNano } from './generator.mjs';
+import { nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
@@ -149,7 +149,7 @@ function FullTextNode(props) {
 function ExpandedTextNode({ id, data, selected }) {
   const canvas = useCanvas();
   const view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, inputs: inputLabel(state.inputs.get(id) || noInputs), readiness: state.readinessKey, readinessAction: state.readinessAction,
-    focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates, images: (state.inputs.get(id) || noInputs).images, nanoSelectable: state.nanoSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, nanoBudget: state.nanoBudget, readOnly: state.readOnly }), shallowEqual);
+    focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates, images: (state.inputs.get(id) || noInputs).images, nanoSelectable: state.nanoSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, nanoBudget: state.nanoBudget, gptSelectable: state.gptSelectable, gptReady: state.gptReady, gptNote: state.gptNote, gptBudget: state.gptBudget, readOnly: state.readOnly }), shallowEqual);
   const pending = view.active || view.starting;
   const canCancel = !cloud || view.starting || view.byName === view.userName;
   const [draft, setDraft] = useState(data.text), [more, setMore] = useState(false);
@@ -158,9 +158,12 @@ function ExpandedTextNode({ id, data, selected }) {
   const editor = useRef(null), generateButton = useRef(null), edited = useRef(false);
   const changeText = value => { setDraft(value); if (!edited.current) { canvas.checkpoint(); edited.current = true; } canvas.editText(id, value); };
   const dictation = usePromptDictation(editor, draft, changeText, canvas.dictationLanguage, canvas);
-  // A Nano Banana prompt needs no helper; it is blocked only by what the site allows this person.
+  // Site generators need no helper; they are blocked only by what the site allows this person.
   // A Gemini description needs no daily images, only the person's place on the allowed list.
-  const nano = cloud && usesNano(data), blocked = nano ? (describe ? !view.nanoSelectable : !view.nanoReady) : view.readiness !== 'ready', connect = blocked && !nano;
+  const nano = cloud && usesSiteGenerator(data), gpt = nano && data.generator === generators.gptImage;
+  const site = gpt ? { selectable: view.gptSelectable, ready: view.gptReady, note: view.gptNote } : { selectable: view.nanoSelectable, ready: view.nanoReady, note: view.nanoNote };
+  const blocked = nano ? (describe ? !site.selectable : !site.ready) : view.readiness !== 'ready', connect = blocked && !nano;
+  const generateLabel = gpt ? t('Generate with GPT Image') : t('Generate with Nano Banana');
   // React Flow propagates node data through its store after the input event.
   // Keep the controlled input synchronous so React never restores an old value/caret.
   useLayoutEffect(() => {
@@ -189,7 +192,7 @@ function ExpandedTextNode({ id, data, selected }) {
   return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}${describe ? ' describe-node' : ''}${data.height ? ' sized' : ''}`} style={{ ...(data.template ? { '--template-color': templateColor(data.template) } : {}), ...textHeight(data) }}>
     {!view.readOnly && <NodeResizeControl position="bottom" variant="line" resizeDirection="vertical" minHeight={textHeights.min} maxHeight={textHeights.max} className="text-height-handle" title={t('Drag to change the height')}/>}
     <Handle type="target" position={Position.Left} aria-label={t('Connect input to prompt')}/>
-    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : t('Generate with Nano Banana') : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? view.nanoNote : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : t('Generate with Nano Banana') : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? site.note : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? gpt ? 'GPT Image' : 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} gpt={{ selectable: view.gptSelectable, note: view.gptNote, budget: view.gptBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
     <div className={`prompt-editor${more ? ' has-more' : ''}`}>
       <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
       {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? t('Stop dictation') : t('Dictate prompt')} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? t('Finishing dictation…') : t('Stop dictation · Esc') : t('Dictate (speech is recognised by your browser’s service)')} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
@@ -201,7 +204,7 @@ function ExpandedTextNode({ id, data, selected }) {
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
     {nano && !describe && <VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly}/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
-    {selected && blocked && !pending && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
+    {selected && blocked && !pending && (nano ? <NanoReadiness note={site.note}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
     {failedRun(view) && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}
     <Handle type="source" position={Position.Right} aria-label={t('Connect prompt to another node')}/>
   </article></NodeContextMenu>;
@@ -345,9 +348,9 @@ function LightNode({ id, type, data, selected }) {
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
     return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, falReady: state.falReady, create: state.detail !== 'tiny' || !state.crowded,
-      readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote };
+      readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote, gptReady: state.gptReady, gptNote: state.gptNote };
   }, shallowEqual);
-  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesNano(data), sized = textHeight(data);
+  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesSiteGenerator(data), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
     {(!isImage || data.runId) && <LodHandle type="target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
     {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
@@ -365,12 +368,13 @@ function LightNode({ id, type, data, selected }) {
       {view.failed && <div className="node-error nodrag">{t(view.error)}</div>}<LodHandle type="source"/>
     </article>;
   }
-  const describe = data.task === describeTask;
+  const describe = data.task === describeTask, gpt = nano && data.generator === generators.gptImage;
+  const siteReady = gpt ? view.gptReady : view.nanoReady, siteNote = gpt ? view.gptNote : view.nanoNote;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
     <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
     {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
-    {selected && (nano ? !view.nanoReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={view.nanoNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
+    {selected && (nano ? !siteReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={siteNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
     {view.failed && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}<LodHandle type="source"/>
   </article>;
 }
@@ -658,7 +662,7 @@ function AgentConnect({ onClose, cloud = false }) {
         {prompt && <><label htmlFor="agent-connect-prompt">{t('Message for your agent')}</label><textarea id="agent-connect-prompt" ref={promptRef} readOnly value={prompt} rows={7} onFocus={event => event.target.select()}/><div className="agent-connect-actions"><button className="primary-button" autoFocus type="button" onClick={copy}><Icon name="copy" size={15}/> {t('Copy message')}</button><span role="status">{copyStatus}</span></div></>}
       </>}
       {cloud && <p>{t('In apps such as Claude Desktop, add a custom connector with this address: {url}', { url: endpoint })}</p>}
-      <p className="agent-connect-note">{cloud ? t('A connected agent acts as you: it can read and change every board you can open, and start Nano Banana generation.') : t('Keep Concept Graph open. A connected agent can read and change your boards and images, and start generation.')}</p>
+      <p className="agent-connect-note">{cloud ? t('A connected agent acts as you: it can read and change every board you can open, and start Nano Banana or GPT Image generation.') : t('Keep Concept Graph open. A connected agent can read and change your boards and images, and start generation.')}</p>
     </div>
   </div>;
 }
@@ -757,6 +761,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const ownReady = (readiness.own || readiness).key === 'ready';
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
   const nano = nanoState(cloudSession?.nano), nanoRef = useRef(nano); nanoRef.current = nano;
+  const gpt = nanoState(cloudSession?.nano?.gptImage, generators.gptImage), gptRef = useRef(gpt); gptRef.current = gpt;
   const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] }), nodeCommit = useRef(null);
   const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false), cloudRuns = useRef({ source: null, shown: new WeakMap() });
   const dirty = useRef(false), version = useRef(0), saving = useRef(null), saveTimer = useRef(null), viewport = useRef({ x: 0, y: 0, zoom: 1 });
@@ -1966,8 +1971,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     try { requested = generationIntent(currentGraph(), boardId, nodeId); }
     catch (error) { notify(error.message); return; }
     if (starting || generationStarting.current) return;
-    const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesNano(runNode?.data);
-    if (nanoRun && !(isDescribe(runNode) ? nanoRef.current.selectable : nanoRef.current.ready)) { notify(nanoRef.current.note); cloudSession.refreshNano?.(); return; }
+    const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesSiteGenerator(runNode?.data);
+    const site = runNode?.data.generator === generators.gptImage ? gptRef.current : nanoRef.current;
+    if (nanoRun && !(isDescribe(runNode) ? site.selectable : site.ready)) { notify(site.note); cloudSession.refreshNano?.(); return; }
     if (!nanoRun && readinessRef.current.key !== 'ready') {
       pendingIntent.current = requested; fixReadiness();
       return;
@@ -2284,7 +2290,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
-    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
+    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });

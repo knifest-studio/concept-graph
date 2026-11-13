@@ -135,7 +135,16 @@ export default {
   'Dismiss error for {label}': 'Закрити помилку для «{label}»',
   'Dismiss': 'Закрити',
 
-  // Image generator (Codex or Nano Banana)
+  // Cloud image generators
+  'Uses the site’s OpenAI key': 'Використовує ключ OpenAI цього сайту',
+  'GPT Image isn’t set up on this site': 'GPT Image не налаштовано на цьому сайті',
+  'Generate with GPT Image': 'Згенерувати через GPT Image',
+  'Generate with Codex, Nano Banana or GPT Image': 'Генерувати через Codex, Nano Banana або GPT Image',
+  'Choose who can generate with Nano Banana and GPT Image on the team’s API keys, and who else can manage this.': 'Виберіть, хто може генерувати через Nano Banana та GPT Image за командними API-ключами, і хто ще може цим керувати.',
+  'Choose who can generate with Nano Banana and GPT Image on the team’s API keys.': 'Виберіть, хто може генерувати через Nano Banana та GPT Image за командними API-ключами.',
+  'Give Nano Banana and GPT Image access': 'Дати доступ до Nano Banana та GPT Image',
+  'Nano Banana and GPT Image for {name}': 'Nano Banana та GPT Image для {name}',
+  'A connected agent acts as you: it can read and change every board you can open, and start Nano Banana or GPT Image generation.': 'Підключений агент діє від вашого імені: він може читати й змінювати кожну дошку, яку ви можете відкрити, і запускати генерацію Nano Banana або GPT Image.',
   'Uses the site’s Gemini key': 'Використовує ключ Gemini цього сайту',
   'Nano Banana isn’t set up on this site': 'Nano Banana не налаштовано на цьому сайті',
   'Not available for your account. Ask a site admin for access.': 'Недоступно для вашого облікового запису. Попросіть доступ в адміністратора сайту.',

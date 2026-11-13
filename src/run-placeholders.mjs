@@ -1,4 +1,4 @@
-import { generators, nodeSize, positionRunOutput, runOutputPage } from '../graph.mjs';
+import { isSiteGenerator, nodeSize, positionRunOutput, runOutputPage } from '../graph.mjs';
 import { boardPages, nodePage } from './pages.mjs';
 import { waitingVideos } from './waiting-videos.mjs';
 
@@ -24,7 +24,7 @@ export function runPlaceholders(graph, runs, page, spawns) {
     const task = run.task || prompt.data.task, describe = task === 'describe', upscale = task === 'upscale', outputIds = run.outputIds || [];
     const expected = describe ? 1 : upscale ? (run.images?.length || run.snapshot?.filter(node => node.type === 'image').length
       || new Set(graph.edges.filter(edge => edge.target === run.nodeId && byId.get(edge.source)?.type === 'image').map(edge => edge.source)).size || 1)
-      : run.provider === generators.nanoBanana ? run.variants || 1 : codexImageActive(run) ? outputIds.length + 1 : 1;
+      : isSiteGenerator(run.provider) ? run.variants || 1 : codexImageActive(run) ? outputIds.length + 1 : 1;
     const target = run.target || prompt;
     const inputs = run.snapshot ? run.snapshot.filter(node => node.type === 'image')
       : [...new Set(graph.edges.filter(edge => edge.target === run.nodeId).map(edge => edge.source))].map(id => byId.get(id)).filter(node => node?.type === 'image');
