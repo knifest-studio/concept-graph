@@ -6,6 +6,39 @@ const text = (id, value) => ({ id, type: 'text', position: { x: 0, y: 0 }, data:
 const image = (id, label) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: '12345678-1234-1234-1234-123456789abc.png', label } });
 const edge = (source, target) => ({ id: source + '-' + target, source, target });
 
+const maskAsset = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', marked = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png';
+const masked = id => { const node = image(id, id); node.data.mask = { asset: maskAsset, marked, base: node.data.asset, source: node.data.asset }; return node; };
+test('crop and mask metadata validate on shared graphs and reject malformed fields without dropping stale masks', () => {
+  const node = masked('i'); node.data.uncropped = { asset: node.data.asset, pixels: { width: 1200, height: 800 }, rect: { x: 20, y: 0, width: 600, height: 800 } };
+  const graph = { nodes: [node], edges: [] }; assert.equal(validateGraph(graph), graph);
+  for (const mask of [null, [], {}, { ...node.data.mask, asset: '../mask.png' }, { ...node.data.mask, marked: node.data.asset.replace('.png', '.jpg') }, { ...node.data.mask, base: 1 }, { ...node.data.mask, source: null }]) {
+    assert.throws(() => validateGraph({ nodes: [{ ...node, data: { ...node.data, mask } }], edges: [] }), /Invalid image mask/);
+  }
+  for (const uncropped of [null, [], {}, { ...node.data.uncropped, pixels: { width: -1, height: 800 } }, { ...node.data.uncropped, rect: { x: 20.5, y: 0, width: 600, height: 800 } }, { ...node.data.uncropped, rect: { x: 1000, y: 0, width: 600, height: 800 } }]) {
+    assert.throws(() => validateGraph({ nodes: [{ ...node, data: { ...node.data, uncropped } }], edges: [] }), /Invalid original image crop/);
+  }
+  node.data.mask.source = maskAsset; validateGraph(graph);
+});
+
+test('Codex attaches each marked copy immediately after its image and refuses stale or multiple masks before running', () => {
+  const target = text('p', 'Change the hat'), a = image('a', 'Style'), b = masked('b'), graph = { nodes: [a, b, target], edges: [edge('a', 'p'), edge('b', 'p')] };
+  const request = collectInputs(graph, 'p');
+  assert.deepEqual(request.images, [a.data.asset, b.data.asset, marked]);
+  assert.match(request.prompt, /Attachment 2: “b”/); assert.match(request.prompt, /Attachment 3: “b \(highlighted edit area\)”/);
+  assert.match(request.prompt, /Edit only the highlighted area of “b”/); assert.match(request.prompt, /must not contain the highlight/);
+  a.data.mask = { ...b.data.mask }; assert.throws(() => collectInputs(graph, 'p'), /Only one masked image per prompt/);
+  delete a.data.mask; b.data.mask.source = maskAsset; assert.throws(() => collectInputs(graph, 'p'), /The mask on “b” no longer matches/);
+  for (const task of ['describe', 'upscale']) { target.data.task = task; assert.deepEqual(collectInputs(graph, 'p').images, [a.data.asset, b.data.asset]); }
+});
+
+test('marked copies and template references share the ten-attachment Codex limit', () => {
+  const target = text('p', 'Edit'), inputs = [masked('i'), ...Array.from({ length: 8 }, (_, i) => image(`r${i}`, 'Reference'))];
+  const graph = { nodes: [...inputs, target], edges: inputs.map(node => edge(node.id, 'p')) };
+  assert.equal(collectInputs(graph, 'p').images.length, 10);
+  target.data.template = { name: 'Style', instructions: '', assets: [inputs[0].data.asset] };
+  assert.throws(() => collectInputs(graph, 'p'), /at most 10/);
+});
+
 test('image names use trimmed captions, file stems and a neutral fallback on old boards', () => {
   assert.equal(imageName({ data: { caption: '  Storm 3  ', label: 'clouds.png' } }), 'Storm 3');
   assert.equal(imageName(image('a', ' Canyon.final.JPG ')), 'Canyon.final');

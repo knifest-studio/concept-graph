@@ -19,6 +19,23 @@ function exchange(a, b) {
   assert.deepEqual(readCloudGraph(a), readCloudGraph(b));
 }
 
+test('crop and mask fields sync without stripping and a single transaction undoes the edit and its new prompt together', () => {
+  const a = new Y.Doc(), b = new Y.Doc(), asset = '11111111-1111-1111-1111-111111111111.png';
+  const graph = { ...empty(), nodes: [{ id: 'image', type: 'image', position: { x: 0, y: 0 }, data: { asset, caption: 'Storm' } }] };
+  applyLocalGraph(a, graph, empty(), 'seed'); Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+  const origin = {}, undo = new Y.UndoManager([a.getMap('nodes'), a.getMap('edges')], { trackedOrigins: new Set([origin]) });
+  const next = structuredClone(graph);
+  next.nodes[0].data.mask = { asset, marked: asset, base: asset, source: asset };
+  next.nodes[0].data.uncropped = { asset, pixels: { width: 10, height: 10 }, rect: { x: 1, y: 1, width: 8, height: 8 } };
+  next.nodes.push(node('p')); next.edges.push({ id: 'ip', source: 'image', target: 'p' });
+  applyLocalGraph(a, next, graph, origin); exchange(a, b); validateGraph(readCloudGraph(b));
+  assert.deepEqual(readCloudGraph(b).nodes.find(node => node.id === 'image').data, next.nodes[0].data);
+  undo.undo(); exchange(a, b); assert.equal(readCloudGraph(a).nodes.length, 1); assert.equal(readCloudGraph(b).edges.length, 0);
+  assert.equal(readCloudGraph(b).nodes[0].data.mask, undefined); assert.equal(readCloudGraph(b).nodes[0].data.uncropped, undefined);
+  undo.redo(); exchange(a, b); assert.deepEqual(readCloudGraph(b).nodes.find(node => node.id === 'image').data.mask, next.nodes[0].data.mask);
+  undo.destroy(); a.destroy(); b.destroy();
+});
+
 test('two disconnected documents merge different node fields and group fields', () => {
   const { a, b, before } = pair();
   const first = structuredClone(before), second = structuredClone(before);

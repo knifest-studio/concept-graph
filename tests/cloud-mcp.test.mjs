@@ -6,7 +6,20 @@ import { readFile } from 'node:fs/promises';
 import { signSession } from '../cloud/auth.mjs';
 import { signInReturn } from '../src/cloud-boards.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
-import { checkArgs, listedTools, revisionOf, toolByName } from '../cloud/mcp-tools.mjs';
+import { checkArgs, listedTools, revisionOf, runBoardTool, toolByName } from '../cloud/mcp-tools.mjs';
+
+test('get_board and update_node preserve image edits and validate malformed masks through the shared graph validator', () => {
+  const asset = '12345678-1234-1234-1234-123456789abc.png', mask = { asset, marked: asset, base: asset, source: asset };
+  const uncropped = { asset, pixels: { width: 10, height: 10 }, rect: { x: 1, y: 1, width: 8, height: 8 } };
+  const graph = { nodes: [{ id: 'i', type: 'image', position: { x: 0, y: 0 }, data: { asset, mask, uncropped } }], edges: [], groups: [], runs: [] };
+  const ctx = { graph, templates: [], revision: 'test', args: {} };
+  const shown = runBoardTool(toolByName.get('get_board'), ctx).result.nodes[0];
+  assert.deepEqual(shown.data.mask, mask); assert.deepEqual(shown.data.uncropped, uncropped);
+  const updated = runBoardTool(toolByName.get('update_node'), { ...ctx, args: { nodeId: 'i', caption: 'New name', position: { x: 30, y: 20 } } }).graph.nodes[0];
+  assert.deepEqual(updated.data.mask, mask); assert.deepEqual(updated.data.uncropped, uncropped); assert.equal(updated.data.caption, 'New name');
+  const invalid = structuredClone(graph); invalid.nodes[0].data.mask.asset = 'bad.png';
+  assert.throws(() => runBoardTool(toolByName.get('update_node'), { ...ctx, graph: invalid, args: { nodeId: 'i', caption: 'Name' } }), /Invalid image mask/);
+});
 
 test('add_image_node stores a unique prompt name from caption, filename or the Image fallback', () => {
   const graph = { nodes: [], edges: [], groups: [], runs: [] }, tool = toolByName.get('add_image_node');

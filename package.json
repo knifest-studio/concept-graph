@@ -20,7 +20,8 @@
     "helper": "node helper.mjs",
     "cloud:helpers": "node scripts/build-portable-helper.mjs --cloud",
     "cloud:helpers:mac": "node scripts/build-macos-helper.mjs",
-    "cloud:helpers:upload": "node scripts/upload-cloud-downloads.mjs"
+    "cloud:helpers:upload": "node scripts/upload-cloud-downloads.mjs",
+    "cloud:clips:upload": "node scripts/upload-waiting-clips.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4",

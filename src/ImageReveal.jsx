@@ -13,7 +13,7 @@ export function ImageReveal({ id, data, positionAbsoluteX, positionAbsoluteY, ch
     const match = matchingPlaceholder(shownPlaceholders, data.runId, { x: positionAbsoluteX, y: positionAbsoluteY }, performance.now());
     if (!match) return null;
     const video = match.media?.querySelector('video');
-    return { id: match.id, width: match.width, height: match.height, clip: video?.getAttribute('src') || match.clip, time: video?.currentTime || match.time || 0 };
+    return { id: match.id, width: match.width, height: match.height, seed: match.seed, clip: video?.getAttribute('src') || match.clip, time: video?.currentTime || match.time || 0 };
   });
   const hadSlot = useRef(Boolean(slot));
   const [aspect, setAspect] = useState(null);
@@ -39,7 +39,7 @@ export function ImageReveal({ id, data, positionAbsoluteX, positionAbsoluteY, ch
   return <ImageRevealContext.Provider value={reveal}><div className={`output-reveal${aspect ? ' output-revealing' : ''}${full ? '' : ' output-reveal-light'}`}
     style={{ '--reveal-width': `${slot.width}px`, '--reveal-height': `${slot.height}px`, '--image-height': `${height}px` }}>
     {children}
-    <div className="output-reveal-cover" aria-hidden="true"><div className="pending-shimmer"/>{videos && slot.clip && <WaitingVideo src={slot.clip} initialTime={slot.time}/>}</div>
+    <div className="output-reveal-cover" aria-hidden="true"><div className="pending-shimmer"/>{videos && slot.clip && <WaitingVideo seed={slot.seed} src={slot.clip} initialTime={slot.time}/>}</div>
     <i className="output-reveal-sweep" aria-hidden="true"/><i className="output-reveal-flash" aria-hidden="true"/>
   </div></ImageRevealContext.Provider>;
 }

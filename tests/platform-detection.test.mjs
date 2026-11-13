@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectPlatform } from '../src/platform-detection.mjs';
+import { detectPlatform, loopbackBlocked } from '../src/platform-detection.mjs';
 
 const hinted = (platform, architecture, bitness, extra = {}) => ({
   userAgentData: { platform, mobile: false, async getHighEntropyValues() { return { architecture, bitness }; } }, ...extra,
@@ -29,4 +29,16 @@ test('recognizes unsupported Linux and mobile devices without recommending a des
   assert.deepEqual(await detectPlatform({ platform: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile' }), { platform: 'mobile', architecture: 'unknown', packageId: null });
   assert.deepEqual(await detectPlatform({ platform: 'MacIntel', maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)' }), { platform: 'mobile', architecture: 'unknown', packageId: null });
   assert.deepEqual(await detectPlatform({ userAgentData: { platform: 'Android', mobile: false } }), { platform: 'mobile', architecture: 'unknown', packageId: null });
+});
+
+test('names the browsers that cannot reach the helper on 127.0.0.1 from the https site', () => {
+  const safari = { platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15' };
+  const telegram = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Telegram-Mac/11.0' };
+  assert.equal(loopbackBlocked(safari), true);
+  assert.equal(loopbackBlocked(telegram), true);
+  assert.equal(loopbackBlocked(hinted('macOS', 'arm', '64')), false);
+  assert.equal(loopbackBlocked({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }), false);
+  assert.equal(loopbackBlocked({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0' }), false);
+  assert.equal(loopbackBlocked({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0 Mobile/15E148' }), false);
+  assert.equal(loopbackBlocked(undefined), false);
 });

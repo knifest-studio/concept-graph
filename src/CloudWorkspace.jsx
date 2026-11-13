@@ -4,6 +4,7 @@ import { Preferences } from './Preferences.jsx';
 import { useWaitingVideos } from './PendingNode.jsx';
 import { plural, t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
+import { loopbackBlocked } from './platform-detection.mjs';
 import { ReactFlowProvider, ViewportPortal } from '@xyflow/react';
 import * as Y from 'yjs';
 import YProvider from 'y-partyserver/provider';
@@ -467,7 +468,8 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   const pair = async token => {
     setPairBusy(true); setPairError('');
     try { setHelperStatus(await services.pair(token)); setPaired(true); setPairing(false); }
-    catch (failure) { setPairError(failure.message || t('Could not reach the local helper. Start it and allow local network access.')); }
+    // A fetch that never reached the helper carries no status, and its browser wording ("Load failed") explains nothing.
+    catch (failure) { setPairError(failure.status ? failure.message : loopbackBlocked() ? t('This browser cannot reach the local helper. Open this page in Chrome and paste the code there.') : t('Could not reach the local helper. Start it and allow local network access.')); }
     finally { setPairBusy(false); }
   };
   useEffect(() => { if (helperCode) pair(helperCode); }, []);

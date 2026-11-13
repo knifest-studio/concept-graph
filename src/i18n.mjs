@@ -26,6 +26,10 @@ export function setLanguage(value) {
 const fill = (text, values) => values ? text.replace(/\{(\w+)\}/g, (match, key) => Object.hasOwn(values, key) ? String(values[key]) : match) : text;
 // t('Go to {name}', { name }): the current language's text with the values filled in.
 export function t(text, values) {
+  if (!values && typeof text === 'string' && text.startsWith('The mask on “')) {
+    const match = /^The mask on “(.*)” no longer matches the image\. Paint it again\.$/s.exec(text);
+    if (match) return t('The mask on “{name}” no longer matches the image. Paint it again.', { name: match[1] });
+  }
   const translated = dictionaries[current]?.[text];
   return fill(typeof translated === 'string' ? translated : text, values);
 }

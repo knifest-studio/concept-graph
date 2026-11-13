@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let title = NSTextField(labelWithString: "Concept Graph Helper")
         title.font = .boldSystemFont(ofSize: 24)
         title.frame = NSRect(x: 24, y: 330, width: 732, height: 32)
-        let instruction = NSTextField(labelWithString: "Paste this pairing code into the board site. Keep this window open.")
+        let instruction = NSTextField(labelWithString: "Paste this pairing code into the board site in Chrome (Safari cannot connect). Keep this window open.")
         instruction.frame = NSRect(x: 24, y: 298, width: 732, height: 22)
         codeField.font = .monospacedSystemFont(ofSize: 17, weight: .medium)
         codeField.isSelectable = true

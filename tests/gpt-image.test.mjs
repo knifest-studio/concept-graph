@@ -40,6 +40,52 @@ const b64 = bytes => Buffer.from(bytes).toString('base64');
 const usage = { input_tokens: 1500, input_tokens_details: { text_tokens: 500, image_tokens: 1000 }, output_tokens: 2200, total_tokens: 3700 };
 const answer = (extra = {}) => ({ created: 1794528000, data: [{ b64_json: b64(png()) }], quality: 'medium', output_format: 'png', size: '1024x1024', usage, ...extra });
 const gate = () => { let open; const promise = new Promise(resolve => { open = resolve; }); return { promise, open }; };
+const maskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', baseId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png', markedId = 'cccccccc-cccc-cccc-cccc-cccccccccccc.png';
+const imageMask = source => ({ asset: maskId, marked: markedId, base: baseId, source });
+
+test('GPT mask prompts reorder the target and converted PNG first and number references in the submitted order', () => {
+  const graph = boardGraph(), target = graph.nodes[1]; target.data.mask = imageMask(reference);
+  graph.nodes.push({ id: 'style', type: 'image', position: { x: 0, y: 0 }, data: { asset: reference, caption: 'Style' } }); graph.edges.unshift({ id: 'sp', source: 'style', target: 'p' });
+  const request = gptImagePrompt(graph, 'p');
+  assert.deepEqual(request.images.map(image => image.asset), [baseId, reference]); assert.equal(request.mask, maskId);
+  assert.match(request.prompt, /Attachment 1: “Front view”/); assert.match(request.prompt, /Attachment 2: “Style”/); assert.match(request.prompt, /Edit only the masked area/);
+  assert.doesNotMatch(request.prompt, /highlighted edit area/);
+  const refs = request.images.map(() => ({ mimeType: 'image/png', data: b64(png(640, 480)), size: { width: 640, height: 480 } }));
+  const mask = { mimeType: 'image/png', data: b64(png(640, 480)), size: { width: 640, height: 480 } };
+  const body = JSON.parse(gptImageRequest(request.prompt, refs, { key: 'key', mask }).init.body);
+  assert.deepEqual(body.mask, { image_url: `data:image/png;base64,${mask.data}` }); assert.equal(body.images.length, 2);
+  for (const invalid of [{ ...mask, mimeType: 'image/jpeg' }, { ...mask, size: { width: 1, height: 1 } }]) assert.throws(() => gptImageRequest('edit', refs, { mask: invalid }), /same dimensions/);
+  assert.throws(() => gptImageRequest('edit', refs, { mask: { ...mask, data: 'A'.repeat(20971520) } }), /too large/);
+  assert.throws(() => gptImageRequest('edit', [], { mask }), /same dimensions/);
+});
+
+runtimeTest('the room loads the PNG base and mask from R2, budgets their bytes, and sends no marked copy to OpenAI', async t => {
+  const app = setup(t), calls = fake(t), before = readCloudGraph(app.room.document), next = structuredClone(before);
+  const target = next.nodes.find(node => node.id === 'i'); target.data.asset = reference.replace('.png', '.jpg'); target.data.mask = imageMask(target.data.asset);
+  applyLocalGraph(app.room.document, next, before, 'test');
+  app.files.set(`assets/${baseId}`, png(640, 480)); app.files.set(`assets/${maskId}`, png(640, 480));
+  assert.equal((await app.start()).status, 202); await app.settle();
+  assert.equal(calls.length, 1); assert.equal(calls[0].body.images.length, 1);
+  assert.equal(calls[0].body.images[0].image_url, `data:image/png;base64,${b64(png(640, 480))}`);
+  assert.deepEqual(calls[0].body.mask, { image_url: `data:image/png;base64,${b64(png(640, 480))}` });
+  app.files.set(`assets/${maskId}`, new Uint8Array(20 * 1024 * 1024));
+  const { run: { id } } = await (await app.start()).json(); await app.settle();
+  assert.match(app.room.document.getMap('runs').get(id).error, /20 MB in total/); assert.equal(calls.length, 1);
+  app.files.set(`assets/${maskId}`, png(12, 12));
+  const { run: { id: mismatch } } = await (await app.start()).json(); await app.settle();
+  assert.match(app.room.document.getMap('runs').get(mismatch).error, /same dimensions/); assert.equal(calls.length, 1);
+});
+
+runtimeTest('stale and multiple masks fail before quota reservation or a paid request', async t => {
+  const app = setup(t), calls = fake(t), before = readCloudGraph(app.room.document), next = structuredClone(before);
+  next.nodes.find(node => node.id === 'i').data.mask = imageMask(baseId); applyLocalGraph(app.room.document, next, before, 'test');
+  let response = await app.start(); assert.equal(response.status, 400); assert.match((await response.json()).error, /no longer matches/);
+  const current = readCloudGraph(app.room.document), double = structuredClone(current), image = double.nodes.find(node => node.id === 'i'); image.data.mask.source = reference;
+  double.nodes.push({ ...structuredClone(image), id: 'second' }); double.edges.push({ id: 'second-p', source: 'second', target: 'p' });
+  applyLocalGraph(app.room.document, double, current, 'test');
+  response = await app.start(); assert.equal(response.status, 400); assert.match((await response.json()).error, /Only one masked image/);
+  assert.deepEqual(app.directory.nanoUsage(user.email), { usedToday: 0, teamSpentUsd: 0 }); assert.equal(calls.length, 0);
+});
 
 test('settings use the company key, the existing limits and only a loopback endpoint override', () => {
   assert.deepEqual(gptImageSettings({}), { configured: false, dailyImages: 50, monthlyUsd: 50, endpoint: 'https://api.openai.com' });

@@ -335,7 +335,7 @@ export class BoardRoom extends YServer {
     catch (cause) { return { error: cause.message, status: 400 }; }
     // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
     // image per connected image, each reserved at the largest size it could come out.
-    const describe = !!request.describe, measure = { promptLength: request.prompt?.length || 0, references: request.images.length };
+    const describe = !!request.describe, measure = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const sources = request.upscale ? await this.imageSizes(request.images) : [];
     const calls = request.upscale ? request.images.length : describe ? 1 : promptVariants(request.target);
     const estimates = Array.from({ length: calls }, (_, index) => request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
@@ -623,9 +623,9 @@ export class BoardRoom extends YServer {
     }, origin);
   }
 
-  async callNano(job, references, fallback, result) {
+  async callNano(job, references, fallback, result, mask) {
     const gpt = job.run.provider === generators.gptImage, cost = gpt ? gptImageCost : nanoCost, parse = gpt ? gptImageResult : nanoResult;
-    const { url, init } = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, aspect: job.request.target.data.aspect })
+    const { url, init } = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, aspect: job.request.target.data.aspect, mask })
       : nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint });
     // The provider may bill even without an answer, so the estimate stands until the answer says otherwise.
     result.usd = job.estimateUsd;
@@ -657,15 +657,15 @@ export class BoardRoom extends YServer {
   // One request per variant, side by side, never retried automatically: a retry could be billed twice. Images join the run
   // as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
-    const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length };
+    const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const name = request.upscale ? 'The upscale' : run.provider === generators.gptImage ? 'GPT Image' : 'Nano Banana';
     const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, nanoTimeout);
     const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
     let outcome = { status: 'completed' };
     try {
-      const references = await this.references(request.images, request.upscale, name);
+      const references = await this.references([...request.images, ...(request.mask ? [{ asset: request.mask }] : [])], request.upscale, name), mask = request.mask ? references.pop() : undefined;
       if (job.cancelled) return;
-      const calls = await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result)));
+      const calls = await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result, mask)));
       const failures = calls.filter(call => call.status === 'rejected').map(call => call.reason);
       if (failures.length === calls.length) throw failures[0];
       // Some variants (or images) arrived: the run succeeds, and History says what the others ran into.

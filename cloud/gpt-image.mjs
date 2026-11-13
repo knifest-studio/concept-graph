@@ -14,7 +14,7 @@ export function gptImageSettings(env) {
 export const gptImageStatus = (user, env, directory) => nanoStatus(user, env, directory, gptImageSettings(env));
 
 export function gptImagePrompt(graph, nodeId) {
-  const request = nanoPrompt(graph, nodeId);
+  const request = nanoPrompt(graph, nodeId, { maskInput: true });
   if (isDescribe(request.target) || isUpscale(request.target)) throw new NanoError('bad_request', 'GPT Image only generates images.');
   if (request.prompt.length > 32000) throw new NanoError('bad_request', 'Connected text is too long for GPT Image (32,000 characters). Disconnect some context.');
   return request;
@@ -27,17 +27,20 @@ export function gptImageSize(aspect = 1) {
     .sort((a, b) => Math.abs(Math.log(ratio / a[0])) - Math.abs(Math.log(ratio / b[0])))[0][1];
 }
 
-export function gptImageRequest(prompt, references, { key, endpoint: base = endpoint, aspect } = {}) {
+export function gptImageRequest(prompt, references, { key, endpoint: base = endpoint, aspect, mask } = {}) {
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 32000) throw new NanoError('bad_request', 'GPT Image needs a prompt of at most 32,000 characters.');
   if (references.length > 16) throw new NanoError('bad_request', 'GPT Image accepts at most 16 reference images.');
-  const images = references.map(image => {
+  const imageUrl = image => {
     const image_url = `data:${image.mimeType};base64,${image.data}`;
     if (image_url.length > maxDataUrl) throw new NanoError('bad_request', 'A reference image is too large for GPT Image. Use a smaller image.');
     return { image_url };
-  });
+  };
+  const images = references.map(imageUrl);
+  if (mask && (!images.length || mask.mimeType !== 'image/png' || references[0].mimeType !== 'image/png'
+    || !mask.size?.width || mask.size.width !== references[0].size?.width || mask.size.height !== references[0].size?.height)) throw new NanoError('bad_request', 'The mask and its image must be PNGs with the same dimensions. Paint the mask again.');
   return { url: `${base}/v1/images/${images.length ? 'edits' : 'generations'}`, init: {
     method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: gptImageModel, prompt, n: 1, size: gptImageSize(aspect), quality: 'medium', output_format: 'png', moderation: 'auto', ...(images.length ? { images } : {}) }),
+    body: JSON.stringify({ model: gptImageModel, prompt, n: 1, size: gptImageSize(aspect), quality: 'medium', output_format: 'png', moderation: 'auto', ...(images.length ? { images } : {}), ...(mask ? { mask: imageUrl(mask) } : {}) }),
   } };
 }
 

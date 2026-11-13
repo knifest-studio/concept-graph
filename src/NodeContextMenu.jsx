@@ -14,7 +14,7 @@ const step = isMac ? '⌘ ' : 'Ctrl+';
 const layers = [['front', 'Bring to front', ']'], ['forward', 'Bring forward', `${step}]`], ['backward', 'Send backward', `${step}[`], ['back', 'Send to back', '[']];
 const menuNames = { text: 'Prompt options', image: 'image options', group: 'group options', section: 'section options', sticky: 'sticky options', shape: 'shape options', stamp: 'stamp options', arrow: 'arrow options', drawing: 'drawing options' };
 
-export function NodeContextMenu({ children, id, type, actions, slideshow }) {
+export function NodeContextMenu({ children, id, type, actions, slideshow, masked }) {
   const [position, setPosition] = useState(null);
   const menu = useRef(null);
 
@@ -75,6 +75,7 @@ export function NodeContextMenu({ children, id, type, actions, slideshow }) {
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>{t('Copy image')}</span><kbd>{shortcut}</kbd></button>}
       {!readOnly && <>{type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.describeImage)}>{t('Describe image')}</button>}
       {type === 'image' && actions.upscale && <button type="button" role="menuitem" onClick={() => choose(actions.upscaleImage)}>{t('Upscale image')}</button>}
+      {type === 'image' && actions.imageEditing && <><button type="button" role="menuitem" onClick={() => choose(actions.cropImage)}>{t('Crop')}</button><button type="button" role="menuitem" onClick={() => choose(actions.maskImage)}>{masked ? t('Edit mask') : t('Mask')}</button>{masked && <button type="button" role="menuitem" onClick={() => choose(actions.removeMask)}>{t('Remove mask')}</button>}</>}
       {type === 'text' && <button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>{t('Save as custom node')}</button>}
       {type === 'group' && <button type="button" role="menuitem" onClick={() => choose(actions.renameGroup)}>{t('Rename')}</button>}
       {type === 'group' && slideshow !== undefined && <button type="button" role="menuitem" onClick={() => choose(actions.toggleSlideshow)}>{slideshow ? t('Show as group') : t('Show as slideshow')}</button>}

@@ -1,5 +1,6 @@
 import { describePrompt, describeModel, isDescribe, nanoModel, promptText, runInputs, imageAttachment, imageAttachments } from '../graph.mjs';
 import { imageFormat, imageTypes } from './assets.mjs';
+import { generationReferences, maskInstruction } from '../src/image-edits.mjs';
 
 // Nano Banana 2.1 through the Gemini Interactions API, the request the image-generation guide documents (read 2026-11-04):
 // https://aistudio.google.com/docs/image-generation and, for the Interaction object (steps, usage, errors),
@@ -46,8 +47,8 @@ export function nanoSettings(env) {
 }
 
 // The inputs a Codex run would get (runInputs decides which), written for an image model instead of an agent.
-export function nanoPrompt(graph, nodeId) {
-  const { target, images, context } = runInputs(graph, nodeId);
+export function nanoPrompt(graph, nodeId, { maskInput = false } = {}) {
+  const { target, images: inputs, context } = runInputs(graph, nodeId), images = generationReferences(inputs, maskInput);
   // A describe node asks for the same written description Codex would give, from a text model.
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images, target, describe: true };
   const prompt = [
@@ -55,9 +56,10 @@ export function nanoPrompt(graph, nodeId) {
     ...context.map((node, i) => `Context ${i + 1}:\n${promptText(node)}`),
     imageAttachments(images),
     `${context.length || images.length ? 'Request:\n' : ''}${promptText(target)}`,
+    maskInstruction(inputs, maskInput),
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
-  return { prompt, images, target };
+  return { prompt, images, target, ...(maskInput && inputs.some(image => image.mask) ? { mask: inputs.find(image => image.mask).mask.asset } : {}) };
 }
 
 // Usage figures are shown only to people who may use the site's API keys.

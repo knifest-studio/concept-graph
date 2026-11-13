@@ -9,7 +9,7 @@ export const targets = [
   { name: 'macos-x64', archive: `node-v${version}-darwin-x64.tar.gz`, sha256: '45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec', platform: 'darwin-x64' },
   { name: 'windows-x64', archive: `node-v${version}-win-x64.zip`, sha256: '6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33', platform: 'win-x64' },
 ];
-export const helperFiles = ['helper.mjs', 'helper-auth.mjs', 'server.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'graph.mjs', 'src/annotations.mjs', 'src/pages.mjs', 'src/layers.mjs', 'src/sections.mjs', 'src/node-placement.mjs', 'board-archive.mjs', 'LICENSE'];
+export const helperFiles = ['helper.mjs', 'helper-auth.mjs', 'server.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'graph.mjs', 'src/annotations.mjs', 'src/pages.mjs', 'src/layers.mjs', 'src/sections.mjs', 'src/node-placement.mjs', 'src/image-edits.mjs', 'board-archive.mjs', 'LICENSE'];
 export const dependencies = ['yauzl', 'yazl', 'pend', 'buffer-crc32'];
 export const chunkSize = 20 * 1024 * 1024;
 

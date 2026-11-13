@@ -29,6 +29,6 @@
     "directory": "../dist-cloud",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/concept-graph-helper-downloads.json", "/privacy", "/b/*", "/api/*", "/assets/*", "/downloads/*", "/parties/*", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*"]
+    "run_worker_first": ["/concept-graph-helper-downloads.json", "/privacy", "/b/*", "/api/*", "/assets/*", "/clips/*", "/downloads/*", "/parties/*", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*"]
   }
 }

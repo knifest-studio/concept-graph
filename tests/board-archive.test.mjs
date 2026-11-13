@@ -44,6 +44,24 @@ async function pack(files, options = {}) {
   zip.end(); return collect(zip.outputStream);
 }
 
+test('crop originals, masks, marked copies and historical edits survive archive export and asset remapping', async t => {
+  const { source, destination } = await fixture(t), saved = structuredClone(board), data = saved.graph.nodes[0].data;
+  data.uncropped = { asset: historical, pixels: { width: 10, height: 10 }, rect: { x: 2, y: 2, width: 6, height: 6 } };
+  data.mask = { asset: unused, marked: historical, base: current, source: current };
+  saved.graph.runs[0].snapshot[0] = structuredClone(saved.graph.nodes[0]);
+  const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive);
+  const manifest = JSON.parse(files.get('board.json')); assert.equal(manifest.version, 8);
+  for (const asset of [current, historical, unused]) assert.ok(files.has(`assets/${asset}`));
+  const imported = await importBoardArchive(archive, destination), result = imported.graph.nodes[0].data;
+  assert.notEqual(result.asset, current); assert.equal(result.mask.base, result.asset); assert.equal(result.mask.source, result.asset);
+  assert.equal(result.uncropped.asset, result.mask.marked); assert.deepEqual(result.uncropped.rect, data.uncropped.rect);
+  assert.deepEqual(imported.graph.runs[0].snapshot[0].data, result);
+  assert.deepEqual(await readFile(path.join(destination, result.mask.asset)), png);
+  assert.equal(saved.graph.nodes[0].data.asset, current);
+  manifest.version = 7; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /image crops or masks/);
+});
+
 test('format 4 round trips annotations, group fills and author metadata; older versions cannot silently carry them', async t => {
   const { source, destination } = await fixture(t), saved = structuredClone(board);
   saved.graph.groups[0].color = '#e9e2ff';
@@ -142,7 +160,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 8;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 9;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));

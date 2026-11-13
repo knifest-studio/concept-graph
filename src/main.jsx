@@ -12,7 +12,7 @@ import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
-import { detectPlatform } from './platform-detection.mjs';
+import { detectPlatform, loopbackBlocked } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
 import { AnnotationTools, ArrowNode, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, ShapeNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
@@ -22,6 +22,8 @@ import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSigna
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
+import { ImageEditor } from './ImageEditor.jsx';
+import { hasGenerationPrompt } from './image-edits.mjs';
 import { nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -221,7 +223,7 @@ function FullImageNode(props) {
   return <NodeFeedback id={props.id}>{props.data.collapsed ? <CollapsedNode {...props} kind="image"/> : <ExpandedImageNode {...props}/>}{author && <span className={`image-author${props.data.collapsed ? ' collapsed' : ''}`}><AuthorBadge author={author}/></span>}</NodeFeedback>;
 }
 
-function ExpandedImageNode({ id, data }) {
+function ExpandedImageNode({ id, data, selected }) {
   const canvas = useCanvas();
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
   const [captionFocused, setCaptionFocused] = useState(false), [caption, setCaption] = useState(data.caption || '');
@@ -248,11 +250,11 @@ function ExpandedImageNode({ id, data }) {
     return () => clearTimeout(timer);
   }, [view.variation, id]);
   const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
-  return <NodeContextMenu id={id} type="image" actions={canvas}><div className="image-node-wrapper">
+  return <NodeContextMenu id={id} type="image" actions={canvas} masked={!!data.mask}><div className="image-node-wrapper">
     <input ref={captionInput} className={`image-node-caption nodrag${data.caption?.trim() ? '' : ' unnamed'}`} aria-label={t('Image name')} title={view.readOnly ? undefined : t('Edit image name')} readOnly={view.readOnly} maxLength={120} value={captionFocused ? caption : imageName({ data })} onFocus={() => { setCaption(imageName({ data })); captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => { if (!view.readOnly && !captionEdited.current && !data.caption?.trim()) canvas.editCaption(id, imageName({ data })); setCaptionFocused(false); }} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); captionEdited.current = true; setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/><article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
     {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName({ data })} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
-    <div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
+    {data.mask && <ImageMask data={data} preview={hovered || focused || selected}/>}<div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
     <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
     <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
     <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip={t('New prompt that uses this image as a reference')} onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>{t('+ Prompt from this')}</button>
@@ -286,10 +288,10 @@ function CollapsedImage({ asset, id }) {
 function CollapsedNode({ id, data, kind }) {
   const canvas = useCanvas(), isImage = kind === 'image';
   const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
-  return <NodeContextMenu id={id} type={kind} actions={canvas}>
+  return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
       {(!isImage || data.runId) && <Handle type="target" position={Position.Left} isConnectable={!isImage} aria-label={isImage ? t('Image input') : t('Connect input to prompt')}/>}
-      {isImage ? <CollapsedImage asset={data.asset} id={id}/> : <Icon name="text" size={26}/>}
+      {isImage ? <><CollapsedImage asset={data.asset} id={id}/>{data.mask && <ImageMask data={data}/>}</> : <Icon name="text" size={26}/>}
       {busy(run) && <span className="collapsed-run-dot" aria-label={t('Generating')} title={t('Generating…')}/>}
       {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={t(run.error)} title={t(run.error)}/>}
       <button className="collapsed-node-expand nodrag" type="button" aria-label={isImage ? t('Expand image node') : t('Expand text node')} data-tooltip={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>
@@ -343,6 +345,10 @@ function ScaledBadge({ label, title }) {
   return <span className="resolution-badge" title={title} style={{ '--badge-scale': Math.min(3, Math.max(1, 1 / zoom)) }}>{label}</span>;
 }
 
+function ImageMask({ data, preview = true }) {
+  return <>{preview && data.mask.source === data.asset && <img className="image-mask-preview" src={assetUrl(data.mask.marked)} alt="" draggable="false" loading="lazy"/>}<span className="image-mask-badge">{t('Mask')}</span></>;
+}
+
 function LightNode({ id, type, data, selected }) {
   const isImage = type === 'image', canvas = useCanvas();
   const view = useCanvasValue(state => {
@@ -353,10 +359,10 @@ function LightNode({ id, type, data, selected }) {
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesSiteGenerator(data), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
     {(!isImage || data.runId) && <LodHandle type="target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
-    {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
+    {isImage && data.mask && <ImageMask data={data} preview={false}/>} {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
-  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/><ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
+  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/>{data.mask && <ImageMask data={data} preview={false}/>}<ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
   if (data.task === upscaleTask) {
     const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), sizes = upscaler === upscalers.nanoBanana ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']], unset = upscaler !== upscalers.nanoBanana && !view.falReady;
@@ -700,6 +706,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const [status, setStatus] = useState({}), [saved, setSaved] = useState('Loading…'), [loaded, setLoaded] = useState(false);
   const [limitsVersion, setLimitsVersion] = useState(0);
   const [toast, setToast] = useState(''), [viewId, setViewId] = useState(null), [viewSize, setViewSize] = useState(null), [starting, setStarting] = useState(null);
+  const [imageEdit, setImageEdit] = useState(null);
   const [tab, setTab] = useState('canvas');
   const [diagnosticsId, setDiagnosticsId] = useState(null);
   const diagnosticsReturnFocus = useRef(null);
@@ -738,7 +745,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const pairing = !!(cloudSession?.pairing || helperSession?.pairing), helperNeeded = cloud || hosted;
   // A viewer of a shared board sees it live and can select, copy and look around but change nothing; the room ignores their edits too.
   const readOnly = cloud && cloudSession.role === 'view', readOnlyRef = useRef(readOnly), canRename = !cloud || cloudSession.role === 'owner'; readOnlyRef.current = readOnly;
-  modalOpen.current = !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
+  useEffect(() => { if (readOnly) setImageEdit(null); }, [readOnly]);
+  modalOpen.current = !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   const flow = useReactFlow();
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
   const scoped = useMemo(() => pageContent({ nodes, edges, groups, sections }, activePage, pages), [nodes, edges, groups, sections, activePage, pages]);
@@ -1401,6 +1409,40 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
     } } finally { uploads.current--; setUploading(uploads.current > 0); if (added.length) requestAnimationFrame(() => revealCreated(added.at(-1))); }
+  };
+  const editImage = (nodeId, mode) => {
+    if (!cloud || readOnlyRef.current || mcpLocked.current || !loaded || switchingRef.current) return;
+    const node = nodeRef.current.find(node => node.id === nodeId && node.type === 'image');
+    if (node) setImageEdit({ node: { id: node.id, data: structuredClone(node.data) }, mode, returnFocus: document.activeElement });
+  };
+  const uploadEdit = async blob => {
+    if (!alive.current || readOnlyRef.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
+    const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
+    return asset;
+  };
+  const applyImageEdit = (data, makePrompt) => {
+    if (!alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
+    syncCloud();
+    const node = nodeRef.current.find(node => node.id === imageEdit.node.id);
+    const signature = data => JSON.stringify([data.asset, data.pixels, data.uncropped, data.mask]);
+    if (!node || signature(node.data) !== signature(imageEdit.node.data)) throw new Error(t('This image changed while you were editing. Reopen the editor and try again.'));
+    const fields = { ...node.data };
+    for (const key of ['asset', 'pixels', 'aspect', 'uncropped', 'mask']) { if (data[key] === undefined) delete fields[key]; else fields[key] = data[key]; }
+    const graph = { nodes: nodeRef.current, edges: edgeRef.current }, create = makePrompt && !hasGenerationPrompt(graph, node.id);
+    const prompt = create ? assignPage({ id: id(), type: 'text', z: nextLayer(graph.nodes), position: promptSpot(node.id), data: { text: '', createdAt: new Date().toISOString() } }, nodePage(node, pagesRef.current)) : null;
+    checkpoint();
+    putNodes(current => [...current.map(item => item.id === node.id ? { ...item, data: fields } : prompt ? deselected(item) : item), ...(prompt ? [{ ...prompt, selected: true }] : [])]);
+    if (prompt) {
+      const edge = { id: id(), source: node.id, target: prompt.id };
+      putNodes(current => nameImageConnections(current, edgeRef.current, [edge])); putEdges(current => [...current, edge]); effects.createNodes([prompt.id]); effects.createEdges([edge.id], [prompt.id]);
+    }
+    markDirty();
+    if (prompt) { setViewId(null); focusNode(prompt.id, 'text', false, true); guide.report({ type: 'variation' }); }
+  };
+  const removeMask = nodeId => {
+    if (!cloud || readOnlyRef.current || mcpLocked.current || !loaded || switchingRef.current) return;
+    if (!nodeRef.current.some(node => node.id === nodeId && node.data.mask)) return;
+    checkpoint(); putNodes(current => current.map(node => { if (node.id !== nodeId) return node; const { mask, ...data } = node.data; return { ...node, data }; })); markDirty();
   };
   const insertSelection = (selection, position, duplicate = false) => {
     if (!selection.nodes.length && !selection.sections?.length) return;
@@ -2282,7 +2324,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
@@ -2292,7 +2334,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
-  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud }));
+  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
   const flowStore = useStoreApi();
   // Zoom reaches the canvas as a CSS variable (group titles) and a detail bucket (card variants), without rendering anything.
@@ -2327,7 +2369,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const connectionLineStyle = useMemo(() => ({ stroke: connectionColor(connectionType), strokeWidth: 2 }), [connectionType]);
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
-  return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
+  return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing || !!imageEdit ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
     <style>{pendingPulseKeyframes}</style>
     <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
     {cloudSession?.panels}
@@ -2375,7 +2417,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">{t('Connect your ChatGPT account')}</h2><p>{t('Sign in to generate images with your Codex account. Your boards and images stay on this computer.')}</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>{t('Sign in with ChatGPT')}</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>{t('Not now')}</button></div></div>}
     {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">{t('Sign in with ChatGPT')}</h2><p>{t('Continue in your browser to connect your account. Return here when you finish.')}</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">{t('Continue in browser')}</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>{t('Cancel')}</button></div></div>}
     {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
-    {viewNode && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
+    {viewNode && !imageEdit && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
       <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
       <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName(viewNode)} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>
       <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span>
@@ -2392,10 +2434,10 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
             {node.data.template.instructions && <p>{node.data.template.instructions}</p>}
             {node.data.template.assets?.length > 0 && <div className="run-inputs">{node.data.template.assets.map((asset, index) => <img key={`${asset}-${index}`} src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('{name} reference {number}', { name: node.data.template.name, number: index + 1 })} loading="lazy"/>)}</div>}
           </div>)}</>}
-        <div className="lightbox-actions"><button data-tooltip={t('Download original image')} onClick={() => downloadImage(viewNode.data.asset)}><Icon name="download" size={17}/> {t('Download original')}</button></div>
+        <div className="lightbox-actions">{cloud && !readOnly && <><button type="button" onClick={() => editImage(viewNode.id, 'crop')}>{t('Crop')}</button><button type="button" onClick={() => editImage(viewNode.id, 'mask')}>{viewNode.data.mask ? t('Edit mask') : t('Mask')}</button></>}<button data-tooltip={t('Download original image')} onClick={() => downloadImage(viewNode.data.uncropped?.asset || viewNode.data.asset)}><Icon name="download" size={17}/> {t('Download original')}</button></div>
       </div>
     </div></div>}
-  </div>{mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
+  </div>{imageEdit && !readOnly && <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>} {mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [
@@ -2516,6 +2558,11 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
   const [selected, setSelected] = useState(''), [showBuilds, setShowBuilds] = useState(showAllBuilds);
   const [downloading, setDownloading] = useState(''), [downloadError, setDownloadError] = useState(''), [downloaded, setDownloaded] = useState(false);
   const officialSite = cloudMode || location.origin === 'https://concept-graph-local.knifest.chatgpt.site';
+  // Pasting a code in Safari can only end in a bare network failure, so the dead end is named before the attempt.
+  const blockedBrowser = useMemo(() => loopbackBlocked(), []);
+  const [linkCopied, setLinkCopied] = useState(false);
+  // When the clipboard is refused, the address is shown instead so it can still be copied by hand.
+  const copyLink = () => (navigator.clipboard?.writeText(location.href) || Promise.reject()).then(() => setLinkCopied(true), () => setLinkCopied('shown'));
   useEffect(() => { if (detection?.packageId) setSelected(current => current || detection.packageId); }, [detection]);
   const downloadHelper = async platform => {
     setDownloading(t('Preparing download…')); setDownloadError(''); setDownloaded(false);
@@ -2577,6 +2624,7 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
     <section className="helper-panel" aria-labelledby="helper-title">
       <header className="helper-panel-head">{onClose && <button type="button" className="helper-panel-close icon-button" aria-label={t('Back to board')} data-tooltip={t('Back to board')} onClick={onClose}><Icon name="close" size={18}/></button>}<div className="helper-brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><h2 id="helper-title">{t('Connect Codex to generate images')}</h2><p>{cloudMode ? t('Images are generated by Codex on your computer. A small helper app links it to this board.') : t('A small helper app links this canvas to Codex on your computer.')}</p></header>
       {teammates}
+      {blockedBrowser && <div className="helper-browser-warning" role="alert"><p><strong>{t('Open this page in Chrome')}</strong>{t('Safari and in-app browsers such as Telegram’s block websites from reaching the helper on your computer, so pairing cannot work here.')}{linkCopied === 'shown' && <code className="helper-browser-link">{location.href}</code>}</p>{linkCopied !== 'shown' && <button type="button" onClick={copyLink}>{linkCopied ? t('Link copied') : t('Copy page link')}</button>}</div>}
       {!officialSite && <p className="helper-error" role="alert">{t('Open this app at its official site address to connect your local helper.')}</p>}
       <form onSubmit={event => { event.preventDefault(); connect(code); }}>
         <div className="helper-step">
@@ -2609,7 +2657,7 @@ function HelperSetup({ code, setCode, connecting, error, connect, cloudMode = fa
               <div className="helper-connect"><input ref={codeInput} id="helper-code" type="password" autoComplete="off" spellCheck="false" value={code} onChange={event => setCode(event.target.value)} onPaste={event => { const text = event.clipboardData.getData('text'); if (text.trim()) { event.preventDefault(); pasted(text); } }} placeholder={t('Paste pairing code')} required/><button className="helper-primary" type="submit" disabled={connecting || !code.trim() || !officialSite}>{connecting ? t('Connecting…') : t('Connect')} <Icon name="arrow" size={15}/></button></div>
               {error && <p className="helper-error" role="alert">{error}</p>}
             </div>
-            <p className="helper-step-note">{t('If your browser asks about local network access, allow it. Next you’ll be guided to install Codex if needed and sign in with ChatGPT.')}</p>
+            <p className="helper-step-note">{t('Pair in Chrome: Safari cannot connect to the helper. If Chrome asks about local network access, allow it. Next you’ll be guided to install Codex if needed and sign in with ChatGPT.')}</p>
           </div>
         </div>
       </form>
@@ -2656,7 +2704,9 @@ function Workspace() {
     } catch (failure) {
       if (hosted) {
         helperToken = previousToken;
-        setError(failure.status === 403 ? t('The pairing code was not accepted. Check the terminal and try again.') : t('Could not reach the local helper. Start it, allow local network access if prompted, and try again.'));
+        setError(failure.status === 403 ? t('The pairing code was not accepted. Check the terminal and try again.')
+          : loopbackBlocked() ? t('This browser cannot reach the local helper. Open this page in Chrome and paste the code there.')
+            : t('Could not reach the local helper. Start it, allow local network access if prompted, and try again.'));
       } else setError(failure.message);
     } finally { setConnecting(false); }
   };

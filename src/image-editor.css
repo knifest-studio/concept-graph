@@ -1,0 +1,27 @@
+.image-editor { position: fixed; inset: 0; z-index: 1600; display: flex; flex-direction: column; background: var(--bg, #151519); color: var(--text, #eee); outline: none; }
+.image-editor-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.image-editor-toolbar h2 { font-size: 16px; margin: 0 12px 0 0; }
+.image-editor-tools, .image-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.image-editor-actions { margin-left: auto; }
+.image-editor-toolbar button { min-height: 36px; padding: 7px 12px; }
+.image-editor-tools button[aria-pressed="true"] { border-color: #e628b4; background: #e628b426; }
+.image-editor-tools label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.image-editor-tools input { width: 100px; accent-color: #e628b4; }
+.image-editor-area { flex: 1; min-height: 0; margin: 24px; display: grid; place-items: center; overflow: hidden; }
+.image-editor-stage { position: relative; flex: none; touch-action: none; user-select: none; background: repeating-conic-gradient(#bbb 0% 25%, #ddd 0% 50%) 0 / 16px 16px; }
+.image-editor-stage > img { display: block; width: 100%; height: 100%; pointer-events: none; }
+.crop-stage { cursor: move; }
+.crop-rectangle { position: absolute; border: 1px solid white; box-shadow: 0 0 0 200vmax #0009; touch-action: none; }
+.crop-rectangle:focus-visible { outline: 2px solid #e628b4; }
+.crop-handle { position: absolute; width: 14px; height: 14px; min-width: 0; padding: 0; background: white; border: 1px solid #222; border-radius: 2px; transform: translate(-50%, -50%); touch-action: none; }
+.crop-nw, .crop-ne, .crop-n { top: 0; }.crop-sw, .crop-se, .crop-s { top: 100%; }.crop-e, .crop-w { top: 50%; }
+.crop-nw, .crop-sw, .crop-w { left: 0; }.crop-ne, .crop-se, .crop-e { left: 100%; }.crop-n, .crop-s { left: 50%; }
+.crop-nw, .crop-se { cursor: nwse-resize; }.crop-ne, .crop-sw { cursor: nesw-resize; }.crop-n, .crop-s { cursor: ns-resize; }.crop-w, .crop-e { cursor: ew-resize; }
+.mask-stage { cursor: crosshair; }.mask-paint { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; pointer-events: none; }
+.image-editor-footer { min-height: 45px; padding: 10px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+.image-editor-footer p { color: #ed6666; margin: 0; }
+.image-mask-badge { position: absolute; right: 10px; top: 10px; pointer-events: none; color: white; background: #8f126d; padding: 3px 7px; border-radius: 5px; font-size: 11px; line-height: 16px; z-index: 2; }
+.image-mask-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; border-radius: inherit; opacity: 0; }
+.image-node:hover .image-mask-preview, .image-node:focus-within .image-mask-preview, .collapsed-node-image-card:hover .image-mask-preview, .react-flow__node.selected .image-mask-preview { opacity: 1; }
+.collapsed-node-image-card .image-mask-badge { right: 4px; top: 4px; font-size: 9px; padding: 0 3px; }
+@media (max-width: 700px) { .image-editor-toolbar { padding: 10px; gap: 8px; }.image-editor-area { margin: 18px; }.image-editor-actions { margin-left: 0; }.image-editor-footer { padding: 8px 12px; } }

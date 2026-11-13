@@ -46,7 +46,7 @@ test('real Nano Banana placements consume shown slots in arrival order when vari
   const prompt = { id: 'prompt', type: 'text', position: { x: 30, y: 50 }, data: { text: 'A bird', aspect: .5 } };
   let run = { id: 'run', nodeId: 'prompt', status: 'running', provider: 'nano-banana', variants: 3, outputIds: [] };
   let graph = { nodes: [prompt], edges: [], groups: [], runs: [run], revision: 0 };
-  const slots = new Map(runPlaceholders(graph, [run], 'page-1').nodes.map(node => [node.id, slot({ id: node.id, x: node.position.x, y: node.position.y, clip: node.data.clip })]));
+  const slots = new Map(runPlaceholders(graph, [run], 'page-1').nodes.map(node => [node.id, slot({ id: node.id, x: node.position.x, y: node.position.y, seed: node.data.seed })]));
   for (const [arrival, index] of [0, 2, 1].entries()) {
     graph = placeRunOutput(graph, { runId: run.id, nodeId: prompt.id, run, output: { index, caption: 'Bird' }, asset: `image-${index}`, dimensions: { width: 200, height: 100 } });
     run = graph.runs[0];

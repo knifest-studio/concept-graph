@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { imageNode, positionRunOutput, descriptionNode } from '../graph.mjs';
-import { codexImageActive, runPlaceholders, waitingVideo } from '../src/run-placeholders.mjs';
-import { waitingVideos } from '../src/waiting-videos.mjs';
+import { codexImageActive, runPlaceholders, waitingSeed } from '../src/run-placeholders.mjs';
+import { clipAt } from '../src/waiting-videos.mjs';
 import { boxTouches, canvasView } from '../src/canvas.mjs';
 import { selectedGraph } from '../src/clipboard.mjs';
 import { generationFocusNodes } from '../src/generation-tray.mjs';
@@ -23,7 +23,7 @@ test('active local summaries and shared runs produce canvas-only, inert slots wi
     for (const flag of ['selectable', 'draggable', 'connectable', 'deletable', 'focusable']) assert.equal(node[flag], false);
     assert.deepEqual(node.style, { width: 310, height: 310 });
     assert.equal(node.data.status, index ? 'Queued' : 'Generating');
-    assert.ok(waitingVideos.includes(node.data.clip));
+    assert.equal(node.data.seed, waitingSeed(node.id));
     assert.equal(result.edges[index].target, node.id); assert.equal(result.edges[index].selectable, false);
     assert.equal(result.edges[index].type, 'pending'); assert.deepEqual(result.edges[index].data, {});
     assert.equal(node.data.spawnAt, undefined);
@@ -51,7 +51,7 @@ test('Nano Banana keeps the remaining slot IDs and clips as real images arrive',
     board.nodes.push(node); job.outputIds.push(node.id);
     const after = pending(board, [job]);
     assert.deepEqual(after.nodes.map(node => node.id), before.nodes.slice(count + 1).map(node => node.id));
-    assert.deepEqual(after.nodes.map(node => node.data.clip), before.nodes.slice(count + 1).map(node => node.data.clip));
+    assert.deepEqual(after.nodes.map(node => node.data.seed), before.nodes.slice(count + 1).map(node => node.data.seed));
     assert.deepEqual(after.nodes.map(node => node.position), before.nodes.slice(count + 1).map(node => node.position));
   }
   assert.deepEqual(pending(board, [job]), { nodes: [], edges: [] });
@@ -99,7 +99,7 @@ test('upscale counts frozen inputs first, then snapshots, then distinct directly
 test('describe has one text-shaped slot, no clip, and the same initial placement as the text output', () => {
   const board = graph([prompt('prompt', { task: 'describe' })]), job = run({ task: 'describe', provider: 'nano-banana', variants: 4 });
   const result = pending(board, [job]);
-  assert.equal(result.nodes.length, 1); assert.equal(result.nodes[0].data.clip, undefined);
+  assert.equal(result.nodes.length, 1); assert.equal(result.nodes[0].data.seed, undefined);
   assert.equal(result.nodes[0].data.describe, true); assert.equal(result.nodes[0].data.status, 'Describing');
   assert.deepEqual(result.nodes[0].style, { width: 310, height: 80 });
   const output = descriptionNode({ ...job, target: board.nodes[0] }, 'A bird');
@@ -195,8 +195,11 @@ test('canvas can connect and focus pending slots, including folded prompts, whil
 });
 
 test('clip choice is deterministic across replicas, varies between slots and tolerates an empty clip list', () => {
-  assert.deepEqual(waitingVideos, Array.from({ length: 8 }, (_, i) => `/waiting/0${i + 1}.mp4`));
-  assert.equal(waitingVideo('run-pending-3'), waitingVideo('run-pending-3'));
-  assert.equal(new Set(Array.from({ length: 8 }, (_, i) => waitingVideo(`run-pending-${i}`))).size, 8);
-  assert.equal(waitingVideo('slot', []), undefined);
+  // The seed travels instead of a clip, because only the browser knows which clips the site is hosting.
+  assert.equal(waitingSeed('run-pending-3'), waitingSeed('run-pending-3'));
+  const clips = Array.from({ length: 8 }, (_, i) => `/clips/0${i + 1}.mp4`);
+  const opening = Array.from({ length: 8 }, (_, i) => clipAt(waitingSeed(`run-pending-${i}`), 0, clips));
+  assert.equal(new Set(opening).size, 8);
+  assert.ok(opening.every(clip => clips.includes(clip)));
+  assert.equal(clipAt(waitingSeed('slot'), 0, []), undefined);
 });

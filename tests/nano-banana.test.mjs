@@ -47,6 +47,36 @@ const seed = { nodes: [
 ], edges: [{ id: 'e1', source: 'c', target: 'p' }, { id: 'e2', source: 'i', target: 'p' }, { id: 'e3', source: 'far', target: 'c' }], groups: [], runs: [] };
 const empty = { nodes: [], edges: [], groups: [], runs: [] };
 
+test('Nano Banana places highlighted copies directly after masked images; descriptions ignore masks', () => {
+  const graph = structuredClone(seed), image = graph.nodes.find(node => node.id === 'i'), marked = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png';
+  image.data.mask = { asset: reference, marked, base: reference, source: reference };
+  const request = nanoPrompt(graph, 'p');
+  assert.deepEqual(request.images.map(image => image.asset), [reference, marked]);
+  assert.match(request.prompt, /Attachment 1: “Front view”/); assert.match(request.prompt, /Attachment 2: “Front view \(highlighted edit area\)”/);
+  assert.match(request.prompt, /Edit only the highlighted area/); assert.match(request.prompt, /must not contain the highlight/);
+  const { init } = nanoRequest(request.prompt, request.images.map(image => ({ ...image, mimeType: 'image/png', data: image.asset })), { key: 'fake', endpoint: 'https://example.test' });
+  assert.deepEqual(JSON.parse(init.body).input.filter(part => part.type === 'image').map(part => part.data), [reference, marked]);
+  image.data.mask.source = marked;
+  assert.throws(() => nanoPrompt(graph, 'p'), /no longer matches/);
+  graph.nodes[0].data.task = 'describe'; const describe = nanoPrompt(graph, 'p');
+  assert.deepEqual(describe.images.map(image => image.asset), [reference]); assert.doesNotMatch(describe.prompt, /highlight|masked area/);
+});
+
+runtimeTest('Nano Banana loads the marked copy from R2, includes its bytes in limits and never calls Google on missing highlights', async t => {
+  const app = cloudSetup(t), marked = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', before = readCloudGraph(app.boardRoom.document), next = structuredClone(before);
+  next.nodes.find(node => node.id === 'i').data.mask = { asset: reference, marked, base: reference, source: reference };
+  applyLocalGraph(app.boardRoom.document, next, before, 'test');
+  const calls = []; t.mock.method(globalThis, 'fetch', async (url, init) => { calls.push(JSON.parse(init.body)); return Response.json(interaction([png()])); });
+  const start = () => app.boardRoom.startNano({ nodeId: 'p', requester: { ...user, email: 'lead@studio.example' } });
+  let result = await start(); assert.ok(result.run); await app.settle();
+  assert.match(app.boardRoom.document.getMap('runs').get(result.run.id).error, /reference image is missing/); assert.equal(calls.length, 0);
+  app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 20 * 1024 * 1024 });
+  result = await start(); await app.settle(); assert.match(app.boardRoom.document.getMap('runs').get(result.run.id).error, /20 MB in total/); assert.equal(calls.length, 0);
+  app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 33 });
+  result = await start(); await app.settle(); assert.equal(calls.length, 1); assert.equal(calls[0].input.filter(part => part.type === 'image').length, 2);
+  assert.equal(app.boardRoom.document.getMap('runs').get(result.run.id).status, 'completed');
+});
+
 test('the allowed list matches whole emails and whole @domains in any case', () => {
   const list = ' Lead@Studio.example, @team.example;other@mail.example\nplain.example ';
   for (const email of ['lead@studio.example', 'LEAD@Studio.EXAMPLE', 'anyone@team.example', 'Other@Mail.Example', 'x@plain.example']) assert.equal(nanoAllowed(email, list), true, email);

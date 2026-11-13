@@ -1,4 +1,4 @@
-import { collectInputs, isDescribe, nodeSize as graphNodeSize, captionHeight } from '../graph.mjs';
+import { collectInputs, generators, isDescribe, nodeSize as graphNodeSize, captionHeight } from '../graph.mjs';
 import { groupBounds } from './canvas.mjs';
 import { plural, t } from './i18n.mjs';
 import { nearestFreePosition } from './node-placement.mjs';
@@ -70,9 +70,9 @@ export function inputLabel({ images, text }) {
 }
 
 export function generationIntent(graph, boardId, nodeId) {
-  const { prompt, images, snapshot, target } = collectInputs(graph, nodeId);
+  const { prompt, images, snapshot, target } = collectInputs(graph, nodeId, { maskInput: graph.nodes.find(node => node.id === nodeId)?.data.generator === generators.gptImage });
   const ids = new Set(snapshot.map(node => node.id));
-  const fields = node => ({ id: node.id, type: node.type, text: node.data.text, template: node.data.template, asset: node.data.asset, label: node.data.label, caption: node.data.caption });
+  const fields = node => ({ id: node.id, type: node.type, text: node.data.text, template: node.data.template, asset: node.data.asset, mask: node.data.mask, label: node.data.label, caption: node.data.caption });
   return { boardId, nodeId, signature: JSON.stringify({ prompt, images, target: fields(target), inputs: snapshot.map(fields), edges: graph.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).map(({ source, target }) => [source, target]).sort() }) };
 }
 

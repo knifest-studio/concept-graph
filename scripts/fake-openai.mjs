@@ -16,9 +16,10 @@ createServer(async (request, response) => {
   const n = body?.n ?? 1, size = ['1024x1024', '1536x1024', '1024x1536'].includes(body?.size) ? body.size : null;
   if (!prompt || body.model !== 'gpt-image-2.5-flare' || !size || !Number.isInteger(n) || n < 1 || n > 4
     || body.quality !== 'medium' || body.output_format !== 'png' || body.moderation !== 'auto'
+    || (body.mask !== undefined && !/^data:image\/png;base64,/.test(body.mask?.image_url))
     || (request.url.endsWith('/edits') && (!references || references > 16 || !body.images.every(image => /^data:image\/[\w.+-]+;base64,/.test(image?.image_url))))) return error(400, 'invalid_request', 'Unexpected Images API request.');
   const mode = ['text', 'refuse', 'busy', 'credit', 'key', 'verify', 'error', 'slow'].find(word => prompt.includes(`[${word}]`)) || 'image';
-  console.log(`${new Date().toISOString()} ${mode} · ${body.model} · ${prompt.length} chars · ${references} reference(s) · ${n} image(s) · ${size}`);
+  console.log(`${new Date().toISOString()} ${mode} · ${body.model} · ${prompt.length} chars · ${references} reference(s)${body.mask ? ' + mask' : ''} · ${n} image(s) · ${size}`);
   if (mode === 'refuse') return error(400, 'moderation_blocked', 'Content policy blocked this request.');
   if (mode === 'busy') return error(429, 'rate_limit_exceeded', 'Rate limit exceeded.');
   if (mode === 'credit') return error(429, 'insufficient_quota', 'Check your billing.');

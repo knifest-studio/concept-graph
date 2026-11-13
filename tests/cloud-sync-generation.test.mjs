@@ -9,6 +9,17 @@ const asset = '12345678-1234-1234-1234-123456789abc.png';
 const otherAsset = '12345678-1234-1234-1234-123456789def.png';
 const user = { name: 'Artist', color: '#448bfa' };
 const startedAt = '2026-11-03T10:00:00.000Z';
+
+test('cloud Codex fetches and submits the marked copy after its source through the existing helper protocol', async () => {
+  const { doc, generation, calls } = setup(), before = readCloudGraph(doc), graph = structuredClone(before), image = graph.nodes.find(node => node.id === 'i');
+  image.data.mask = { asset, marked: otherAsset, base: asset, source: asset }; applyLocalGraph(doc, graph, before, 'test');
+  await generation.start('p');
+  const submitted = calls.find(call => call[0] === 'helper-api' && call[2].method === 'POST'), body = JSON.parse(submitted[2].body);
+  assert.deepEqual(body.images.map(image => image.asset), [asset, otherAsset]);
+  assert.deepEqual(calls.filter(call => call[0] === 'cloud-image').map(call => call[1]), [`/assets/${asset}`, `/assets/${otherAsset}`]);
+  assert.match(body.prompt, /Edit only the highlighted area of “Reference”/); assert.match(body.prompt, /must not contain the highlight/);
+  generation.stop(); doc.destroy();
+});
 function setup() {
   const doc = new Y.Doc(), calls = [], errors = [], state = { live: true, jobs: [], failUpload: false, failDelete: false, failPost: null };
   applyLocalGraph(doc, { nodes: [{ id: 'p', type: 'text', position: { x: 80, y: 40 }, data: { text: 'A cloud', model: 'model', effort: 'low', labelOutputs: true } }, { id: 'i', type: 'image', position: { x: -310, y: 0 }, data: { asset, caption: 'Reference' } }], edges: [{ id: 'reference', source: 'i', target: 'p' }], groups: [], runs: [] }, { nodes: [], edges: [], groups: [], runs: [] }, 'seed');

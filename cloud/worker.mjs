@@ -9,6 +9,7 @@ import { upscaleSettings } from './upscale.mjs';
 import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
+import { clipPattern } from '../src/waiting-videos.mjs';
 import { mcpApi } from './mcp.mjs';
 import { agentScopes, authorize } from './oauth.mjs';
 import { purgeTrash } from './trash.mjs';
@@ -136,6 +137,24 @@ async function route(request, env) {
     return new Response(method === 'HEAD' ? null : privacyHtml, { headers: {
       'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff'
     } });
+  }
+  // Waiting clips we may not redistribute are hosted rather than bundled: scripts/upload-waiting-clips.mjs puts them
+  // in storage under clips/, so they stay out of the repository and the release packages. An empty index is the
+  // normal answer before anything is uploaded, and the app falls back to the clips it ships with.
+  if (path.startsWith('/clips/')) {
+    if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
+    const file = path.slice('/clips/'.length), index = file === 'index.json';
+    if (!index && !clipPattern.test(file)) return error('Clip not found.', 404);
+    const object = await env.FILES[method === 'HEAD' ? 'head' : 'get'](`clips/${file}`);
+    if (!object) return index ? json([], 200, { 'Cache-Control': 'public, max-age=300' }) : error('Clip not found.', 404);
+    const headers = {
+      'Content-Type': index ? 'application/json' : 'video/mp4',
+      'Cache-Control': index ? 'public, max-age=300' : 'public, max-age=31536000, immutable',
+      'ETag': object.httpEtag,
+      'X-Content-Type-Options': 'nosniff'
+    };
+    if (request.headers.get('If-None-Match')?.split(',').some(tag => ['*', object.httpEtag, `W/${object.httpEtag}`].includes(tag.trim()))) return new Response(null, { status: 304, headers });
+    return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }
   // Board links load the app, which signs the person in and then opens the board.
   if (/^\/b\/[^/]+\/?$/.test(path)) return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);

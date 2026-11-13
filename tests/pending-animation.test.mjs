@@ -71,7 +71,7 @@ test('node and edge share their clock; waiting videos and placement remain uncha
     const node = after.nodes[index], edge = after.edges[index];
     assert.equal(edge.type, 'pending'); assert.equal(edge.className, 'pending-edge');
     assert.equal(node.data.spawnAt, 100 + index * 150); assert.equal(edge.data.spawnAt, node.data.spawnAt);
-    assert.equal(node.data.clip, before.nodes[index].data.clip);
+    assert.equal(node.data.seed, before.nodes[index].data.seed);
     assert.deepEqual(node.position, before.nodes[index].position); assert.deepEqual(node.style, before.nodes[index].style);
   }
 });

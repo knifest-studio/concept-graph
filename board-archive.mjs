@@ -7,6 +7,7 @@ import yazl from 'yazl';
 import { validateGraph, imageFormat } from './graph.mjs';
 import { boardName } from './workspace.mjs';
 import { hasPageData, validPageId } from './src/pages.mjs';
+import { imageAssets } from './src/image-edits.mjs';
 
 export const maxBoardArchiveBytes = 512 * 1024 * 1024;
 const maxManifestBytes = 32 * 1024 * 1024, maxImageBytes = 30 * 1024 * 1024, maxEntries = 5000;
@@ -91,11 +92,16 @@ function hasShapes(graph) {
   return found;
 }
 
+function hasImageEdits(graph) {
+  let found = false;
+  visitNodes(graph, node => { if (node?.type === 'image' && (node.data.uncropped || node.data.mask)) found = true; });
+  return found;
+}
+
 function referencedAssets(graph) {
   const assets = new Set();
   visitNodes(graph, node => {
-    if (node?.type === 'image') assets.add(node.data.asset);
-    if (node?.type === 'text') node.data.template?.assets.forEach(asset => assets.add(asset));
+    imageAssets(node).forEach(asset => assets.add(asset));
   });
   for (const run of graph.runs) run.images?.forEach(asset => assets.add(asset));
   return assets;
@@ -120,7 +126,7 @@ export async function exportBoardArchive(board, assetsDir) {
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -165,7 +171,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
@@ -177,6 +183,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     if (manifest.version < 6 && hasSections(board.graph)) fail('This board uses sections and requires a newer board format.');
     // Apps before shapes and arrows refuse format 7.
     if (manifest.version < 7 && hasShapes(board.graph)) fail('This board uses shapes or arrows and requires a newer board format.');
+    if (manifest.version < 8 && hasImageEdits(board.graph)) fail('This board uses image crops or masks and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');
@@ -196,7 +203,11 @@ export async function importBoardArchive(bytes, assetsDir) {
     }
     const graph = structuredClone(board.graph);
     const remapNode = node => {
-      if (node?.type === 'image') node.data.asset = remap.get(node.data.asset);
+      if (node?.type === 'image') {
+        node.data.asset = remap.get(node.data.asset);
+        if (node.data.uncropped) node.data.uncropped.asset = remap.get(node.data.uncropped.asset);
+        if (node.data.mask) for (const key of ['asset', 'marked', 'base', 'source']) node.data.mask[key] = remap.get(node.data.mask[key]);
+      }
       if (node?.type === 'text' && node.data.template) node.data.template.assets = node.data.template.assets.map(asset => remap.get(asset));
     };
     graph.nodes.forEach(remapNode);

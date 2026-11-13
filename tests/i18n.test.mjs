@@ -32,6 +32,12 @@ test('every Ukrainian entry is text or a full list of plural forms with the same
   }
 });
 
+test('server mask errors localize the image name without losing quotes or changing the current language', () => {
+  setLanguage('uk');
+  try { assert.equal(t('The mask on “Storm “3”” no longer matches the image. Paint it again.'), 'Маска на «Storm “3”» більше не відповідає зображенню. Намалюйте її заново.'); }
+  finally { setLanguage('en'); }
+});
+
 test('every interface string passed to t(), rich() or plural() has a Ukrainian translation', async () => {
   const { readdir, readFile } = await import('node:fs/promises');
   const folder = new URL('../src/', import.meta.url), missing = new Set();

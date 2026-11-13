@@ -3,6 +3,7 @@ import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, vali
 import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
 import { validateSections } from './src/sections.mjs';
 import { nearestFreePosition } from './src/node-placement.mjs';
+import { validateImageEdits, generationReferences, maskInstruction } from './src/image-edits.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
@@ -97,6 +98,7 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
     if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
     if (node.type === 'image' && !assetPattern.test(node.data?.asset || '')) throw new Error('Invalid image asset.');
+    if (node.type === 'image') validateImageEdits(node.data);
     if (node.type === 'image' && node.data.caption !== undefined && (typeof node.data.caption !== 'string' || node.data.caption.length > 120)) throw new Error('Invalid image caption.');
     if (node.type === 'image' && node.data.aspect !== undefined && (!Number.isFinite(node.data.aspect) || node.data.aspect < 0.1 || node.data.aspect > 10)) throw new Error('Invalid image aspect.');
     if (node.type === 'image' && node.data.pixels !== undefined && !['width', 'height'].every(side => Number.isInteger(node.data.pixels?.[side]) && node.data.pixels[side] > 0 && node.data.pixels[side] <= 100000)) throw new Error('Invalid image size.');
@@ -219,7 +221,7 @@ export function nameImageConnections(nodes, edges, added) {
 // Every way a person can point at an image: the name shown above it, the node ID that Copy node ID gives, and the file
 // name a download gets (plus the original name of an uploaded file).
 const uploadedName = node => !node.data.runId && /\.[a-z\d]{2,5}$/i.test(node.data.label?.trim() || '') && node.data.label.trim() !== node.data.asset ? node.data.label.trim().slice(0, 200) : undefined;
-export const imageReference = node => ({ asset: node.data.asset, label: imageName(node), nodeId: node.id, ...(uploadedName(node) ? { uploaded: uploadedName(node) } : {}) });
+export const imageReference = node => ({ asset: node.data.asset, label: imageName(node), nodeId: node.id, ...(node.data.mask ? { mask: node.data.mask } : {}), ...(uploadedName(node) ? { uploaded: uploadedName(node) } : {}) });
 export const imageAttachment = (image, index) => `Attachment ${index + 1}: “${image.label}”` + (image.nodeId || image.asset
   ? ` (${[image.nodeId && `node ID ${image.nodeId}`, image.asset && `file ${image.asset}${image.uploaded ? `, uploaded as ${image.uploaded}` : ''}`].filter(Boolean).join('; ')})` : '');
 export const imageAttachments = images => images.length ? 'Attached images, in order. The request may point at an image by its name on the board, its node ID or its file name; each of these means that image:\n' + images.map(imageAttachment).join('\n') : '';
@@ -232,15 +234,21 @@ export function runInputs(graph, nodeId) {
   const target = nodes.get(nodeId);
   if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
-  const images = ordered.flatMap(node => node.type === 'image' ? [imageReference(node)]
+  let images = ordered.flatMap(node => node.type === 'image' ? [imageReference(node)]
     : (node.data.template?.assets || []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
+  if (isDescribe(target) || isUpscale(target)) images = images.map(({ mask, ...image }) => image);
+  else {
+    if (images.filter(image => image.mask).length > 1) throw new Error('Only one masked image per prompt. Remove the mask from the others or duplicate the node.');
+    const stale = images.find(image => image.mask && image.mask.source !== image.asset);
+    if (stale) throw new Error(`The mask on “${stale.label}” no longer matches the image. Paint it again.`);
+  }
   if (isUpscale(target)) {
-    const pictures = ordered.filter(node => node.type === 'image').map(imageReference);
+    const pictures = ordered.filter(node => node.type === 'image').map(node => { const { mask, ...image } = imageReference(node); return image; });
     if (!pictures.length) throw new Error('Connect an image to upscale.');
     if (pictures.length > maxUpscaleImages) throw new Error(`Connect at most ${maxUpscaleImages} images to one upscale node.`);
     return { target, ordered, images: pictures, context: [] };
   }
-  if (images.length > 10) throw new Error('Use at most 10 connected reference images per run.');
+  if (generationReferences(images, target.data.generator === generators.gptImage).length > 10) throw new Error('Use at most 10 connected reference images per run.');
   if (isDescribe(target) && !images.length) throw new Error('Connect an image to describe.');
   // A describe node's text only steers its own description; the prompts it feeds never see it.
   const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && !isDescribe(node) && (node.data.text.trim() || node.data.template?.instructions.trim()));
@@ -249,20 +257,23 @@ export function runInputs(graph, nodeId) {
 
 export const promptText = node => [node.data.template?.instructions.trim() ? `Custom node instructions:\n${node.data.template.instructions}` : '', node.data.text.trim() ? node.data.text : ''].filter(Boolean).join('\n\n');
 
-export function collectInputs(graph, nodeId) {
+export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
   const { target, ordered, images, context } = runInputs(graph, nodeId);
   // An upscale has no prompt; this shape only lets the editor notice changed inputs. Codex never runs it.
   if (isUpscale(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: upscaleTask };
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
+  const attachments = generationReferences(images, maskInput);
+  if (attachments.length > 10) throw new Error('Use at most 10 connected reference images per run.');
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
     ...context.map((node, i) => `Earlier context ${i + 1}:\n${promptText(node)}`),
-    imageAttachments(images),
+    imageAttachments(attachments),
     `FINAL REQUEST:\n${promptText(target)}`,
+    maskInstruction(images, maskInput),
     'Return actual images with the built-in image tool. If multiple images are requested, generate each separately. Do not use a paid API fallback.',
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
-  return { prompt, images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target) };
+  return { prompt, images: attachments.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target) };
 }
 
 export function describePrompt(target, images, context) {

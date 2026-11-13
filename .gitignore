@@ -21,4 +21,6 @@ cloud/.team-code
 
 # Local build artifacts, videos and personal tool config
 deliverables/
+# Hosted waiting clips: uploaded with scripts/upload-waiting-clips.mjs, never committed or packaged
+clips/
 .claude/launch.json

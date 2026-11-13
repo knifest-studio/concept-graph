@@ -28,3 +28,11 @@ export async function detectPlatform(device = globalThis.navigator) {
       : platform === 'windows' && architecture === 'x64' ? 'windows-x64' : null;
   return { platform, architecture, packageId };
 }
+
+// Safari and other WebKit browsers still treat http://127.0.0.1 as mixed content on an https page
+// (WebKit bug 171934), so the pairing request fails there with a bare "Load failed" however the code is pasted.
+export function loopbackBlocked(device = globalThis.navigator) {
+  if (device?.userAgentData) return false; // Chromium reports this object and reaches the helper once local network access is allowed.
+  const userAgent = device?.userAgent || '';
+  return /applewebkit/i.test(userAgent) && !/chrome|chromium|crios|edgi?|android|firefox|fxios/i.test(userAgent);
+}

@@ -7,6 +7,15 @@ const asset = '12345678-1234-1234-1234-123456789abc.png';
 const image = (id, x = 0, y = 0) => ({ id, type: 'image', position: { x, y }, data: { asset } });
 const edge = (source, target) => ({ id: `${source}-${target}`, source, target });
 
+test('GPT pairing intents allow ten images with a real mask and notice edits to mask bytes', () => {
+  const target = { ...text('p'), data: { text: 'Edit', generator: 'gpt-image' } }, images = Array.from({ length: 10 }, (_, i) => image(`r${i}`));
+  images[0].data.mask = { asset, marked: asset, base: asset, source: asset };
+  const graph = { nodes: [target, ...images], edges: images.map(node => edge(node.id, 'p')) }, intent = generationIntent(graph, 'board', 'p');
+  assert.ok(intent.signature);
+  const next = structuredClone(graph); next.nodes[1].data.mask.asset = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png';
+  assert.equal(intentUnchanged(intent, next, 'board'), false);
+});
+
 test('input chip counts directly connected nodes once and excludes ancestors and unrelated nodes', () => {
   const graph = { nodes: [image('i'), text('context'), text('ancestor'), text('target'), image('other')], edges: [edge('i', 'target'), edge('context', 'target'), edge('ancestor', 'context'), { ...edge('i', 'target'), id: 'duplicate-edge' }] };
   assert.deepEqual(directInputs(graph, 'target'), { images: 1, text: 1 });
