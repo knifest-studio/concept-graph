@@ -5,7 +5,7 @@ import { t } from './i18n.mjs';
 const fallback = '#6b6e89';
 export const Avatar = ({ user, className = 'presence-avatar' }) => {
   const color = user.color || fallback;
-  return <span className={className} aria-hidden="true" style={{ background: color, color: contrastColor(color) }}>{authorInitials({ name: user.name || '?' })}</span>;
+  return <span data-analytics-private className={className} aria-hidden="true" style={{ background: color, color: contrastColor(color) }}>{authorInitials({ name: user.name || '?' })}</span>;
 };
 
 export function VoiceMark({ voice }) {

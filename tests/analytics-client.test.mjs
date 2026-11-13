@@ -46,3 +46,16 @@ test('opt-out and opt-in propagate from another tab, and logout stops collection
   track('resumed'); env.window.dispatchEvent(new Event('pagehide')); assert.equal(env.beacons.length, 1);
   stop(); track('after_logout'); env.window.dispatchEvent(new Event('pagehide')); assert.equal(env.beacons.length, 1);
 });
+
+test('the browser never queues or sends user values, including arbitrary provider errors or the account email', async t => {
+  const env = setup(t); setAnalyticsEnabled(true);
+  const email = 'teammate@example.com', secret = 'PRIVATE board content', stop = startAnalytics(email);
+  track(`Show prompt: ${secret}`, { message: `The mask on “${secret}” no longer matches the image. Paint it again.` }, 'click');
+  track('notify', { message: `Provider echoed ${secret}` }, 'error');
+  env.window.dispatchEvent(new Event('pagehide'));
+  const payload = JSON.parse(await env.beacons[0].body.text()), encoded = JSON.stringify(payload);
+  assert.ok(!encoded.includes(secret)); assert.ok(!encoded.includes(email));
+  assert.equal(payload.events.find(event => event.kind === 'click').name, 'Show prompt:');
+  assert.equal(payload.events.find(event => event.kind === 'error').details.message, 'Error (details hidden)');
+  stop();
+});

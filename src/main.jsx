@@ -602,7 +602,7 @@ function TemplateEditor({ template, initial = template, templates, onClose, onSa
       }
     });
   };
-  return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="template-editor-title" onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
+  return <div className="board-modal" data-analytics-area="dialog:Custom node editor" role="dialog" aria-modal="true" aria-labelledby="template-editor-title" onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
     <form className="template-editor" onSubmit={event => { event.preventDefault(); if (!name.trim() || busy) return; perform(() => onSave({ name: name.trim(), instructions, assets, ...(template || colorPicked ? { color } : {}), ...(initial?.labelOutputs === undefined ? {} : { labelOutputs: initial.labelOutputs }) })); }}>
       <h2 id="template-editor-title">{template ? t('Edit custom node') : t('Create custom node')}</h2>
       <p className="template-intro">{cloud ? t('Save instructions and reference images to reuse on this board. Everyone on it can use and change them.') : t('Save instructions and reference images to reuse on any board.')}</p>
@@ -622,7 +622,7 @@ function TemplateEditor({ template, initial = template, templates, onClose, onSa
 }
 
 function TemplateDetails({ template, library = false, onClose }) {
-  return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="template-details-title" onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
+  return <div className="board-modal" data-analytics-area="dialog:Custom node details" role="dialog" aria-modal="true" aria-labelledby="template-details-title" onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
     <div className="template-details">
       <h2 id="template-details-title">{template.name}</h2>
       <p className="template-hint">{library ? t('A custom node saved on this board.') : t('These settings are saved in this node. Editing the library won’t change them.')}</p>

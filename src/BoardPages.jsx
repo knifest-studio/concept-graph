@@ -27,7 +27,7 @@ function PageMenu({ menu, canDelete, onRename, onDelete, onClose }) {
     const buttons = [...element.current.querySelectorAll('button:not(:disabled)')], index = buttons.indexOf(document.activeElement);
     buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
   };
-  return createPortal(<div ref={element} className="node-context-menu" role="menu" aria-label={t('{name} options', { name: menu.page.name })} onContextMenu={event => event.preventDefault()} onKeyDown={key}>
+  return createPortal(<div ref={element} className="node-context-menu" data-analytics-private role="menu" aria-label={t('{name} options', { name: menu.page.name })} onContextMenu={event => event.preventDefault()} onKeyDown={key}>
     <button type="button" role="menuitem" onClick={onRename}>{t('Rename')}</button>
     <button type="button" role="menuitem" disabled={!canDelete} title={canDelete ? undefined : t('A board needs at least one page')} onClick={onDelete}>{t('Delete page')}</button>
   </div>, document.body);

@@ -464,7 +464,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
 
 // Shown instead of a board the person may not open; it names the owner to ask.
 function BoardUnavailable({ state, user, onBack, onRetry, onSwitch }) {
-  return <main className="cloud-startup"><section className="cloud-card cloud-unavailable" role="alert"><img src="/favicon.svg" alt="" width="40"/>
+  return <main className="cloud-startup"><section className="cloud-card cloud-unavailable" data-analytics-private role="alert"><img src="/favicon.svg" alt="" width="40"/>
     <h1>{state.denied ? t('You don’t have access to this board') : state.error ? t('Couldn’t open this board') : t('Board not found')}</h1>
     <p>{state.denied ? state.owner ? rich('Ask {owner}, who owns it, to invite {email} or to share it with anyone who has the link.', { owner: <b>{state.owner}</b>, email: <b>{user.email}</b> }) : rich('Ask its owner to invite {email} or to share it with anyone who has the link.', { email: <b>{user.email}</b> }) : state.error || t('Check the link, or ask the person who sent it for a new one.')}</p>
     <div><button className="primary-button" type="button" onClick={state.error ? onRetry : onBack}>{state.error ? t('Try again') : t('Back to boards')}</button>

@@ -1,3 +1,5 @@
+import { stripUserContent, privateControlLabel, errorMessage, referrerOrigin } from './analytics-privacy.mjs';
+
 // Shared, dependency-free rules for the browser and Worker. No client identity is accepted.
 export const eventBytes = 64 * 1024, replayBytes = 2 * 1024 * 1024, sessionReplayBytes = 50 * 1024 * 1024;
 export const sessionPattern = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/;
@@ -11,17 +13,20 @@ const booleans = ['masked', 'reducedMotion', 'touch', 'meta', 'ctrl', 'alt', 'sh
 export function details(value) {
   const result = {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
-  for (const [key, max] of Object.entries(strings)) if (typeof value[key] === 'string') result[key] = text(value[key], max);
+  for (const [key, max] of Object.entries(strings)) if (typeof value[key] === 'string') result[key] = text(key === 'message' ? errorMessage(value[key]) : key === 'referrer' ? referrerOrigin(value[key]) : stripUserContent(value[key]), max);
   for (const [key, [min, max]] of Object.entries(numbers)) if (typeof value[key] === 'number' && Number.isFinite(value[key])) result[key] = clamp(value[key], min, max);
   for (const key of booleans) if (typeof value[key] === 'boolean') result[key] = value[key];
+  if (result.page && !sessionPattern.test(result.page) && result.page !== 'page-1') delete result.page;
+  if (result.run && !sessionPattern.test(result.run)) delete result.run;
+  if (result.route && !['board', 'boards', 'admin'].includes(result.route)) delete result.route;
   return result;
 }
 export function sanitizeEvent(value, now = Date.now()) {
   if (!value || !kinds.has(value.kind) || !Number.isSafeInteger(value.seq) || value.seq < 0 || value.seq > 1e9) return null;
-  const name = text(value.name, value.kind === 'error' ? 1000 : 80);
+  const name = text(stripUserContent(value.name), value.kind === 'error' ? 1000 : 80);
   if (!name) return null;
   return { seq: value.seq, time: Math.round(clamp(value.time, now - 86400000, now + 300000, now)), kind: value.kind, name,
-    area: text(value.area, 120), board: sessionPattern.test(value.board) ? value.board : '', details: details(value.details) };
+    area: text(stripUserContent(value.area), 120), board: sessionPattern.test(value.board) ? value.board : '', details: details(value.details) };
 }
 export function validateBatch(value, now = Date.now()) {
   if (!value || !sessionPattern.test(value.session) || !Array.isArray(value.events) || !value.events.length || value.events.length > 200) throw Object.assign(new Error('Invalid analytics batch.'), { status: 400 });
@@ -35,8 +40,9 @@ export function replayKey(day, session, seq) {
   return `analytics/replays/${day}/${session}/${String(seq).padStart(6, '0')}`;
 }
 export function retentionCutoffs(now = Date.now()) { return { replays: now - 30 * 86400000, events: now - 180 * 86400000 }; }
-export function controlName({ ariaLabel, tooltip, text: label, tag = 'control', role, type, id } = {}) {
-  return text(ariaLabel, 60) || text(tooltip, 60) || text(label, 60) || text(`${tag}${role ? `[role=${role}]` : type ? `[type=${type}]` : id ? `#${id}` : ''}`, 60);
+export function controlName({ ariaLabel, tooltip, text: label, tag = 'control', role, type, id, private: hidden = false } = {}) {
+  const labelName = hidden ? privateControlLabel : stripUserContent;
+  return text(labelName(ariaLabel), 60) || text(labelName(tooltip), 60) || (!hidden && text(stripUserContent(label), 60)) || text(`${tag}${role ? `[role=${role}]` : type ? `[type=${type}]` : !hidden && id ? `#${id}` : ''}`, 60);
 }
 export function shortcut(event, editing = false) {
   const key = String(event.key || '');

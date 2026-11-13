@@ -35,7 +35,7 @@ test('event boundary strips identity, raw input and arbitrary nested fields and 
     details: { user: 'forged', text: 'typed text', password: 'secret', nested: { x: 1 }, x: 5, y: -2, width: 1e9, zoom: NaN, message: 'm'.repeat(2000) } }, 100000000);
   assert.equal(clean.name.length, 80); assert.equal(clean.board, ''); assert.equal(clean.time, 100000000);
   assert.equal(clean.details.x, 1); assert.equal(clean.details.y, 0); assert.equal(clean.details.width, 16384);
-  assert.equal(clean.details.message.length, 1000); assert.equal(clean.details.zoom, undefined);
+  assert.equal(clean.details.message, 'Error (details hidden)'); assert.equal(clean.details.zoom, undefined);
   assert.equal(clean.user, undefined); assert.equal(clean.details.password, undefined); assert.equal(clean.details.text, undefined);
   assert.equal(sanitizeEvent({ ...event(), seq: -1 }), null);
   assert.equal(sanitizeEvent({ ...event(), kind: 'arbitrary' }), null);

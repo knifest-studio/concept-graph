@@ -1,3 +1,4 @@
+import { privateTextSelector, blockedMediaSelector, privateReplayEvent } from './analytics-privacy.mjs';
 import { record } from '@rrweb/record';
 import { sessionReplayBytes } from './analytics-core.mjs';
 
@@ -53,8 +54,8 @@ export async function recordSession(session, enabled, state) {
   const stop = () => { stopped = true; stopRecord?.(); abort.abort(); clearInterval(timer); buffer = []; queued = []; };
   const timer = setInterval(() => { prepare(); void send(); }, 15000);
   stopRecord = record({
-    emit(event) { if (stopped || !enabled()) return; const line = JSON.stringify(event) + '\n'; buffer.push(line); size += line.length; if (size >= 192 * 1024) prepare(); },
-    maskAllInputs: false, maskInputOptions: { password: true }, recordCanvas: false, inlineImages: false,
+    emit(event) { if (stopped || !enabled()) return; const line = JSON.stringify(privateReplayEvent(event)) + '\n'; buffer.push(line); size += line.length; if (size >= 192 * 1024) prepare(); },
+    maskAllInputs: true, maskInputOptions: { password: true }, blockSelector: blockedMediaSelector, maskTextSelector: privateTextSelector, recordCanvas: false, inlineImages: false,
     sampling: { mousemove: 50, scroll: 150, input: 'last' }, collectFonts: false, errorHandler: () => true
   });
   if (stopped || !stopRecord) stop();

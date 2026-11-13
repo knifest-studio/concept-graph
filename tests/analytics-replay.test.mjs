@@ -24,11 +24,14 @@ function setup(t) {
   t.after(() => { delete globalThis.__analyticsRecordOptions; for (const [key, descriptor] of Object.entries(saved)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
   return { requests, beacons, timers };
 }
-replayTest('recorder masks passwords, samples gestures, excludes canvas, and preserves UTF-8 through gzip fragments', async t => {
+replayTest('recorder masks all inputs, samples gestures, excludes canvas, and preserves UTF-8 through gzip fragments', async t => {
   const env = setup(t), state = { replaySeq: 0, replayBytes: 0 }, recorder = await recordSession('session', () => true, state);
   t.after(() => recorder.stop());
   const options = globalThis.__analyticsRecordOptions;
-  assert.deepEqual(options.maskInputOptions, { password: true }); assert.equal(options.maskAllInputs, false);
+  assert.deepEqual(options.maskInputOptions, { password: true }); assert.equal(options.maskAllInputs, true);
+  assert.equal(options.maskInputFn, undefined); assert.equal(options.maskTextFn, undefined);
+  for (const selector of ['img', 'video', 'canvas']) assert.ok(options.blockSelector.split(',').includes(selector));
+  for (const selector of ['[data-analytics-private]', '.react-flow', '.board-picker', '.board-page-name', '.board-page-input', '.board-page-people', '.cloud-board-section', '.canvas-top > span', '.history-list', '.generation-tray', '.run-diagnostics', '.board-modal:not(:has(.theme-button))', '.custom-nodes', '.template-editor', '.template-details', '.lightbox', '.image-editor', '.board-chat-panel', '.voice-panel', '.cloud-presence', '.cloud-cursor', '.account-menu', '.attention-card', '.codex-share-panel', '.codex-requests', '.codex-teammates', '.board-author', '[role="tooltip"]', 'head title']) assert.ok(options.maskTextSelector.split(',').includes(selector), selector);
   assert.equal(options.recordCanvas, false); assert.equal(options.inlineImages, false);
   assert.deepEqual(options.sampling, { mousemove: 50, scroll: 150, input: 'last' });
   const event = { type: 2, timestamp: Date.now(), data: { text: 'ї'.repeat(30000) } };
@@ -56,4 +59,16 @@ replayTest('stopping on opt-out cancels recorder, timers and queued uploads', as
   globalThis.__analyticsRecordOptions.emit({ type: 2, timestamp: 1, data: {} });
   recorder.stop(); recorder.flush(true);
   assert.equal(env.timers.size, 0); assert.equal(globalThis.__analyticsRecordStopped, true); assert.equal(env.beacons.length, 0);
+});
+
+replayTest('serialized private attributes are removed before a replay chunk enters the network queue', async t => {
+  const env = setup(t), state = { replaySeq: 0, replayBytes: 0 }, recorder = await recordSession('session', () => true, state);
+  t.after(() => recorder.stop());
+  const secret = 'PRIVATE replay content';
+  globalThis.__analyticsRecordOptions.emit({ type: 2, timestamp: 1, data: { node: { type: 2, id: 1,
+    attributes: { class: 'board-page', title: secret, value: secret, href: `https://example.com/${secret}` }, childNodes: [{ type: 3, id: 2, textContent: '******' }] } } });
+  recorder.flush(true);
+  const payload = await env.beacons[0].body.text();
+  assert.ok(!payload.includes(secret)); assert.ok(!payload.includes('https://example.com'));
+  assert.equal(JSON.parse(payload).data.node.attributes.class, 'board-page');
 });

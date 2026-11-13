@@ -1,4 +1,5 @@
-import { controlName, shortcut, shortcutControl, rageDetector, splitEvents, details } from './analytics-core.mjs';
+import { privateTextSelector, stripUserContent, errorMessage } from './analytics-privacy.mjs';
+import { controlName, shortcut, shortcutControl, rageDetector, splitEvents, sanitizeEvent } from './analytics-core.mjs';
 
 export const analyticsPreferenceKey = 'concept-graph-analytics';
 export const analyticsEnabled = () => { if (preferenceOverride !== null) return preferenceOverride; try { return localStorage.getItem(analyticsPreferenceKey) !== 'off'; } catch { return true; } };
@@ -31,9 +32,9 @@ export function startAnalytics(user) {
   window.addEventListener('storage', changed);
   return () => { window.removeEventListener('storage', changed); current?.stop(); current = null; account = null; ready = false; };
 }
-function elementName(element) {
-  const label = element.labels?.[0];
-  return element.dataset?.analyticsName || controlName({ ariaLabel: element.getAttribute('aria-label'), tooltip: element.dataset?.tooltip,
+export function elementName(element) {
+  const hidden = !!element.closest(privateTextSelector), label = !hidden && element.labels?.[0];
+  return element.dataset?.analyticsName ? stripUserContent(element.dataset.analyticsName).slice(0, 60) : controlName({ private: hidden, ariaLabel: element.getAttribute('aria-label'), tooltip: element.dataset?.tooltip,
     text: ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) ? label?.textContent : element.textContent,
     tag: element.tagName?.toLowerCase(), role: element.getAttribute('role'), type: element.getAttribute('type'), id: element.id });
 }
@@ -41,7 +42,7 @@ export function elementArea(element) {
   if (!element?.closest) return 'editor';
   const dialog = element.closest('[role="dialog"]'), explicit = element.closest('[data-analytics-area]');
   if (explicit && (!dialog || dialog.contains(explicit))) return explicit.dataset.analyticsArea;
-  if (dialog) return `dialog:${dialog.getAttribute('aria-label') || document.getElementById(dialog.getAttribute('aria-labelledby'))?.textContent?.trim().slice(0, 60) || 'dialog'}`;
+  if (dialog) return `dialog:${controlName({ ariaLabel: dialog.getAttribute('aria-label'), text: document.getElementById(dialog.getAttribute('aria-labelledby'))?.textContent, private: !!dialog.closest(privateTextSelector), tag: 'dialog' })}`;
   const node = element.closest('.react-flow__node');
   if (node) return `node:${[...node.classList].find(name => name.startsWith('react-flow__node-'))?.slice(17) || 'unknown'}:${element.closest('header') ? 'header' : 'body'}`;
   return explicit?.dataset.analyticsArea || 'editor';
@@ -60,7 +61,9 @@ function createSession() {
   function event(kind, name, data, area = '') {
     if (stopped) return;
     if (name === 'generation_started' && !state.firstGeneration) { state.firstGeneration = true; event('app', 'time_to_first_generation', { duration: Date.now() - started }); }
-    queue.push({ seq: state.eventSeq++, time: Date.now(), kind, name, area: area || 'editor', board: context.board, details: details({ ...context, ...data }) });
+    const clean = sanitizeEvent({ seq: state.eventSeq++, time: Date.now(), kind, name, area: area || 'editor', board: context.board, details: { ...context, ...data } });
+    if (!clean) return;
+    queue.push(clean);
     if (queue.length > 2000) queue.splice(0, queue.length - 2000);
     if (queue.length >= 200) void flush();
   }
@@ -114,8 +117,8 @@ function createSession() {
   on(document, 'pointermove', interact, { passive: true });
   on(document, 'scroll', interact, { capture: true, passive: true });
 
-  on(window, 'error', e => event('error', 'window_error', { message: String(e.message || 'Resource failed to load').slice(0, 1000) }));
-  on(window, 'unhandledrejection', e => event('error', 'unhandledrejection', { message: String(e.reason?.message || e.reason || 'Unknown rejection').slice(0, 1000) }));
+  on(window, 'error', e => event('error', 'window_error', { message: String(e.message || 'Resource failed to load') }));
+  on(window, 'unhandledrejection', e => event('error', 'unhandledrejection', { message: String(e.reason?.message || e.reason || 'Unknown rejection') }));
   const seenDialogs = new WeakSet(), seenErrors = new WeakMap();
   function inspect(root) {
     if (root.nodeType !== 1) return;
@@ -125,7 +128,7 @@ function createSession() {
         seenDialogs.add(element); event('view', 'dialog_opened', { target: element.dataset.analyticsPanel || elementArea(element) }, elementArea(element));
       }
       if (element.getAttribute('role') === 'alert') {
-        const message = element.textContent.trim().slice(0, 1000);
+        const message = errorMessage(element.textContent);
         if (message && seenErrors.get(element) !== message) { seenErrors.set(element, message); event('error', 'notify', { message }, elementArea(element)); }
       }
     }
