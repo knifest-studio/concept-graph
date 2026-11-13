@@ -9,7 +9,7 @@ import { transformWithEsbuild } from 'vite';
 import { signSession } from '../cloud/auth.mjs';
 import { gptImageCost, gptImageError, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from '../cloud/gpt-image.mjs';
 import { generators, imageSize, modelNames, validateGraph } from '../graph.mjs';
-import { NanoError } from '../cloud/nano-banana.mjs';
+import { NanoError, nanoPrompt } from '../cloud/nano-banana.mjs';
 import { nanoState, usesSiteGenerator } from '../src/generator.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -42,6 +42,52 @@ const answer = (extra = {}) => ({ created: 1794528000, data: [{ b64_json: b64(pn
 const gate = () => { let open; const promise = new Promise(resolve => { open = resolve; }); return { promise, open }; };
 const maskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', baseId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png', markedId = 'cccccccc-cccc-cccc-cccc-cccccccccccc.png';
 const imageMask = source => ({ asset: maskId, marked: markedId, base: baseId, source });
+
+test('a connected main image overrides names, ignores stale choices and refuses a mask on a reference', () => {
+  const graph = boardGraph({ text: 'Edit Style', mainImage: 'i' });
+  graph.nodes.push({ id: 'style', type: 'image', position: { x: 0, y: 0 }, data: { asset: markedId, caption: 'Style' } });
+  graph.edges.unshift({ id: 'sp', source: 'style', target: 'p' });
+  const before = structuredClone(graph), request = gptImagePrompt(graph, 'p');
+  assert.deepEqual(request.images.map(image => image.nodeId), ['i', 'style']);
+  assert.match(request.prompt, /Edit “Front view” \(Attachment 1\)\. The other attachments are references for the request\./);
+  assert.deepEqual(graph, before);
+  graph.nodes[1].data.mask = imageMask(reference);
+  assert.equal(gptImagePrompt(graph, 'p').images[0].asset, baseId);
+  delete graph.nodes[1].data.mask;
+  graph.nodes[2].data.mask = imageMask(markedId);
+  assert.throws(() => gptImagePrompt(graph, 'p'), /The mask is on “Style”, but the main image is “Front view”/);
+  graph.nodes[0].data.mainImage = 'style';
+  assert.equal(gptImagePrompt(graph, 'p').images[0].nodeId, 'style');
+  delete graph.nodes[2].data.mask;
+  for (const mainImage of ['missing', 'p']) {
+    graph.nodes[0].data.mainImage = mainImage;
+    const fallback = gptImagePrompt(graph, 'p');
+    assert.equal(fallback.images[0].nodeId, 'style'); assert.doesNotMatch(fallback.prompt, /The other attachments are references/);
+  }
+  graph.nodes[0].data.mainImage = 'i'; graph.edges = graph.edges.filter(edge => edge.source !== 'i');
+  assert.deepEqual(gptImagePrompt(graph, 'p').images.map(image => image.nodeId), ['style']);
+  graph.edges.push({ id: 'ip', source: 'i', target: 'p' }); graph.nodes[0].data.generator = generators.nanoBanana;
+  assert.deepEqual(nanoPrompt(graph, 'p').images.map(image => image.nodeId), ['style', 'i']);
+  assert.doesNotMatch(nanoPrompt(graph, 'p').prompt, /The other attachments are references/);
+  const template = boardGraph({ template: { name: 'Style', instructions: '', assets: [markedId] } });
+  assert.doesNotMatch(gptImagePrompt(template, 'p').prompt, /The other attachments are references/);
+});
+
+runtimeTest('the room syncs a main-image choice and sends its bytes and shape first, before earlier references', async t => {
+  const app = setup(t, {}, { text: 'Edit Style', mainImage: 'i' }), calls = fake(t), before = readCloudGraph(app.room.document), next = structuredClone(before);
+  next.nodes.push({ id: 'style', type: 'image', position: { x: 0, y: 0 }, data: { asset: markedId, caption: 'Style' } });
+  next.edges.unshift({ id: 'sp', source: 'style', target: 'p' });
+  app.files.set(`assets/${markedId}`, png(480, 640));
+  applyLocalGraph(app.room.document, next, before, 'test');
+  const started = await app.start(); assert.equal(started.status, 202); await app.settle();
+  assert.equal(calls.length, 1); assert.equal(calls[0].body.size, '1536x1024');
+  assert.deepEqual(calls[0].body.images.map(image => image.image_url), [png(640, 480), png(480, 640)].map(bytes => `data:image/png;base64,${b64(bytes)}`));
+  assert.match(calls[0].body.prompt, /Edit “Front view” \(Attachment 1\)/);
+  const graph = readCloudGraph(app.room.document);
+  assert.equal(graph.nodes.find(node => node.id === 'p').data.mainImage, 'i');
+  assert.equal(graph.runs[0].status, 'completed');
+  assert.ok(graph.edges.every(edge => Object.keys(edge).sort().join() === 'id,source,target'));
+});
 
 test('GPT mask prompts reorder the target and converted PNG first and number references in the submitted order', () => {
   const graph = boardGraph(), target = graph.nodes[1]; target.data.mask = imageMask(reference);
@@ -113,6 +159,18 @@ test('generation and edit requests keep named context, fixed model/settings and 
   assert.throws(() => gptImagePrompt(boardGraph({ text: 'x'.repeat(32000) }), 'p'), /Connected text/);
   assert.throws(() => gptImageRequest('x', Array(17).fill(refs[0]), options), /16 reference/);
   assert.throws(() => gptImageRequest('x', [{ mimeType: 'image/png', data: 'A'.repeat(20971520) }], options), /too large/);
+});
+
+test('the image the request names first is sent first, and the output keeps its shape', () => {
+  const image = (id, caption) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: `${id.repeat(8)}-1234-1234-1234-123456789abc.png`, caption } });
+  const graph = (text, extra = []) => ({ ...empty, nodes: [prompt({ text }), image('a', 'Image 35'), image('b', 'Image 32'), image('c', 'Image 3'), ...extra], edges: ['a', 'b', 'c'].map(id => ({ id: `${id}p`, source: id, target: 'p' })) });
+  const order = text => [...gptImagePrompt(graph(text), 'p').prompt.matchAll(/Attachment \d: “([^”]+)”/g)].map(match => match[1]);
+  assert.deepEqual(order('налаштуй кольори на Image 32 щоб були як на Image 35'), ['Image 32', 'Image 35', 'Image 3']);
+  assert.deepEqual(order('Recolor image 3 like Image 35'), ['Image 3', 'Image 35', 'Image 32']);
+  assert.deepEqual(order('A courier robot'), ['Image 35', 'Image 32', 'Image 3']);
+  const landscape = [{ mimeType: 'image/png', data: b64(png()), size: { width: 1982, height: 1341 } }];
+  assert.equal(JSON.parse(gptImageRequest('x', landscape, { key: 'k' }).init.body).size, '1536x1024');
+  assert.equal(JSON.parse(gptImageRequest('x', landscape, { key: 'k', aspect: 1.5 }).init.body).size, '1024x1536');
 });
 
 test('result decoding rejects missing or corrupt images; costs follow text and image usage separately', () => {

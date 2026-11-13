@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, isGptImage, imageSize, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -245,11 +245,16 @@ define('duplicate_nodes', 'Copy nodes from one page with their connections betwe
   graph.nodes.push(...copies.nodes.map(copy => ({ ...copy, z: z++ }))); graph.edges.push(...copies.edges);
   return { nodeIds: Object.fromEntries(newIds), edgeIds: copies.edges.map(edge => edge.id) };
 } });
-define('connect_nodes', 'Connect a prompt or image into a prompt on the same page, so the target uses it when it generates. Loops are refused.', { source: itemId, target: itemId }, ['source', 'target'], { run: ctx => {
+define('connect_nodes', 'Connect a prompt or image into a prompt on the same page, so the target uses it when it generates. Loops are refused.', { source: itemId, target: itemId, main: boolean('For a GPT Image prompt: this image is the one it edits; sent first') }, ['source', 'target'], { run: ctx => {
   const { args, graph } = ctx, found = ensure(graph.nodes, [args.source, args.target], 'Node');
   targetPage(graph, undefined, [args.source, args.target]);
   if (!['text', 'image'].includes(found.get(args.source).type) || found.get(args.target).type !== 'text') fail('Connect a prompt or image into a prompt.');
-  if (graph.edges.some(edge => edge.source === args.source && edge.target === args.target)) fail('That connection already exists.');
+  const target = found.get(args.target), existing = graph.edges.find(edge => edge.source === args.source && edge.target === args.target);
+  if (args.main && (!isGptImage(target) || found.get(args.source).type !== 'image')) fail('The main image must be an image connected to a GPT Image prompt.');
+  if (existing && args.main === undefined) fail('That connection already exists.');
+  if (args.main) target.data.mainImage = args.source;
+  else if (args.main === false && target.data.mainImage === args.source) delete target.data.mainImage;
+  if (existing) return { edgeId: existing.id };
   const edgeId = id();
   graph.edges.push({ id: edgeId, source: args.source, target: args.target });
   return { edgeId };

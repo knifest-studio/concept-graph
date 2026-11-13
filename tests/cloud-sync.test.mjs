@@ -19,6 +19,22 @@ function exchange(a, b) {
   assert.deepEqual(readCloudGraph(a), readCloudGraph(b));
 }
 
+test('main-image promotion syncs with its edge in one transaction and undo restores both', () => {
+  const a = new Y.Doc(), b = new Y.Doc(), origin = {}, asset = '11111111-1111-1111-1111-111111111111.png';
+  const graph = { ...empty(), nodes: [{ ...node('p'), data: { text: 'Edit', generator: 'gpt-image' } }, { id: 'i', type: 'image', position: { x: 0, y: 0 }, data: { asset } }] };
+  applyLocalGraph(a, graph, empty(), 'seed'); Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+  const undo = new Y.UndoManager([a.getMap('nodes'), a.getMap('edges')], { trackedOrigins: new Set([origin]) });
+  try {
+    const next = structuredClone(graph); next.nodes[0].data.mainImage = 'i'; next.edges.push({ id: 'ip', source: 'i', target: 'p' });
+    applyLocalGraph(a, next, graph, origin); exchange(a, b);
+    let shown = readCloudGraph(b); assert.equal(shown.nodes.find(node => node.id === 'p').data.mainImage, 'i'); assert.deepEqual(shown.edges, next.edges);
+    assert.deepEqual(a.getMap('edges').get('ip'), { source: 'i', target: 'p' });
+    undo.undo(); exchange(a, b); shown = readCloudGraph(b);
+    assert.equal(shown.nodes.find(node => node.id === 'p').data.mainImage, undefined); assert.equal(shown.edges.length, 0);
+    undo.redo(); exchange(a, b); assert.equal(readCloudGraph(b).nodes.find(node => node.id === 'p').data.mainImage, 'i');
+  } finally { undo.destroy(); a.destroy(); b.destroy(); }
+});
+
 test('crop and mask fields sync without stripping and a single transaction undoes the edit and its new prompt together', () => {
   const a = new Y.Doc(), b = new Y.Doc(), asset = '11111111-1111-1111-1111-111111111111.png';
   const graph = { ...empty(), nodes: [{ id: 'image', type: 'image', position: { x: 0, y: 0 }, data: { asset, caption: 'Storm' } }] };

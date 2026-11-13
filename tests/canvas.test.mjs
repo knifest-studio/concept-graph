@@ -1,5 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { cleanEdges } from '../src/history.mjs';
+
+test('main-image handles and edge routing stay display-only and refresh cached edges when the choice changes', () => {
+  const prompt = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'Edit', generator: 'gpt-image', mainImage: 'i' } };
+  const image = { id: 'i', type: 'image', position: { x: 400, y: 0 }, data: {} }, edge = { id: 'ip', source: 'i', target: 'p' }, cache = createViewCache();
+  let nodes = [prompt, image], view = canvasView(nodes, [edge], [], cache);
+  assert.equal(view.edges[0].targetHandle, 'main'); assert.deepEqual(cleanEdges(view.edges), [edge]); assert.equal(edge.targetHandle, undefined);
+  for (const collapsed of [false, true]) {
+    const handles = nodeHandles({ ...prompt, data: { ...prompt.data, collapsed } }, { width: 72, height: 72 });
+    assert.deepEqual(handles.filter(handle => handle.type === 'target').map(handle => handle.id), [null, 'main']);
+    assert.ok(handles[0].y - handles[1].y > 20);
+  }
+  nodes = [{ ...prompt, data: { ...prompt.data, mainImage: 'missing' } }, image];
+  assert.equal(canvasView(nodes, [edge], [], cache).edges[0].targetHandle, undefined);
+  nodes = [{ ...prompt, data: { ...prompt.data, generator: 'nano-banana' } }, image];
+  view = canvasView(nodes, [edge], [], cache);
+  assert.equal(view.edges[0].targetHandle, undefined); assert.equal(view.nodes[0].handles.filter(handle => handle.type === 'target').length, 1);
+  view = canvasView([prompt, image], [edge], [{ id: 'g', name: 'Folded', nodeIds: ['p'], collapsed: true }], cache);
+  assert.equal(view.edges[0].target, 'g'); assert.equal(view.edges[0].targetHandle, undefined);
+});
 import { boardExtent, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
 test('server first-output placement clears the same multiline prompt bounds the canvas draws', () => {

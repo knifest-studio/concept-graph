@@ -8,6 +8,29 @@ import { signInReturn } from '../src/cloud-boards.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { checkArgs, listedTools, revisionOf, runBoardTool, toolByName } from '../cloud/mcp-tools.mjs';
 
+test('connect_nodes can promote an existing image to main without duplicating edges and exposes it in get_board', () => {
+  const image = id => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: '12345678-1234-1234-1234-123456789abc.png' } });
+  const prompt = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'Edit', generator: 'gpt-image' } };
+  const graph = { nodes: [prompt, image('i'), image('other')], edges: [{ id: 'ip', source: 'i', target: 'p' }], groups: [], runs: [] }, ctx = { graph, templates: [], revision: 'test' };
+  const connect = (graph, source, main = true) => runBoardTool(toolByName.get('connect_nodes'), { ...ctx, graph, args: { source, target: 'p', main } });
+  const first = connect(graph, 'i');
+  assert.deepEqual(first.graph.edges, graph.edges); assert.equal(first.result.edgeId, 'ip'); assert.equal(prompt.data.mainImage, undefined);
+  assert.equal(runBoardTool(toolByName.get('get_board'), { ...ctx, graph: first.graph, args: {} }).result.nodes[0].data.mainImage, 'i');
+  const second = connect(first.graph, 'other');
+  assert.equal(second.graph.edges.length, 2); assert.equal(second.graph.nodes[0].data.mainImage, 'other');
+  assert.ok(second.graph.edges.every(edge => Object.keys(edge).sort().join() === 'id,source,target'));
+  const cleared = connect(second.graph, 'other', false).graph;
+  assert.equal(cleared.nodes[0].data.mainImage, undefined); assert.equal(cleared.edges.length, 2);
+  assert.throws(() => connect(graph, 'p'), /main image must be an image/);
+  for (const generator of ['nano-banana', undefined]) {
+    const other = structuredClone(graph); other.nodes[0].data.generator = generator;
+    assert.throws(() => connect(other, 'i'), /GPT Image prompt/);
+  }
+  assert.throws(() => runBoardTool(toolByName.get('connect_nodes'), { ...ctx, args: { source: 'i', target: 'p' } }), /already exists/);
+  const cycle = structuredClone(graph); cycle.edges = [{ id: 'pi', source: 'p', target: 'i' }];
+  assert.throws(() => connect(cycle, 'i'), /loop/); assert.equal(cycle.nodes[0].data.mainImage, undefined);
+});
+
 test('get_board and update_node preserve image edits and validate malformed masks through the shared graph validator', () => {
   const asset = '12345678-1234-1234-1234-123456789abc.png', mask = { asset, marked: asset, base: asset, source: asset };
   const uncropped = { asset, pixels: { width: 10, height: 10 }, rect: { x: 1, y: 1, width: 8, height: 8 } };

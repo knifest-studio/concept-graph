@@ -10,6 +10,20 @@ const nodes = [
 ];
 const edges = [{ id: 'inside', source: 'prompt', target: 'image' }, { id: 'outside', source: 'other', target: 'prompt' }];
 
+test('main image IDs follow copied edges, including external parents, and drop when clipboard excludes the image', () => {
+  const prompt = { ...structuredClone(nodes[0]), data: { text: 'Edit', generator: 'gpt-image', mainImage: 'image' } }, image = structuredClone(nodes[1]);
+  const graph = { nodes: [prompt, image], edges: [{ id: 'input', source: 'image', target: 'prompt' }] }, before = structuredClone(graph);
+  const together = cloneSelection(selectedGraph(graph.nodes, graph.edges));
+  assert.equal(together.nodes[0].data.mainImage, together.nodes[1].id);
+  image.selected = false;
+  const selection = selectedGraph(graph.nodes, graph.edges), duplicate = cloneSelection(selection, undefined, graph), paste = cloneSelection(selection);
+  assert.equal(duplicate.nodes[0].data.mainImage, 'image'); assert.equal(duplicate.edges[0].source, 'image');
+  assert.equal(paste.nodes[0].data.mainImage, undefined); assert.equal(paste.edges.length, 0);
+  graph.edges = [];
+  assert.equal(duplicateNodes(graph, ['prompt', 'image']).nodes[0].data.mainImage, undefined);
+  assert.equal(prompt.data.mainImage, before.nodes[0].data.mainImage);
+});
+
 test('duplicate and clipboard paste preserve content, relative placement and internal connections with fresh IDs', () => {
   const before = structuredClone({ nodes, edges }), selection = selectedGraph(nodes, edges);
   assert.deepEqual(selection.nodes.map(node => node.id), ['prompt', 'image']);

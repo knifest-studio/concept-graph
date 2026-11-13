@@ -1,4 +1,4 @@
-import { nodeSize, captionHeight, textNodeSize } from '../graph.mjs';
+import { nodeSize, captionHeight, textNodeSize, isGptImage } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, canAttachArrow, arrowPad, arrowPosition, reconcileStampAttachments } from './annotations.mjs';
 import { layerIndex, sameShape } from './layers.mjs';
 import { sectionMinimum, sectionPadding } from './sections.mjs';
@@ -209,7 +209,8 @@ export function estimatedSize(node, inputs = false) {
 export function nodeHandles(node, { width, height }) {
   if (isAnnotation(node)) return [];
   const border = node.type === 'text' && node.data?.template ? 2 : 1, y = height / 2 - 5, handles = [];
-  if (node.type === 'text' || node.data?.runId) handles.push({ id: null, type: 'target', position: 'left', x: border - 10, y, width: 10, height: 10 });
+  if (node.type === 'text' || node.data?.runId) handles.push({ id: null, type: 'target', position: 'left', x: border - 10, y: isGptImage(node) ? height * .68 - 5 : y, width: 10, height: 10 });
+  if (isGptImage(node)) handles.push({ id: 'main', type: 'target', position: 'left', x: border - 10, y: border + 11, width: 10, height: 10 });
   handles.push({ id: null, type: 'source', position: 'right', x: width - border, y, width: 10, height: 10 });
   return handles;
 }
@@ -284,10 +285,11 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   });
   const viewEdges = edges.map(edge => {
     const source = collapsed.get(edge.source) || edge.source, target = collapsed.get(edge.target) || edge.target;
+    const prompt = byId.get(edge.target), targetHandle = target === edge.target && isGptImage(prompt) && byId.get(edge.source)?.type === 'image' && prompt.data.mainImage === edge.source ? 'main' : undefined;
     const kind = byId.get(edge.source)?.type === 'image' ? 'image' : 'text', saved = cache.edges.get(edge);
-    if (saved && saved.source === source && saved.target === target && saved.kind === kind) return saved.view;
-    const view = { ...edge, source, target, hidden: source === target, style: edgeStyles[kind] };
-    cache.edges.set(edge, { source, target, kind, view });
+    if (saved && saved.source === source && saved.target === target && saved.kind === kind && saved.targetHandle === targetHandle) return saved.view;
+    const view = { ...edge, source, target, targetHandle, hidden: source === target, style: edgeStyles[kind] };
+    cache.edges.set(edge, { source, target, kind, targetHandle, view });
     return view;
   });
   const sectionZ = sections.length ? sectionLayers(sections, cache) : null;

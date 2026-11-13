@@ -17,6 +17,7 @@ export const isDescribe = node => node?.type === 'text' && node.data?.task === d
 // Topaz or SeedVR2 through fal.ai, or Nano Banana redrawing it at 2K or 4K.
 export const upscaleTask = 'upscale';
 export const isUpscale = node => node?.type === 'text' && node.data?.task === upscaleTask;
+export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node);
 export const upscalers = Object.freeze({ topaz: 'topaz', seedvr: 'seedvr', nanoBanana: 'nano-banana' });
 export const upscalerOf = node => Object.values(upscalers).includes(node?.data?.upscaler) ? node.data.upscaler : upscalers.topaz;
 export const upscaleScale = node => node?.data?.scale === 4 ? 4 : 2;
@@ -91,6 +92,7 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.template !== undefined) validateTemplate(node.data.template);
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && !isSiteGenerator(node.data.generator)) throw new Error('Invalid image generator.');
+    if (node.type === 'text' && node.data.mainImage !== undefined && (typeof node.data.mainImage !== 'string' || node.data.mainImage.length > 120)) throw new Error('Invalid main image.');
     if (node.type === 'text' && node.data.generator === generators.gptImage && [describeTask, upscaleTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
     if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask].includes(node.data.task)) throw new Error('Invalid node task.');
     if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
@@ -162,6 +164,10 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   const nodes = nodeIds.map(id => {
     const node = originals.get(id);
     const data = { ...structuredClone(node.data), createdAt };
+    if (node.type === 'text' && data.mainImage !== undefined) {
+      if (graph.edges.some(edge => edge.source === data.mainImage && edge.target === id)) data.mainImage = ids.get(data.mainImage) || data.mainImage;
+      else delete data.mainImage;
+    }
     if (node.type === 'stamp' && data.attachedTo !== undefined) {
       if (ids.has(data.attachedTo)) data.attachedTo = ids.get(data.attachedTo);
       else delete data.attachedTo;
@@ -249,10 +255,16 @@ export function runInputs(graph, nodeId) {
     return { target, ordered, images: pictures, context: [] };
   }
   if (generationReferences(images, target.data.generator === generators.gptImage).length > 10) throw new Error('Use at most 10 connected reference images per run.');
+  const mainImage = isGptImage(target) && target.data.mainImage !== undefined && images.find(image => image.nodeId === target.data.mainImage);
+  if (mainImage) {
+    const masked = images.find(image => image.mask);
+    if (masked && masked !== mainImage) throw new Error(`The mask is on “${masked.label}”, but the main image is “${mainImage.label}”. Paint the mask on the main image or make “${masked.label}” the main image.`);
+    images = [mainImage, ...images.filter(image => image !== mainImage)];
+  }
   if (isDescribe(target) && !images.length) throw new Error('Connect an image to describe.');
   // A describe node's text only steers its own description; the prompts it feeds never see it.
   const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && !isDescribe(node) && (node.data.text.trim() || node.data.template?.instructions.trim()));
-  return { target, ordered, images, context };
+  return { target, ordered, images, context, ...(mainImage ? { mainImage } : {}) };
 }
 
 export const promptText = node => [node.data.template?.instructions.trim() ? `Custom node instructions:\n${node.data.template.instructions}` : '', node.data.text.trim() ? node.data.text : ''].filter(Boolean).join('\n\n');

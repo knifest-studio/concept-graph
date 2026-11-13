@@ -14,7 +14,7 @@ export function gptImageSettings(env) {
 export const gptImageStatus = (user, env, directory) => nanoStatus(user, env, directory, gptImageSettings(env));
 
 export function gptImagePrompt(graph, nodeId) {
-  const request = nanoPrompt(graph, nodeId, { maskInput: true });
+  const request = nanoPrompt(graph, nodeId, { maskInput: true, leadEdited: true });
   if (isDescribe(request.target) || isUpscale(request.target)) throw new NanoError('bad_request', 'GPT Image only generates images.');
   if (request.prompt.length > 32000) throw new NanoError('bad_request', 'Connected text is too long for GPT Image (32,000 characters). Disconnect some context.');
   return request;
@@ -28,6 +28,9 @@ export function gptImageSize(aspect = 1) {
 }
 
 export function gptImageRequest(prompt, references, { key, endpoint: base = endpoint, aspect, mask } = {}) {
+  // Without a chosen size the output keeps the shape of the image being edited, as Nano Banana does.
+  const edited = references[0]?.size;
+  if (!(aspect > 0) && edited?.width > 0 && edited?.height > 0) aspect = edited.height / edited.width;
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 32000) throw new NanoError('bad_request', 'GPT Image needs a prompt of at most 32,000 characters.');
   if (references.length > 16) throw new NanoError('bad_request', 'GPT Image accepts at most 16 reference images.');
   const imageUrl = image => {

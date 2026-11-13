@@ -8,7 +8,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
+import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -144,6 +144,15 @@ function TextNode(props) {
   return useDetail(props.id) === 'full' ? <FullTextNode {...props}/> : <LightNode {...props}/>;
 }
 
+function PromptInputs({ data, light = false }) {
+  const main = isGptImage({ type: 'text', data });
+  // The unnamed handle must stay first: old edges use the first target bounds.
+  return <>
+    {light ? <i {...lodHandleProps('target')} style={main ? { top: '68%' } : undefined}/> : <Handle type="target" position={Position.Left} style={main ? { top: '68%' } : undefined} aria-label={t('Connect input to prompt')}/>}
+    {main && <>{light ? <i {...lodHandleProps('target')} style={{ top: 16 }}/> : <Handle type="target" id="main" position={Position.Left} style={{ top: 16 }} aria-label={t('Main image')}/>}<span className="main-image-label">{t('Main image')}</span></>}
+  </>;
+}
+
 function FullTextNode(props) {
   const working = useCanvasValue(state => busy(state.latestRun.get(props.id)) || state.starting === props.id);
   return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : props.data.task === upscaleTask ? <UpscaleNode {...props}/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
@@ -194,7 +203,7 @@ function ExpandedTextNode({ id, data, selected }) {
   }, [view.focus, id]);
   return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}${describe ? ' describe-node' : ''}${data.height ? ' sized' : ''}`} style={{ ...(data.template ? { '--template-color': templateColor(data.template) } : {}), ...textHeight(data) }}>
     {!view.readOnly && <NodeResizeControl position="bottom" variant="line" resizeDirection="vertical" minHeight={textHeights.min} maxHeight={textHeights.max} className="text-height-handle" title={t('Drag to change the height')}/>}
-    <Handle type="target" position={Position.Left} aria-label={t('Connect input to prompt')}/>
+    <PromptInputs data={data}/>
     <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} data-analytics-name={describe ? 'Describe' : 'Generate'} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? site.note : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? gpt ? 'GPT Image' : 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} gpt={{ selectable: view.gptSelectable, note: view.gptNote, budget: view.gptBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
     <div className={`prompt-editor${more ? ' has-more' : ''}`}>
       <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
@@ -291,7 +300,7 @@ function CollapsedNode({ id, data, kind }) {
   const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
   return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
-      {(!isImage || data.runId) && <Handle type="target" position={Position.Left} isConnectable={!isImage} aria-label={isImage ? t('Image input') : t('Connect input to prompt')}/>}
+      {isImage ? data.runId && <Handle type="target" position={Position.Left} isConnectable={false} aria-label={t('Image input')}/> : <PromptInputs data={data}/>}
       {isImage ? <><CollapsedImage asset={data.asset} id={id}/>{data.mask && <ImageMask data={data}/>}</> : <Icon name="text" size={26}/>}
       {busy(run) && <span className="collapsed-run-dot" aria-label={t('Generating')} title={t('Generating…')}/>}
       {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={t(run.error)} title={t(run.error)}/>}
@@ -359,7 +368,7 @@ function LightNode({ id, type, data, selected }) {
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesSiteGenerator(data), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
-    {(!isImage || data.runId) && <LodHandle type="target"/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
+    {isImage ? data.runId && <LodHandle type="target"/> : <PromptInputs data={data} light/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
     {isImage && data.mask && <ImageMask data={data} preview={false}/>} {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
@@ -378,7 +387,7 @@ function LightNode({ id, type, data, selected }) {
   const describe = data.task === describeTask, gpt = nano && data.generator === generators.gptImage;
   const siteReady = gpt ? view.gptReady : view.nanoReady, siteNote = gpt ? view.gptNote : view.nanoNote;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
-    <LodHandle type="target"/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
+    <PromptInputs data={data} light/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
     {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && (nano ? !siteReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={siteNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
@@ -2083,18 +2092,25 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (mcpLocked.current) return;
     const source = slideSource(connection.source);
     if (source !== connection.source) connection = { ...connection, source, sourceHandle: null };
-    if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === connection.source)?.type)) return;
-    if (nodeRef.current.find(n => n.id === connection.target)?.type !== 'text') { notify(t('Connect inputs to a text prompt. Run creates image connections automatically.')); return; }
+    const target = nodeRef.current.find(node => node.id === connection.target), from = nodeRef.current.find(node => node.id === source), main = connection.targetHandle === 'main';
+    if (main && (!isGptImage(target) || from?.type !== 'image')) { notify(t('Connect an image to the Main image port.')); return; }
+    if (!['text', 'image'].includes(from?.type)) return;
+    if (target?.type !== 'text') { notify(t('Connect inputs to a text prompt. Run creates image connections automatically.')); return; }
     const reachable = new Set();
     const walk = nodeId => { if (reachable.has(nodeId)) return; reachable.add(nodeId); edgeRef.current.filter(e => e.source === nodeId).forEach(e => walk(e.target)); };
     walk(connection.target);
     if (reachable.has(connection.source)) { notify(t('That connection would create a loop. Branch into a new prompt instead.')); return; }
     checkpoint();
-    const next = addEdge({ ...connection, id: id() }, edgeRef.current);
+    const exists = edgeRef.current.some(edge => edge.source === source && edge.target === target.id);
+    const next = exists ? edgeRef.current : addEdge({ id: id(), source, target: target.id }, edgeRef.current);
     const added = next.filter(edge => !edgeRef.current.some(item => item.id === edge.id));
     if (cloud && added.length) track('connections_made', { count: added.length });
     effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
-    putNodes(current => nameImageConnections(current, edgeRef.current, added));
+    putNodes(current => nameImageConnections(current, edgeRef.current, added).map(node => {
+      if (node.id !== target.id || (!main && node.data.mainImage !== source)) return node;
+      const data = { ...node.data }; if (main) data.mainImage = source; else delete data.mainImage;
+      return { ...node, data };
+    }));
     putEdges(next); markDirty();
   };
   const connectEnd = (event, state) => {

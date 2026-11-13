@@ -47,14 +47,29 @@ export function nanoSettings(env) {
 }
 
 // The inputs a Codex run would get (runInputs decides which), written for an image model instead of an agent.
-export function nanoPrompt(graph, nodeId, { maskInput = false } = {}) {
-  const { target, images: inputs, context } = runInputs(graph, nodeId), images = generationReferences(inputs, maskInput);
+// The request names images by board name, node ID or file name; the earliest one named comes first in the text.
+const named = (text, image) => [image.label, image.nodeId, image.asset, image.uploaded].filter(Boolean).map(name => {
+  const at = text.toLowerCase().search(new RegExp(`(?<![\\p{L}\\p{N}])${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'u'));
+  return at < 0 ? Infinity : at;
+}).reduce((a, b) => Math.min(a, b), Infinity);
+// GPT Image edits the first input image and uses the rest as references (OpenAI image generation guide), so the image
+// the request names first leads, unless a mask already fixes which image is edited.
+export function editedFirst(images, text) {
+  if (images.some(image => image.mask) || images.length < 2) return images;
+  const first = images.map(image => named(text, image)).reduce((best, at, i, all) => at < all[best] ? i : best, 0);
+  return [images[first], ...images.filter((_, i) => i !== first)];
+}
+
+export function nanoPrompt(graph, nodeId, { maskInput = false, leadEdited = false } = {}) {
+  const run = runInputs(graph, nodeId), { target, context } = run;
+  const inputs = leadEdited && !run.mainImage ? editedFirst(run.images, promptText(target)) : run.images, images = generationReferences(inputs, maskInput);
   // A describe node asks for the same written description Codex would give, from a text model.
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images, target, describe: true };
   const prompt = [
     context.length ? 'Create an image for the request at the end. The earlier text is context for it, not separate requests.' : '',
     ...context.map((node, i) => `Context ${i + 1}:\n${promptText(node)}`),
     imageAttachments(images),
+    leadEdited && run.mainImage ? `Edit “${run.mainImage.label}” (Attachment 1). The other attachments are references for the request.` : '',
     `${context.length || images.length ? 'Request:\n' : ''}${promptText(target)}`,
     maskInstruction(inputs, maskInput),
   ].filter(Boolean).join('\n\n');

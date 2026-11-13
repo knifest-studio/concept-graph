@@ -1,5 +1,7 @@
 // Ukrainian interface text, keyed by the English it replaces. Plurals list the one, few, many and other forms.
 export default {
+  'Main image': 'Основне зображення',
+  'Connect an image to the Main image port.': 'Підключіть зображення до порту «Основне зображення».',
   // Cloud product analytics
   "Product analytics": "Аналітика продукту",
   "Share usage data and session recordings to improve Concept Graph": "Ділитися даними використання та записами сеансів для покращення Concept Graph",

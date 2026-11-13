@@ -6,6 +6,12 @@ const text = (id, value) => ({ id, type: 'text', position: { x: 0, y: 0 }, data:
 const image = (id, label) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: '12345678-1234-1234-1234-123456789abc.png', label } });
 const edge = (source, target) => ({ id: source + '-' + target, source, target });
 
+test('main image IDs validate as bounded strings and may dangle', () => {
+  const node = text('p', 'Edit'), graph = { nodes: [node], edges: [] };
+  for (const value of ['', 'missing', 'x'.repeat(120)]) { node.data.mainImage = value; assert.equal(validateGraph(graph), graph); }
+  for (const value of [null, 7, {}, [], 'x'.repeat(121)]) { node.data.mainImage = value; assert.throws(() => validateGraph(graph), /Invalid main image/); }
+});
+
 const maskAsset = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', marked = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png';
 const masked = id => { const node = image(id, id); node.data.mask = { asset: maskAsset, marked, base: node.data.asset, source: node.data.asset }; return node; };
 test('crop and mask metadata validate on shared graphs and reject malformed fields without dropping stale masks', () => {
