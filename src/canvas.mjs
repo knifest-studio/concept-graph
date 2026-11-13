@@ -179,6 +179,15 @@ const foldedGroup = Object.freeze({ width: 240, height: 72 });
 // `aspects` holds proportions learned from loaded pictures, for images stored without them.
 const foldedSize = (slide, aspects) => slide ? { width: 310, height: 40 + Math.round(310 * (slide.data.aspect || aspects?.get(slide.data.asset) || 1)) } : foldedGroup;
 export const foldedFrame = (group, byId) => foldedSize(group.slideshow && slideshowState(group, byId).node);
+// A folded slideshow grows and shrinks about a fixed middle (that of a square image), so stepping between tall and wide
+// images leaves its arrows and connection dots in place instead of hanging everything from the top edge.
+const slideshowMiddle = foldedSize({ data: { aspect: 1 } }).height / 2;
+const foldedTop = (bounds, folded) => ({ ...folded, x: bounds.x, y: bounds.y + Math.round(slideshowMiddle - folded.height / 2) });
+// How far a folded slideshow is drawn below its members' top-left; a drag of the card moves them by what is left.
+export const foldedShift = (group, byId, aspects) => {
+  const slide = group.collapsed && group.slideshow && slideshowState(group, byId).node;
+  return slide ? Math.round(slideshowMiddle - foldedSize(slide, aspects).height / 2) : 0;
+};
 
 // An unmeasured prompt grows with its text (13px type, 22px lines, ~44 characters per line in a 310px card).
 // A light card's connection dot. React Flow measures connection points by their `source`/`target` class and reads the
@@ -261,16 +270,16 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   for (const index of arrows) viewNodes[index] = arrowView(nodes[index], byId, shown, layers.get(nodes[index].id), cache);
   const frames = groups.map(group => {
     const bounds = groupBounds(group, nodes, byId, shown), slides = group.slideshow ? slideshowState(group, byId) : null, slide = slides?.node;
-    const { width, height } = group.collapsed ? foldedSize(slide, cache.aspects) : bounds, saved = cache.frames.get(group);
-    if (saved && saved.x === bounds.x && saved.y === bounds.y && saved.width === width && saved.height === height && saved.slide === slide) return saved.view;
+    const { x, y, width, height } = group.collapsed ? slide ? foldedTop(bounds, foldedSize(slide, cache.aspects)) : { ...bounds, ...foldedGroup } : bounds, saved = cache.frames.get(group);
+    if (saved && saved.x === x && saved.y === y && saved.width === width && saved.height === height && saved.slide === slide) return saved.view;
     const images = slides ? slides.images.length : group.nodeIds.reduce((count, id) => count + (byId.get(id)?.type === 'image'), 0);
     // A stored group colour is kept for older boards but no longer drawn: groups only bundle and fold nodes.
-    const view = { id: group.id, type: 'group', position: { x: bounds.x, y: bounds.y }, selected: !!group.selected,
+    const view = { id: group.id, type: 'group', position: { x, y }, selected: !!group.selected,
       data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, images,
         ...(slides ? { slideshow: true, index: slides.index, ...(slide ? { slide: { id: slide.id, asset: slide.data.asset, aspect: slide.data.aspect } } : {}) } : {}) },
       // Below the connections' layer (0), so a folded frame never hides the links between its members.
       width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? (slide ? frameHandles({ width, height }) : groupHandles) : [] };
-    cache.frames.set(group, { x: bounds.x, y: bounds.y, width, height, slide, view });
+    cache.frames.set(group, { x, y, width, height, slide, view });
     return view;
   });
   const viewEdges = edges.map(edge => {
@@ -348,7 +357,9 @@ const area = rect => rect.width * rect.height;
 const nests = (inner, outer) => inner.id !== outer.id && holds(outer, centre(inner)) && (area(inner) < area(outer) || (area(inner) === area(outer) && inner.id > outer.id));
 export const frameBox = (group, nodes, byId, measure = size) => {
   const bounds = groupBounds(group, nodes, byId, measure);
-  return group.collapsed ? { ...bounds, ...foldedFrame(group, byId || new Map(nodes.map(node => [node.id, node]))) } : bounds;
+  if (!group.collapsed) return bounds;
+  const folded = foldedFrame(group, byId || new Map(nodes.map(node => [node.id, node])));
+  return folded === foldedGroup ? { ...bounds, ...folded } : foldedTop(bounds, folded);
 };
 
 /**

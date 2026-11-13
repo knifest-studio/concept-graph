@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardExtent, slideshowState, steppedSlide, frameBox, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
+import { boardExtent, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
 test('server first-output placement clears the same multiline prompt bounds the canvas draws', () => {
   const prompt = { id: 'prompt', type: 'text', position: { x: 400, y: 0 }, data: { text: 'A long prompt. '.repeat(150) } };
@@ -386,7 +386,13 @@ test('a folded slideshow shows one image of the group, steps through its images 
   assert.deepEqual(frame.data.slide, { id: 'two', asset: nodes[2].data.asset, aspect: 1.5 });
   assert.equal(frame.data.index, 1); assert.equal(frame.data.images, 2);
   assert.deepEqual(frame.handles.map(handle => [handle.x, handle.y]), [[-10, 505 / 2 - 5], [310, 505 / 2 - 5]]);
-  assert.deepEqual(frameBox(show, nodes), { ...groupBounds(show, nodes), width: 310, height: 505 });
+  // It grows about a fixed middle (a square image's), so stepping between images leaves the arrows where they were.
+  const bounds = groupBounds(show, nodes), middle = (40 + 310) / 2;
+  assert.deepEqual(frameBox(show, nodes), { ...bounds, y: bounds.y + Math.round(middle - 505 / 2), width: 310, height: 505 });
+  assert.deepEqual(frame.position, { x: bounds.x, y: bounds.y + Math.round(middle - 505 / 2) });
+  const wide = nodes.map(node => node.id === 'one' ? { ...node, data: { ...node.data, aspect: .5 } } : node), first = canvasView(wide, edges, [{ ...show, slide: 'one' }]).nodes.find(node => node.id === 'show');
+  assert.equal(first.position.y + first.height / 2, frame.position.y + frame.height / 2);
+  assert.equal(foldedShift(show, byId), frame.position.y - bounds.y); assert.equal(foldedShift({ ...show, collapsed: false }, byId), 0);
   assert.equal(steppedSlide(show, byId, 1), 'one'); assert.equal(steppedSlide(show, byId, -1), 'one');
   // A slide that left the group falls back to the first image, and saving drops it.
   const stale = { ...show, slide: 'gone' };

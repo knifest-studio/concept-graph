@@ -10,7 +10,7 @@ import { formatDuration, runElapsed } from '../timing.mjs';
 import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
+import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform, loopbackBlocked } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
@@ -1852,7 +1852,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (change.type === 'select') putGroups(current => current.map(group => group.id === change.id ? { ...group, selected: change.selected } : group));
       if (change.type === 'position' && change.position) {
         const group = groupRef.current.find(group => group.id === change.id);
-        next = moveGroup(next, group, change.position, false); group.nodeIds.forEach(id => moved.add(id));
+        next = moveGroup(next, group, { x: change.position.x, y: change.position.y - (group.collapsed && group.slideshow ? foldedShift(group, new Map(next.map(node => [node.id, node])), viewCache.current.aspects) : 0) }, false); group.nodeIds.forEach(id => moved.add(id));
       }
     }
     const sectionChanges = sectionIds.size ? changes.filter(change => sectionIds.has(change.id)) : [];
