@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { dictationError, dictationLanguage, dictationResults, insertDictation, nextDictationLanguage, typedLanguage, dictationPreferenceKey, readDictationPreference } from './dictation.mjs';
 
@@ -88,7 +89,7 @@ export function usePromptDictation(editor, value, onChange, language, effects) {
     setState(state => ({ ...state, language: lang.slice(0, 2).toUpperCase(), interim: '' }));
     recognition.onstart = () => {
       if (session.current !== current) { recognition.abort(); return; }
-      current.started = true;
+      current.started = true; track('dictation_used', { language: current.lang });
       if (!current.sounded) { current.sounded = true; cue('dictation-start'); }
       setState(state => ({ ...state, listening: true }));
     };

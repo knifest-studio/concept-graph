@@ -14,6 +14,7 @@ import { mcpApi } from './mcp.mjs';
 import { agentScopes, authorize } from './oauth.mjs';
 import { purgeTrash } from './trash.mjs';
 import { voiceIce } from './voice.mjs';
+import { analyticsRoute, purgeAnalytics } from './analytics.mjs';
 
 export { BoardRoom } from './board-room.mjs';
 export { Directory } from './directory.mjs';
@@ -157,6 +158,12 @@ async function route(request, env) {
     return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }
   // Board links load the app, which signs the person in and then opens the board.
+  if (path === '/admin/analytics') {
+    const admin = await sessionUser(request, env.SESSION_SECRET);
+    if (!admin) return error('Sign in required.', 401);
+    if (!await directory(env).siteRole(admin.email)) return error('Only site admins can view analytics.', 403);
+    return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
+  }
   if (/^\/b\/[^/]+\/?$/.test(path)) return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
   if (path === '/oauth/authorize') return authorize(request, env);
   if (path === '/api/auth/google') return method === 'GET' ? googleSignIn(request, env) : error('Method not allowed.', 405);
@@ -181,6 +188,7 @@ async function route(request, env) {
   if (protectedPath && !user) return error('Sign in required.', 401);
   if (path === '/api/cloud/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url) });
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
+  if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal }) : error('Method not allowed.', 405);
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
@@ -391,5 +399,5 @@ export default {
   fetch(request, env, ctx) {
     return (providerFor(new URL(request.url).origin) || site).fetch(request, env, ctx);
   },
-  scheduled(controller, env, ctx) { ctx.waitUntil(purgeTrash(env)); }
+  scheduled(controller, env, ctx) { ctx.waitUntil(Promise.all([purgeTrash(env), purgeAnalytics(env)])); }
 };

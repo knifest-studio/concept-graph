@@ -96,7 +96,7 @@ export function ImageEditor({ node, mode, assetUrl, upload, onApply, onClose, re
     if (!crop) push(drag.stroke);
     gesture.current = null;
   };
-  return createPortal(<div className="image-editor" role="dialog" aria-modal="true" aria-labelledby="image-editor-title" tabIndex={-1} ref={dialog} onKeyDown={keyDown}>
+  return createPortal(<div className="image-editor" data-analytics-area="dialog:Image editor" role="dialog" aria-modal="true" aria-labelledby="image-editor-title" tabIndex={-1} ref={dialog} onKeyDown={keyDown}>
     <header className="image-editor-toolbar"><h2 id="image-editor-title">{crop ? t('Crop') : t('Edit mask')}</h2>
       {!crop && <div className="image-editor-tools" role="group" aria-label={t('Mask tools')}>
         <button type="button" aria-pressed={!eraser} disabled={busy} onClick={() => setEraser(false)}>{t('Brush')}</button><button type="button" aria-pressed={eraser} disabled={busy} onClick={() => setEraser(true)}>{t('Eraser')}</button>

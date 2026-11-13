@@ -1,3 +1,4 @@
+import { track, analyticsView, analyticsReady, analyticsViewport, analyticsVia } from './analytics.mjs';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
@@ -194,7 +195,7 @@ function ExpandedTextNode({ id, data, selected }) {
   return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}${describe ? ' describe-node' : ''}${data.height ? ' sized' : ''}`} style={{ ...(data.template ? { '--template-color': templateColor(data.template) } : {}), ...textHeight(data) }}>
     {!view.readOnly && <NodeResizeControl position="bottom" variant="line" resizeDirection="vertical" minHeight={textHeights.min} maxHeight={textHeights.max} className="text-height-handle" title={t('Drag to change the height')}/>}
     <Handle type="target" position={Position.Left} aria-label={t('Connect input to prompt')}/>
-    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? site.note : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? gpt ? 'GPT Image' : 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} gpt={{ selectable: view.gptSelectable, note: view.gptNote, budget: view.gptBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} data-analytics-name={describe ? 'Describe' : 'Generate'} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? site.note : `${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe connected images') : t('Generate image')} · ${generateShortcut()}`}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? gpt ? 'GPT Image' : 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, budget: view.nanoBudget }} gpt={{ selectable: view.gptSelectable, note: view.gptNote, budget: view.gptBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
     <div className={`prompt-editor${more ? ' has-more' : ''}`}>
       <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
       {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? t('Stop dictation') : t('Dictate prompt')} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? t('Finishing dictation…') : t('Stop dictation · Esc') : t('Dictate (speech is recognised by your browser’s service)')} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
@@ -748,6 +749,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   useEffect(() => { if (readOnly) setImageEdit(null); }, [readOnly]);
   modalOpen.current = !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   const flow = useReactFlow();
+  useEffect(() => { if (cloud && loaded) { analyticsView('board', boardId, activePage); analyticsViewport(() => flow.getViewport().zoom); analyticsReady(); } }, [loaded, boardId, activePage]);
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
   const scoped = useMemo(() => pageContent({ nodes, edges, groups, sections }, activePage, pages), [nodes, edges, groups, sections, activePage, pages]);
   // Board-sized derivations are memoized, so the 1 s generation timer and other small updates do no per-node work.
@@ -778,7 +780,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const remoteCaptions = useRef({ version: 0, added: new Map() });
   const mouse = useRef({ x: innerWidth / 2, y: innerHeight / 2 }), fileInput = useRef(null), toastTimer = useRef(null);
   const saveFn = useRef(null);
-  const notify = useCallback(message => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
+  const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
   const refreshTemplates = useCallback(async () => {
     // An unchanged library keeps its identity, so a change elsewhere on the board does not re-render every prompt.
     const show = list => setTemplates(current => JSON.stringify(current) === JSON.stringify(list) ? current : list);
@@ -896,7 +898,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   };
   const trackOwnRun = runId => {
     effects.ownRun(runId); guide.report({ type: 'run-started', id: runId });
-    if (userGeneration.current) runsToReveal.current.add(runId);
+    if (userGeneration.current) { userGeneration.current.runId = runId; runsToReveal.current.add(runId); }
   };
   useEffect(() => {
     if (cloudSession) { cloudSession.onOwnRun = trackOwnRun; cloudSession.onAgentRun = nodeId => agentRunRef.current(nodeId); }
@@ -1296,10 +1298,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     };
   }, []);
 
-  const addText = (position, text = '', template = null, extra = {}) => {
+  const addText = (position, text = '', template = null, extra = {}, via = analyticsVia('toolbar')) => {
     checkpoint();
     const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 }), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}), ...extra } });
     node.position = freeSpot(creationGraph(), node.position, visiblePlacementBounds(), { width: 310, height: Math.max(150, cardBox(node).height) });
+    if (cloud) track('node_created', { nodeType: node.type, via });
     effects.createNodes([node.id]);
     putNodes(current => [...current.map(deselected), { ...node, selected: true }]); markDirty();
     focusNode(node.id, 'text', false, true); guide.report({ type: 'prompt' });
@@ -1318,7 +1321,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (!sources.length) return;
       const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
       putNodes(current => nameImageConnections(current, edgeRef.current, added));
-      putEdges(current => [...current, ...added]); markDirty();
+      putEdges(current => [...current, ...added]); if (cloud) track('connections_made', { count: added.length }); markDirty();
     } catch (error) { notify(error.message); }
   };
   // An upscale node fed by the given images, or by the selected ones; Topaz at ×2 to begin with, or Nano Banana at 2K while
@@ -1331,17 +1334,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (!sources.length) return;
       const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
       putNodes(current => nameImageConnections(current, edgeRef.current, added));
-      putEdges(current => [...current, ...added]); markDirty();
+      putEdges(current => [...current, ...added]); if (cloud) track('connections_made', { count: added.length }); markDirty();
     } catch (error) { notify(error.message); }
   };
   const promptFrom = sourceId => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === sourceId)?.type)) return;
     try {
-      const node = addText(promptSpot(sourceId));
+      const node = addText(promptSpot(sourceId), '', null, {}, 'prompt-from-this');
       const edge = { id: id(), source: sourceId, target: node.id }; effects.createEdges([edge.id], [edge.target]);
       putNodes(current => nameImageConnections(current, edgeRef.current, [edge]));
-      putEdges(current => [...current, edge]); markDirty();
+      putEdges(current => [...current, edge]); if (cloud) track('connections_made', { count: 1 }); markDirty();
       guide.report({ type: 'variation' });
     } catch (error) { notify(error.message); }
   };
@@ -1391,7 +1394,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const addImages = async (files, position) => {
     if (readOnlyRef.current) return;
     checkpoint(); uploads.current++; setUploading(true);
-    const page = activePageRef.current, added = [];
+    const page = activePageRef.current, added = [], via = analyticsVia('toolbar');
     try { for (const [index, file] of [...files].entries()) {
       try {
         const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
@@ -1406,6 +1409,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
         const caption = captionHeight(node), renderedSize = nodeSize(node);
         const spot = freeSpot(creationGraph(page), { x: node.position.x, y: node.position.y - caption }, page === activePageRef.current ? visiblePlacementBounds() : undefined, { width: renderedSize.width, height: renderedSize.height + caption });
         node.position = { x: spot.x, y: spot.y + caption }; added.push(node);
+        if (cloud) track('node_created', { nodeType: 'image', via });
         effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
       } catch (error) { notify(error.message); }
     } } finally { uploads.current--; setUploading(uploads.current > 0); if (added.length) requestAnimationFrame(() => revealCreated(added.at(-1))); }
@@ -1432,9 +1436,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const prompt = create ? assignPage({ id: id(), type: 'text', z: nextLayer(graph.nodes), position: promptSpot(node.id), data: { text: '', createdAt: new Date().toISOString() } }, nodePage(node, pagesRef.current)) : null;
     checkpoint();
     putNodes(current => [...current.map(item => item.id === node.id ? { ...item, data: fields } : prompt ? deselected(item) : item), ...(prompt ? [{ ...prompt, selected: true }] : [])]);
+    track(imageEdit.mode === 'crop' ? 'crop_applied' : 'mask_applied', { masked: !!fields.mask });
     if (prompt) {
+      track('node_created', { nodeType: 'text', via: 'prompt-from-this' });
       const edge = { id: id(), source: node.id, target: prompt.id };
-      putNodes(current => nameImageConnections(current, edgeRef.current, [edge])); putEdges(current => [...current, edge]); effects.createNodes([prompt.id]); effects.createEdges([edge.id], [prompt.id]);
+      putNodes(current => nameImageConnections(current, edgeRef.current, [edge])); putEdges(current => [...current, edge]); if (cloud) track('connections_made', { count: 1 }); effects.createNodes([prompt.id]); effects.createEdges([edge.id], [prompt.id]);
     }
     markDirty();
     if (prompt) { setViewId(null); focusNode(prompt.id, 'text', false, true); guide.report({ type: 'variation' }); }
@@ -1452,6 +1458,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     let copiedSections = (copied.sections || []).map(placeOnPage);
     if (sectionRef.current.length + copiedSections.length > maxSections) { notify(t('A board can have at most {count} sections.', { count: maxSections })); return; }
     copied = { ...copied, nodes: stackOnTop(nodeRef.current, copied.nodes).map(placeOnPage) };
+    if (cloud) for (const node of copied.nodes) track('node_created', { nodeType: node.type, via: duplicate ? 'shortcut' : 'paste' });
     const box = boundingBox([...copied.nodes.map(cardBox), ...copiedSections]);
     const spot = freeSpot(creationGraph(), box, visiblePlacementBounds(), box), dx = spot.x - box.x, dy = spot.y - box.y;
     copied.nodes = copied.nodes.map(node => ({ ...node, position: { x: node.position.x + dx, y: node.position.y + dy }, ...(node.type === 'arrow' ? { data: shiftArrow(node.data, dx, dy) } : {}) }));
@@ -1499,6 +1506,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (cloudSession) {
       syncCloud(); cloudSession.undo.stopCapturing();
       const changed = cloudSession.undo[redo ? 'redo' : 'undo']();
+      if (changed) track(redo ? 'redo' : 'undo');
       if (changed && (!cloudSession.provider.wsconnected || !cloudSession.provider.synced)) cloudOfflineEdits.current = true;
       return;
     }
@@ -1593,6 +1601,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const addAnnotation = value => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     if (nodeRef.current.length >= maxNodes) { notify(t('Canvas is too large.')); return; }
+    if (cloud) track('node_created', { nodeType: value.type, via: analyticsVia('toolbar') });
     const author = value.type !== 'drawing' && boardAuthor(cloudSession?.user);
     const node = placeOnPage({ ...value, id: id(), z: nextLayer(nodeRef.current), selected: true, data: { ...value.data, createdAt: new Date().toISOString(), ...(author ? { author } : {}) } });
     checkpoint();
@@ -2021,7 +2030,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       return;
     }
     effects.start(nodeId, event);
-    userGeneration.current = { nodeId };
+    userGeneration.current = { nodeId, started: Date.now() };
     viewerMoved.current = true;
     generationStarting.current = true;
     setStarting(nodeId);
@@ -2037,6 +2046,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [result], true);
       setRuns(current => current.some(r => r.id === result.id) ? current : [...current, result]);
     } catch (error) {
+      if (cloud && !userGeneration.current?.runId) track('generation_failed', { generator: runNode?.data.generator || 'codex', task: runNode?.data.task || 'image', variants: runNode?.data.variants || 1, duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
       effects.failedStart();
       if (error.value?.graph) mergeRemote(error.value.graph);
       if (nanoRun) cloudSession.refreshNano?.();
@@ -2082,6 +2092,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     checkpoint();
     const next = addEdge({ ...connection, id: id() }, edgeRef.current);
     const added = next.filter(edge => !edgeRef.current.some(item => item.id === edge.id));
+    if (cloud && added.length) track('connections_made', { count: added.length });
     effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
     putNodes(current => nameImageConnections(current, edgeRef.current, added));
     putEdges(next); markDirty();
@@ -2094,10 +2105,10 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     const from = state.fromNode && slideSource(state.fromNode.id), fromNode = from === state.fromNode?.id ? state.fromNode : nodeRef.current.find(node => node.id === from);
     if (!edgeDropCreatesPrompt({ ...state, fromNode }, onPane)) return;
     const position = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
-    const node = addText({ x: position.x, y: position.y - 40 });
+    const node = addText({ x: position.x, y: position.y - 40 }, '', null, {}, 'drag-from-output');
     const edge = { id: id(), source: fromNode.id, target: node.id }; effects.createEdges([edge.id], [edge.target]);
     putNodes(current => nameImageConnections(current, edgeRef.current, [edge]));
-    putEdges(current => [...current, edge]); setFocusId(node.id); markDirty();
+    putEdges(current => [...current, edge]); if (cloud) track('connections_made', { count: 1 }); setFocusId(node.id); markDirty();
     if (fromNode.type === 'image') guide.report({ type: 'variation' });
   };
   const downloadImage = async asset => {
@@ -2145,6 +2156,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (createName) {
         const result = await api(cloud ? '/api/cloud/boards' : '/api/boards', jsonOptions('POST', { name: createName }));
         const board = cloud ? result.board : result;
+        if (cloud) track('board_created', {}, 'app', 'sidebar');
         updateBoards(current => current.some(b => b.id === board.id) ? current : [...current, board]);
         nextId = board.id;
       }
@@ -2173,6 +2185,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (!cloud) await saveNow();
       if (cloud) cloudSession.deleting = true;
       const result = await api(cloud ? `/api/cloud/boards/${boardId}` : boardPath, jsonOptions('DELETE', { confirmName: name }));
+      if (cloud) track('board_deleted');
       setBoardForm(null);
       if (cloud) { cloudSession.deleted?.(); return; }
       updateBoards(result.boards);
@@ -2371,9 +2384,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
   return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing || !!imageEdit ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
     <style>{pendingPulseKeyframes}</style>
-    <header className="app-header">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
+    <header className="app-header" data-analytics-area="top-bar">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences analytics={cloud} theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
     {cloudSession?.panels}
-    <aside className="sidebar" inert={!!transfer || switching ? true : undefined}>
+    <aside className="sidebar" data-analytics-area="sidebar" inert={!!transfer || switching ? true : undefined}>
       <div className="board-heading"><span className="eyebrow">{t('YOUR BOARDS')}</span><div className="board-picker"><select data-tooltip={t('Switch board')} aria-label={t('Board')} value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip={t('Rename board')} aria-label={t('Rename board')} className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}{canRename && <button data-tooltip={t('Delete board')} aria-label={t('Delete board')} className="icon-button board-delete" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setDeleteName(''); setBoardForm('delete'); }}><Icon name="trash" size={15}/></button>}</div><button className="new-board" data-tooltip={t('Create a new board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> {t('New board')}</button>{!cloud && <div className="board-transfer"><button data-tooltip={t('Save this board with its images')} aria-label={t('Export board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> {t('Export')}</button><button data-tooltip={t('Import a .conceptgraph file as a new board')} aria-label={t('Import board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> {t('Import')}</button></div>}</div>
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
       <div className="sidebar-tabs"><button data-tooltip={t('Show creation tools')} className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>{t('Create')}</button><button data-tooltip={t('View generation history')} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>{t('History')} <small>{runs.length}</small></button></div>
@@ -2390,7 +2403,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       {tool === 'stamp' && <StampCursor emoji={stamps[stamp]} area={canvasElement} start={mouse.current}/>}
       {!readOnly && <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} ready={readiness.key === 'ready'} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>}
       <div className="canvas-bottom"><span className="canvas-stats">{plural(scoped.nodes.length, '{count} node', '{count} nodes')} <i/> {plural(scoped.edges.length, '{count} connection', '{count} connections')}</span>
-        {!readOnly && <div className="board-toolbar" role="toolbar" aria-label={t('Board tools')}><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp} shape={shape} setShape={setShape} arrowColor={arrowColor} setArrowColor={setArrowColor}/><i className="toolbar-divider"/>
+        {!readOnly && <div className="board-toolbar" data-analytics-area="bottom-toolbar" role="toolbar" aria-label={t('Board tools')}><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp} shape={shape} setShape={setShape} arrowColor={arrowColor} setArrowColor={setArrowColor}/><i className="toolbar-divider"/>
           <div className="toolbar-group"><button className="tool-button" data-tooltip={t('Undo · ⌘ Z')} aria-label={t('Undo')} onClick={() => undo()}><Icon name="undo" size={19}/></button><button className="tool-button" data-tooltip={t('Redo · ⌘ Shift Z')} aria-label={t('Redo')} onClick={() => undo(true)}><Icon name="redo" size={19}/></button>
             <button className="tool-button" data-tooltip={canAlign ? t('Align selected nodes left to right') : t('Select nodes to align them')} aria-label={t('Auto-align selected nodes')} disabled={!canAlign} onClick={autoAlign}><Icon name="align" size={20}/></button><button className="tool-button" data-tooltip={canGroup ? t('Group selected nodes') : t('Select 2+ ungrouped nodes')} aria-label={t('Group selected nodes')} disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={20}/></button>{selectedCount > 0 && <button className="tool-button" data-tooltip={t('Delete selected')} aria-label={t('Delete selected')} onClick={removeSelected}><Icon name="trash" size={18}/></button>}</div></div>}
         <div className="zoom-controls" role="group" aria-label={t('Zoom')}><button data-tooltip={t('Zoom out')} aria-label={t('Zoom out')} onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={18}/></button><i/><button data-tooltip={fitNodes.length ? t('Fit selected nodes in view') : t('Fit all nodes in view')} aria-label={t('Fit canvas')} onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={17}/></button><i/><button data-tooltip={t('Zoom in')} aria-label={t('Zoom in')} onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={18}/></button></div></div>

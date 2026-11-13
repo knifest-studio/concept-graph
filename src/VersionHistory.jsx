@@ -26,7 +26,7 @@ export function VersionHistory({ boardId, services, editable, ago, onRestored, o
     try { await services.api(`${path}/${encodeURIComponent(version.id)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); onRestored(version); }
     catch (failure) { setError(failure.message); setBusy(false); }
   };
-  return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="history-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
+  return <div className="board-modal" data-analytics-area="dialog:Version history" role="dialog" aria-modal="true" aria-labelledby="history-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
     <div className="share-card version-card">
       <h2 id="history-title">{t('Version history')}</h2>
       <p className="share-note">{t('A copy of the board is saved every 10 minutes while it changes, and right before any large deletion or restore. Copies are kept for 90 days.')}</p>

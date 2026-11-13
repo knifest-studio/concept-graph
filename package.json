@@ -25,11 +25,13 @@
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4",
+    "@rrweb/record": "2.2.0",
     "@xyflow/react": "^12.10.0",
     "@xyflow/system": "0.0.83",
     "partyserver": "^0.5.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "rrweb-player": "2.2.0",
     "y-partyserver": "^2.2.0",
     "y-protocols": "^1.0.7",
     "yauzl": "3.4.0",

@@ -29,6 +29,7 @@ export function AccountMenu({ user, siteRole, onTeam, onSignOut }) {
     {open && <div ref={panel} className="account-panel" role="menu" aria-label={t('Account')}>
       <div className="account-who"><span className="account-avatar" aria-hidden="true" style={{ background: color, color: contrastColor(color) }}>{initials}</span><span><b>{user.name}</b>{user.email && <small>{user.email}</small>}</span></div>
       {siteRole && <button type="button" role="menuitem" onClick={() => choose(onTeam)}>{t('Team access')}</button>}
+      {siteRole && <a role="menuitem" href="/admin/analytics">{t('Product analytics')}</a>}
       <button type="button" role="menuitem" onClick={() => choose(onSignOut)}>{t('Sign out')}</button>
     </div>}
   </div>;

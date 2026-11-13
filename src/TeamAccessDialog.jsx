@@ -35,7 +35,7 @@ export function TeamAccessDialog({ services, onClose }) {
         admin: admins.has(person.email), owner: person.email === access.owner, used: access.usedToday[person.email] || 0 })).sort((a, b) => b.owner - a.owner) };
   }, [access]);
   const owner = access?.role === 'owner', query = filter.trim().toLowerCase(), shown = people.filter(person => !query || person.email.includes(query) || person.name?.toLowerCase().includes(query));
-  return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="team-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
+  return <div className="board-modal" data-analytics-area="dialog:Team access" role="dialog" aria-modal="true" aria-labelledby="team-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
     <div className="share-card team-card">
       <h2 id="team-title">{t('Team access')}</h2>
       <p className="share-note">{owner ? t('Choose who can generate with Nano Banana and GPT Image on the team’s API keys, and who else can manage this.') : t('Choose who can generate with Nano Banana and GPT Image on the team’s API keys.')}</p>

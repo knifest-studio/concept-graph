@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import React, { cloneElement, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { contextMenuShortcut } from './node-context-menu.mjs';
@@ -46,6 +47,7 @@ export function NodeContextMenu({ children, id, type, actions, slideshow, masked
     if (event.target.closest('input, textarea, [contenteditable="true"]')) return;
     event.preventDefault();
     event.stopPropagation();
+    track('context_menu_opened', { nodeType: type, target: type }, 'context', 'context-menu');
     setPosition({ x: event.clientX, y: event.clientY });
   };
   const onKeyDown = event => {
@@ -71,7 +73,7 @@ export function NodeContextMenu({ children, id, type, actions, slideshow, masked
   };
   return <>
     {cloneElement(children, { onContextMenu: open })}
-    {position && createPortal(<div ref={menu} className="node-context-menu" role="menu" aria-label={Object.hasOwn(menuNames, type) ? t(menuNames[type]) : t('{name} options', { name: type })} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
+    {position && createPortal(<div ref={menu} className="node-context-menu" data-analytics-area="context-menu" role="menu" aria-label={Object.hasOwn(menuNames, type) ? t(menuNames[type]) : t('{name} options', { name: type })} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>{t('Copy image')}</span><kbd>{shortcut}</kbd></button>}
       {!readOnly && <>{type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.describeImage)}>{t('Describe image')}</button>}
       {type === 'image' && actions.upscale && <button type="button" role="menuitem" onClick={() => choose(actions.upscaleImage)}>{t('Upscale image')}</button>}

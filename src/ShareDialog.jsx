@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import React, { useEffect, useRef, useState } from 'react';
 import { keepDialogFocus } from './dialog-focus.mjs';
 import { accessNames, boardPath, roleNames } from './cloud-boards.mjs';
@@ -28,7 +29,7 @@ export function ShareDialog({ boardId, name, sharing: initial, services, onChang
   }, []);
   const change = async (update, done) => {
     setBusy(true); setError('');
-    try { show((await services.api(path, json('PATCH', update))).sharing); done?.(); }
+    try { show((await services.api(path, json('PATCH', update))).sharing); track('share_changed', { target: update.member ? 'member' : update.access !== undefined ? 'access' : 'link-role' }); done?.(); }
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
@@ -40,7 +41,7 @@ export function ShareDialog({ boardId, name, sharing: initial, services, onChang
   };
   const manage = sharing.canManage, owner = sharing.owner, open = sharing.access !== 'private';
   // Keys, copying and pasting stay in the dialog instead of reaching the board's shortcuts.
-  return <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="share-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }} onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
+  return <div className="board-modal" data-analytics-area="dialog:Share" role="dialog" aria-modal="true" aria-labelledby="share-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }} onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
     <div className="share-card">
       <h2 id="share-title">{t('Share “{name}”', { name })}</h2>
       {manage ? <form className="share-invite" onSubmit={invite}>

@@ -1,3 +1,4 @@
+import { startAnalytics, analyticsReady, analyticsView, analyticsEnabled, subscribeAnalytics, track } from './analytics.mjs';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { LanguageSelect } from './LanguageSelect.jsx';
 import { Preferences } from './Preferences.jsx';
@@ -15,7 +16,7 @@ import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
 import { CodexRequests, CodexShareMenu, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
-import { generators } from '../graph.mjs';
+import { generators, collectInputs } from '../graph.mjs';
 import { terminalRun } from './run-outputs.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { sharedPreviews } from './canvas-thumbnails.mjs';
@@ -91,6 +92,7 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
     window.addEventListener('focus', load); document.addEventListener('visibilitychange', load);
     return () => { active = false; alive.current = false; clearInterval(timer); window.removeEventListener('focus', load); document.removeEventListener('visibilitychange', load); unmount(); };
   }, [services, setBoards]);
+  useEffect(() => { if (loaded) analyticsReady(); }, [loaded]);
   useEffect(() => { if (editing && !busy) input.current?.focus(); }, [editing, busy]);
   const start = event => { trigger.current = event.currentTarget; setEditing(true); setCreateError(''); input.current?.focus(); };
   const cancel = (restore = true) => { if (creating.current) return; setEditing(false); setName(''); setCreateError(''); if (restore) (trigger.current?.isConnected ? trigger.current : createButton.current)?.focus(); };
@@ -104,7 +106,7 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
     try {
       const { board } = await services.api('/api/cloud/boards', json('POST', { name: name.trim() || 'Untitled board' }));
       if (!alive.current) return;
-      setBoards(current => [board, ...current.filter(item => item.id !== board.id)]);
+      track('board_created', {}, 'app', 'boards'); setBoards(current => [board, ...current.filter(item => item.id !== board.id)]);
       fireFeel('create', { element });
       if (sounds()) playSound(presets.create.sound, sounds);
       onOpen(board.id);
@@ -133,13 +135,13 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
   const own = sorted.filter(board => board.role === 'owner'), shared = sorted.filter(board => board.role !== 'owner');
   const tile = (board, index) => {
     const updated = board.updatedAt || board.createdAt;
-    return <div className="cloud-board-entry" key={board.id} style={{ '--card-delay': `${Math.min(index, 7) * 40}ms` }}><button type="button" className="cloud-board-tile" aria-label={t('Open board {name}', { name: board.name })} onClick={() => onOpen(board.id)}><BoardCover board={board}/><div className="cloud-board-info"><strong>{board.name}</strong><small>{Number.isInteger(board.imageCount) && `${plural(board.imageCount, '{count} image', '{count} images')} · `}{rich('updated {time}', { time: <time dateTime={updated} title={new Date(updated).toLocaleString()}>{relativeTime(updated, now, timeWords)}</time> })}</small><BoardAccess board={board}/><span className="cloud-board-open" aria-hidden="true">{t('Open board')} <span>↗</span></span></div></button></div>;
+    return <div className="cloud-board-entry" key={board.id} style={{ '--card-delay': `${Math.min(index, 7) * 40}ms` }}><button type="button" className="cloud-board-tile" data-analytics-name="Open board" aria-label={t('Open board {name}', { name: board.name })} onClick={() => onOpen(board.id)}><BoardCover board={board}/><div className="cloud-board-info"><strong>{board.name}</strong><small>{Number.isInteger(board.imageCount) && `${plural(board.imageCount, '{count} image', '{count} images')} · `}{rich('updated {time}', { time: <time dateTime={updated} title={new Date(updated).toLocaleString()}>{relativeTime(updated, now, timeWords)}</time> })}</small><BoardAccess board={board}/><span className="cloud-board-open" aria-hidden="true">{t('Open board')} <span>↗</span></span></div></button></div>;
   };
-  return <div className="cloud-home">
-    <header className="app-header cloud-home-header"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
+  return <div className="cloud-home" data-analytics-area="boards">
+    <header className="app-header cloud-home-header" data-analytics-area="top-bar"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
       <button className="theme-button" type="button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} title={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{theme === 'dark' ? <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></> : <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>}</svg></button>
       <LanguageSelect/>
-      <Preferences theme={theme} toggleTheme={toggleTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
+      <Preferences analytics theme={theme} toggleTheme={toggleTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
       <AccountMenu user={user} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
     </div></header>
     {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
@@ -158,6 +160,8 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
     </main>
   </div>;
 }
+
+const AnalyticsAdmin = React.lazy(() => import('./AnalyticsAdmin.jsx'));
 
 // Who shared Codex with whom on a board, kept in this browser so a reload does not end it.
 const sharingMemory = boardId => {
@@ -259,9 +263,33 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     next.chat = new ChatClient({ boardId, email: account.email, storage: localStorage, hidden: () => document.hidden,
       send: value => { if (provider.wsconnected) provider.sendMessage(JSON.stringify(value)); }, sound: () => collaborationSound('chat'), changed: value => next.chatStore.set(value) });
     next.voiceStore = store({ online: false, busy: false, joined: false, muted: false, speaking: false, people: [], streams: [], error: '' });
-    const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => next.voiceStore.set(value), sound: collaborationSound });
+    const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => { if (value.joined && !next.voiceStore.get()?.joined) track('voice_joined'); next.voiceStore.set(value); }, sound: collaborationSound });
     next.voice = voice.mesh; next.joinVoice = voice.join; next.leaveVoice = voice.leave;
-    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, can: feature => !!helperRef.current?.features?.includes(feature), read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => next.onOwnRun?.(run.id), onError: (message, failure) => { setError(t(message)); if (failure?.status === 403) unpair(); } });
+    const ownRuns = new Map();
+    const stopAnalyticsRuns = subscribeAnalytics(() => { if (!analyticsEnabled()) ownRuns.clear(); });
+    const finishedRun = run => {
+      if (!analyticsEnabled()) { ownRuns.clear(); return; }
+      const started = ownRuns.get(run?.id);
+      if (!started || !terminalRun(run.status)) return;
+      ownRuns.delete(run.id);
+      track(run.status === 'completed' ? 'generation_finished' : run.status === 'cancelled' ? 'generation_cancelled' : 'generation_failed', {
+        ...started, duration: Math.max(0, Date.parse(run.finishedAt || new Date().toISOString()) - Date.parse(run.startedAt || run.createdAt)),
+        errorKind: run.status === 'failed' ? /limit|budget|quota/i.test(run.error) ? 'quota' : /timeout|timed out/i.test(run.error) ? 'timeout' : /disconnect|network|fetch/i.test(run.error) ? 'network' : 'provider' : '',
+        message: run.error || '', count: run.outputIds?.length || 0
+      });
+    };
+    const startedRun = run => {
+      if (!analyticsEnabled() || ownRuns.has(run.id)) return;
+      let input; try { input = collectInputs(reader.read(), run.nodeId); } catch {}
+      const fields = { run: run.id, generator: run.provider || input?.target?.data.generator || 'codex', task: run.task || 'image',
+        variants: run.variants || input?.target?.data.variants || 1, references: input?.images?.length || 0, masked: !!input?.snapshot?.some(node => node.type === 'image' && node.data?.mask) };
+      ownRuns.set(run.id, fields); track('generation_started', fields);
+      if (run.task === 'describe' || run.task === 'upscale') track(`${run.task}_started`, fields);
+      finishedRun(doc.getMap('runs').get(run.id) || run);
+    };
+    const analyticsRuns = event => { for (const id of event.keysChanged) finishedRun(doc.getMap('runs').get(id)); };
+    doc.getMap('runs').observe(analyticsRuns);
+    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, can: feature => !!helperRef.current?.features?.includes(feature), read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => { startedRun(run); next.onOwnRun?.(run.id); }, onError: (message, failure) => { setError(t(message)); if (failure?.status === 403) unpair(); } });
     // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
     next.sharing = sharing;
     // A viewer's helper could not place images on this board, so their Codex is never offered to teammates.
@@ -392,7 +420,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       next.flush?.(); next.closed = true;
       next.chat.destroy();
       voice.leave(); window.removeEventListener('pagehide', voice.leave);
-      next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
+      stopAnalyticsRuns(); doc.getMap('runs').unobserve(analyticsRuns); next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
       document.removeEventListener('visibilitychange', hidden);
       provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
       provider.off('custom-message', accessMessage); provider.off('connection-close', closed);
@@ -455,6 +483,9 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   const [helperCode, setHelperCode] = useState(() => sessionStorage.getItem('concept-graph-helper-token') || '');
   const [pairing, setPairing] = useState(false), [paired, setPaired] = useState(false), [pairBusy, setPairBusy] = useState(false), [pairError, setPairError] = useState(''), [helperStatus, setHelperStatus] = useState({});
   const [pairCancel, setPairCancel] = useState(0), [siteRole, setSiteRole] = useState(null);
+  useEffect(() => { if (user) analyticsView(boardId ? 'board' : location.pathname === '/admin/analytics' ? 'admin' : 'boards', boardId || ''); // Watching a recording must not record the admin page again.
+    if (location.pathname !== '/admin/analytics') return startAnalytics(user?.email || null); }, [user?.email]);
+  useEffect(() => { if (user && !boardId) analyticsView(location.pathname === '/admin/analytics' ? 'admin' : 'boards'); }, [user, boardId]);
   const [showAllBuilds, setShowAllBuilds] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('concept-graph-theme') === 'dark' ? 'dark' : 'light');
   const pendingRun = useRef(null);
@@ -538,6 +569,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
       <label htmlFor="cloud-email">{t('Email')}</label><input id="cloud-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/>
       <button className="primary-button" disabled={busy || !name.trim() || !email.trim()}>{busy ? t('Signing in…') : t('Sign in locally')}</button>
     </form>}</section></main>;
+  if (location.pathname === '/admin/analytics') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AnalyticsAdmin services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can view analytics.')}</main>;
   const current = boardId && opened?.id === boardId ? opened : null;
   return <>
     {!boardId ? <BoardsHome user={user} siteRole={siteRole} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} toggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} error={error}/>

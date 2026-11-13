@@ -715,3 +715,13 @@ runtimeTest('Yjs snapshots chunk, reload, roll back failed writes and remove sta
   values.delete('doc:0');
   await assert.rejects(makeRoom().onLoad(), /Incomplete board snapshot/);
 });
+
+runtimeTest('analytics ingestion requires a signed-in cookie and admin pages/reads require the Team access site role', async t => {
+  const { request, directory } = setup(t), cookie = `cg_session=${await signSession({ email: 'person@example.com', name: 'Person' }, 'session-test')}`;
+  assert.equal((await request('/api/analytics/events', { method: 'POST', data: {} })).status, 401);
+  assert.equal((await request('/admin/analytics')).status, 401);
+  assert.equal((await request('/admin/analytics', { cookie })).status, 403);
+  assert.equal((await request('/api/analytics/overview', { cookie })).status, 403);
+  directory.env.SITE_OWNER_EMAIL = 'person@example.com';
+  assert.equal((await request('/admin/analytics', { cookie })).status, 200);
+});

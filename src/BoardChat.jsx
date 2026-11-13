@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { t } from './i18n.mjs';
 import { Avatar } from './BoardPresence.jsx';
@@ -32,9 +33,9 @@ export function BoardChatPanel({ session, onClose }) {
     else if (atBottom.current) element.scrollTop = element.scrollHeight;
   }, [state.messages, state.pending, state.loading]);
   const nodes = new Map(graph.nodes.map(node => [node.id, node])), selection = selected.map(id => nodes.get(id)).find(Boolean);
-  const submit = event => { event?.preventDefault(); if (!text.trim() || !state.online || text.trim().length > 2000) return; chat.post(text, attached); setText(''); setAttached(null); };
+  const submit = event => { event?.preventDefault(); if (!text.trim() || !state.online || text.trim().length > 2000) return; chat.post(text, attached); track('chat_message_sent'); setText(''); setAttached(null); };
   const chip = id => <button type="button" className="chat-node-chip" disabled={!nodes.has(id)} onClick={() => session.goToNode?.(id)}>{nodes.has(id) ? nodeTitle(nodes.get(id)) : t('Node was deleted')}</button>;
-  return <aside id="board-chat" className="board-chat-panel" aria-label={t('Board chat')} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onClose(); } }} onKeyUp={event => event.stopPropagation()} onPaste={event => event.stopPropagation()} onCopy={event => event.stopPropagation()}>
+  return <aside id="board-chat" className="board-chat-panel" data-analytics-area="chat" data-analytics-panel="Chat" aria-label={t('Board chat')} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onClose(); } }} onKeyUp={event => event.stopPropagation()} onPaste={event => event.stopPropagation()} onCopy={event => event.stopPropagation()}>
     <header><strong>{t('Board chat')}</strong><button type="button" aria-label={t('Close chat')} onClick={onClose}>×</button></header>
     <div className="chat-messages" ref={scroll} onScroll={event => { const element = event.currentTarget; atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; chat.visible(true, atBottom.current); }}>
       {state.more && <button type="button" className="chat-earlier" disabled={state.loading} onClick={() => { earlier.current = { height: scroll.current.scrollHeight }; session.chat.request(state.messages[0]?.id); }}>{state.loading ? t('Loading…') : t('Load earlier')}</button>}

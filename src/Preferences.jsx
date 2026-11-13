@@ -1,14 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { analyticsEnabled, setAnalyticsEnabled, subscribeAnalytics } from './analytics.mjs';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { LanguageSelect } from './LanguageSelect.jsx';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { useDictationPreference } from './usePromptDictation.jsx';
 import { t } from './i18n.mjs';
 
-function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose }) {
+function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose, analytics }) {
+  const usage = useSyncExternalStore(subscribeAnalytics, analyticsEnabled);
   const first = useRef(null), [dictation, setDictation] = useDictationPreference();
   useEffect(() => { first.current?.focus(); }, []);
-  return createPortal(<div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="preferences-title"
+  return createPortal(<div className="board-modal" data-analytics-area="dialog:Preferences" role="dialog" aria-modal="true" aria-labelledby="preferences-title"
     onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}
     onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
     <div className="preferences-card">
@@ -21,6 +23,8 @@ function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, 
       </select></label>
       <label className="preference-row"><span>{t('Videos while generating')}</span><input type="checkbox" checked={waiting.enabled} disabled={waiting.reducedMotion} onChange={waiting.toggle} aria-describedby={waiting.reducedMotion ? 'preferences-motion' : undefined}/></label>
       {waiting.reducedMotion && <p id="preferences-motion" className="preference-hint">{t('Your system’s reduced-motion setting turns videos off.')}</p>}
+      {analytics && <label className="preference-row preference-analytics"><span>{t('Share usage data and session recordings to improve Concept Graph')}</span><input type="checkbox" checked={usage} onChange={event => setAnalyticsEnabled(event.target.checked)}/></label>}
+      {analytics && <p className="preference-hint"><a href="/privacy" target="_blank" rel="noreferrer">{t('Privacy Policy')}</a></p>}
       <div className="preferences-actions"><button className="primary-button" type="button" onClick={onClose}>{t('Done')}</button></div>
     </div>
   </div>, document.body);

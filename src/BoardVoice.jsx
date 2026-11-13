@@ -34,7 +34,7 @@ export function VoiceControl({ session }) {
   }, [open]);
   return <div className="board-voice" ref={root} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { setOpen(false); button.current?.focus(); } }}>
     <button ref={button} type="button" className="cloud-history-button" aria-expanded={open} aria-controls="board-voice" onClick={() => setOpen(value => !value)}>{t('Voice')}{state.joined && <VoiceMark voice={{ muted: state.muted, speaking: state.speaking }}/>} {state.people.length > 0 && <small>{state.people.length}/8</small>}</button>
-    {open && <div ref={panel} id="board-voice" className="voice-panel" aria-label={t('Board voice')}>
+    {open && <div ref={panel} id="board-voice" className="voice-panel" data-analytics-area="voice" data-analytics-panel="Voice" aria-label={t('Board voice')}>
       <strong>{t('Board voice')} · {state.people.length}/8</strong>
       <p>{t('Audio only. Nothing is recorded. Peers may see your IP address.')}</p>
       <ul>{state.people.map(person => <li key={person.id}><Avatar user={person.user}/><span>{person.user.name}</span><VoiceMark voice={person.voice}/></li>)}</ul>

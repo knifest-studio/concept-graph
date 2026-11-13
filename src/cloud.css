@@ -114,3 +114,5 @@
 
 .app-shell:has(.board-chat-panel) .board-toolbar>.toolbar-group{min-width:0;max-width:100%;height:48px;overflow-x:auto}
 .app-shell:has(.board-chat-panel) .board-toolbar :is(.tool-button,.tool-prop){flex-shrink:0}
+
+.preference-analytics{gap:20px}.preference-analytics span{max-width:360px}.preference-analytics input{flex-shrink:0}
