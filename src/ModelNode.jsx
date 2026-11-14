@@ -100,16 +100,18 @@ function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, moda
   </>;
 }
 
-function ModelPoster({ id, data, assetUrl, canvas, Icon, onContextMenu }) {
+// `Icon` is always passed: the cube placeholder shows while a poster loads at every zoom (an undefined Icon here blanked the
+// whole page on zooming out). Only the expand button depends on full detail.
+function ModelPoster({ id, data, assetUrl, canvas, Icon, expandable, onContextMenu }) {
   const image = useCanvasImage(data.poster ? assetUrl(data.poster) : '', { small: true, create: !!data.poster });
-  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/>{image.src ? <img src={image.src} alt={data.name} draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={32}/></span>}{Icon && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
+  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/>{image.src ? <img src={image.src} alt={data.name} draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={32}/></span>}{expandable && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
   return <article onContextMenu={onContextMenu} data-feel-node={id} className="node-card model-node lod-node"><i {...lodHandleProps('target')}/><header>{t('3D model')}</header><div className="model-viewer-area">{image.src ? <img src={image.src} alt="" draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={48}/></span>}</div><div className="model-actions"/></article>;
 }
 
 export function ModelNode({ id, data, assetUrl, Icon }) {
   const detail = useDetail(id), canvas = useCanvas(), viewer = useRef(null);
   const readOnly = useCanvasValue(state => state.readOnly);
-  if (detail !== 'full' || data.collapsed) return <NodeContextMenu id={id} type="model" actions={canvas}><ModelPoster id={id} data={data} assetUrl={assetUrl} canvas={canvas} Icon={detail === 'full' ? Icon : undefined}/></NodeContextMenu>;
+  if (detail !== 'full' || data.collapsed) return <NodeContextMenu id={id} type="model" actions={canvas}><ModelPoster id={id} data={data} assetUrl={assetUrl} canvas={canvas} Icon={Icon} expandable={detail === 'full'}/></NodeContextMenu>;
   return <NodeFeedback id={id}><NodeContextMenu id={id} type="model" actions={canvas}><article className="node-card model-node">
     <Handle type="target" position={Position.Left} isConnectable={false}/><header className="node-drag"><Icon name="cube" size={16}/><span className="model-name">{data.name}</span></header>
     <ModelContent node={{ id, data }} assetUrl={assetUrl} viewer={viewer} readOnly={readOnly} save={blob => canvas.saveModelView(id, blob)} open={() => canvas.openModel(id, viewer.current?.getCameraOrbit?.().toString())} Icon={Icon}/>
