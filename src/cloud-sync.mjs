@@ -127,7 +127,8 @@ function acyclic(entries) {
 function acceptedEdges(entries, nodes, samePage) {
   const candidates = entries.filter(([, edge]) => {
     const source = nodes.get(edge.source), target = nodes.get(edge.target);
-    return source && target && !isAnnotation(source) && !isAnnotation(target) && (target.type === 'text' || target.data.runId) && samePage(source, target);
+    // Connections lead into prompts, to generated results, or from a 3D model to an angle saved from it.
+    return source && target && !isAnnotation(source) && !isAnnotation(target) && (target.type === 'text' || target.data.runId || (source.type === 'model' && target.type === 'image')) && samePage(source, target);
   });
   // Without a cycle every candidate survives, which is what the edge-by-edge check below would decide.
   if (acyclic(candidates)) return candidates;

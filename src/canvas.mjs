@@ -206,10 +206,11 @@ export function estimatedSize(node, inputs = false) {
 
 // React Flow draws a connection only between handles it knows. These match the CSS: 10px dots centred on the card's
 // left and right borders (1px, 2px on custom nodes), so connections to nodes that were never rendered still draw.
-export function nodeHandles(node, { width, height }) {
+export function nodeHandles(node, { width, height }, fromModel = false) {
   if (isAnnotation(node)) return [];
   const border = node.type === 'text' && node.data?.template ? 2 : 1, y = height / 2 - 5, handles = [];
-  if (node.type === 'text' || node.data?.runId) handles.push({ id: null, type: 'target', position: 'left', x: border - 10, y: isGptImage(node) ? height * .68 - 5 : y, width: 10, height: 10 });
+  // An angle saved from a 3D model takes its connection from that model like a generated image does from its prompt.
+  if (node.type === 'text' || node.data?.runId || fromModel) handles.push({ id: null, type: 'target', position: 'left', x: border - 10, y: isGptImage(node) ? height * .68 - 5 : y, width: 10, height: 10 });
   if (isGptImage(node)) handles.push({ id: 'main', type: 'target', position: 'left', x: border - 10, y: border + 11, width: 10, height: 10 });
   handles.push({ id: null, type: 'source', position: 'right', x: width - border, y, width: 10, height: 10 });
   return handles;
@@ -251,19 +252,20 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   // re-measures it on screen. Folded cards are always 72px square.
   const known = node => node.data?.collapsed === true ? folded : node.measured || cache.sizes.get(node.id);
   const fed = new Set(edges.map(edge => edge.target)), inputs = node => fed.has(node.id) || !!node.data?.template?.assets?.length;
+  const models = new Set(nodes.filter(node => node.type === 'model').map(node => node.id)), modelViews = new Set(edges.filter(edge => models.has(edge.source)).map(edge => edge.target));
   const arrows = [];
   const viewNodes = nodes.map((node, index) => {
     byId.set(node.id, node);
     if (node.type === 'arrow') { arrows.push(index); return null; }
-    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node);
-    if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size && saved.input === input) return saved.view;
+    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node), fromModel = node.type === 'image' && modelViews.has(node.id);
+    if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size && saved.input === input && saved.fromModel === fromModel) return saved.view;
     if (node.measured && node.data?.collapsed !== true) cache.sizes.set(node.id, node.measured);
     const view = { ...node, zIndex, hidden, selected: hidden ? false : node.selected };
     if (!hidden) {
       const measured = size || estimatedSize(node, input);
-      Object.assign(view, { measured, handles: nodeHandles(node, measured) });
+      Object.assign(view, { measured, handles: nodeHandles(node, measured, fromModel) });
     }
-    cache.nodes.set(node, { zIndex, hidden, size, input, view });
+    cache.nodes.set(node, { zIndex, hidden, size, input, fromModel, view });
     return view;
   });
   const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node, inputs(node));

@@ -119,6 +119,13 @@ export function validateGraph(value) {
     if (node.type === 'model' && node.data.fileName !== undefined && (typeof node.data.fileName !== 'string' || !node.data.fileName.trim() || node.data.fileName.length > 1000)) throw new Error('Invalid model file name.');
     if (node.type === 'model' && node.data.bytes !== undefined && (!Number.isSafeInteger(node.data.bytes) || node.data.bytes < 20 || node.data.bytes > maxModelBytes)) throw new Error('Invalid model file size.');
     if (node.type === 'model' && node.data.usd !== undefined && (!Number.isFinite(node.data.usd) || node.data.usd < 0 || node.data.usd > 1000)) throw new Error('Invalid model cost.');
+    // The card's camera, as model-viewer 4.4.0 writes it: getCameraOrbit() "θrad φrad rm", getCameraTarget() "xm ym zm".
+    if (node.type === 'model' && node.data.view !== undefined) {
+      const view = node.data.view, number = '-?\\d+(?:\\.\\d+)?(?:e[-+]?\\d+)?';
+      if (!view || typeof view !== 'object' || Array.isArray(view) || Object.keys(view).some(key => !['orbit', 'target'].includes(key))
+        || typeof view.orbit !== 'string' || view.orbit.length > 120 || !new RegExp(`^${number}rad ${number}rad ${number}m$`).test(view.orbit)
+        || (view.target !== undefined && (typeof view.target !== 'string' || view.target.length > 120 || !new RegExp(`^${number}m ${number}m ${number}m$`).test(view.target)))) throw new Error('Invalid model view.');
+    }
     if (node.type === 'model' && node.data.source !== undefined) {
       const source = node.data.source;
       if (!source || typeof source !== 'object' || Array.isArray(source) || Object.keys(source).some(key => !['nodeId', 'name'].includes(key))

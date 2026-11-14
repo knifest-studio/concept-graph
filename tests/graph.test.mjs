@@ -216,3 +216,12 @@ test('optional caption settings are validated and captions describe connected im
   assert.deepEqual(validateTemplate({ ...template, labelOutputs: false }), template);
   assert.throws(() => validateTemplate({ ...template, labelOutputs: 'yes' }), /template/);
 });
+
+test('a model card keeps a turned camera in the shape model-viewer writes, and connects to its saved views', () => {
+  const asset = '11111111-1111-1111-1111-111111111111', view = image => ({ id: 'view', type: 'image', position: { x: 400, y: 0 }, data: { asset: `${asset.replace(/1/g, '2')}.png`, ...image } });
+  const graph = data => ({ nodes: [{ id: 'model', type: 'model', position: { x: 0, y: 0 }, data: { asset: `${asset}.glb`, name: 'Axe', ...data } }, view({})], edges: [{ id: 'e', source: 'model', target: 'view' }] });
+  assert.doesNotThrow(() => validateGraph(graph({ view: { orbit: '0.785rad 1.2rad 2.5m', target: '0m 0.42m -1.5e-7m' } })));
+  assert.doesNotThrow(() => validateGraph(graph({ view: { orbit: '-3.1rad 0.5rad 10m' } })));
+  for (const bad of [{}, { orbit: '45deg 75deg 2m' }, { orbit: '1rad 1rad' }, { orbit: '1rad 1rad 2m', target: '0 0 0' }, { orbit: '1rad 1rad 2m', extra: 1 }, { orbit: `1rad 1rad ${'9'.repeat(130)}m` }, 'front'])
+    assert.throws(() => validateGraph(graph({ view: bad })), /Invalid model view/);
+});

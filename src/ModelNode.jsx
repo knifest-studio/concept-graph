@@ -12,8 +12,13 @@ import { t } from './i18n.mjs';
 import { loadViewer } from './model-upload.mjs';
 import './model-node.css';
 
-function ModelViewer({ data, assetUrl, viewer, onReady, onError, modal = false, orbit, children }) {
-  const [ready, setReady] = useState(false), area = useRef(null);
+// Pictures of each card's last angle in this browser, so a card zoomed out shows the side it was turned to even before
+// (or without, for viewers) the board saves a new poster.
+const shots = new Map();
+
+function ModelViewer({ data, assetUrl, viewer, onReady, onError, modal = false, orbit, onView, children }) {
+  const [ready, setReady] = useState(false), area = useRef(null), viewChanged = useRef(onView);
+  viewChanged.current = onView;
   useEffect(() => { let live = true; loadViewer().then(() => { if (live) setReady(true); }).catch(() => { if (live) onError(t('Could not load the 3D viewer. Reload and try again.')); }); return () => { live = false; }; }, []);
   useEffect(() => {
     const element = viewer.current;
@@ -23,6 +28,16 @@ function ModelViewer({ data, assetUrl, viewer, onReady, onError, modal = false, 
     if (element.loaded) loaded();
     return () => { element.removeEventListener('load', loaded); element.removeEventListener('error', failed); onReady(false); };
   }, [ready, data.asset]);
+  // A turn ends once the camera has been still for a moment (inertia included); only people's own turns count, not the
+  // camera following a teammate's saved angle.
+  useEffect(() => {
+    const element = viewer.current;
+    if (!ready || !element || modal) return;
+    let timer;
+    const changed = event => { if (event.detail?.source !== 'user-interaction') return; clearTimeout(timer); timer = setTimeout(() => viewChanged.current?.(element), 700); };
+    element.addEventListener('camera-change', changed);
+    return () => { clearTimeout(timer); element.removeEventListener('camera-change', changed); };
+  }, [ready, data.asset, modal]);
   // disable-zoom leaves the wheel alone (https://modelviewer.dev/docs/#entrydocs-stagingandcameras-attributes-disable-zoom, read 2026-11-14). Forward past React Flow's nowheel area
   // to its pane, so the same scroll/zoom gesture keeps working over a card as everywhere else on the canvas.
   const wheel = event => {
@@ -34,7 +49,7 @@ function ModelViewer({ data, assetUrl, viewer, onReady, onError, modal = false, 
   };
   useEffect(() => { const element = area.current; if (modal || !element) return; element.addEventListener('wheel', wheel, { passive: false }); return () => element.removeEventListener('wheel', wheel); }, [modal]);
   return <div ref={area} className="model-viewer-area nodrag nowheel nopan" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
-    {ready ? <model-viewer ref={viewer} src={assetUrl(data.asset)} poster={data.poster ? assetUrl(data.poster) : undefined} alt={data.name} camera-controls="" disable-zoom={modal ? undefined : ''} camera-orbit={orbit} loading="lazy" interaction-prompt="none"/> : data.poster ? <img src={assetUrl(data.poster)} alt={data.name} loading="lazy" draggable="false"/> : <span>{t('Loading 3D viewer…')}</span>}
+    {ready ? <model-viewer ref={viewer} src={assetUrl(data.asset)} poster={data.poster ? assetUrl(data.poster) : undefined} alt={data.name} camera-controls="" disable-zoom={modal ? undefined : ''} camera-orbit={orbit || data.view?.orbit} camera-target={data.view?.target} loading="lazy" interaction-prompt="none"/> : data.poster ? <img src={assetUrl(data.poster)} alt={data.name} loading="lazy" draggable="false"/> : <span>{t('Loading 3D viewer…')}</span>}
     {children}
   </div>;
 }
@@ -67,7 +82,7 @@ function ModelInfo({ node, run, stats, id }) {
   </aside>;
 }
 
-function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, modal = false, orbit }) {
+function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, modal = false, orbit, setView }) {
   const [loaded, setLoaded] = useState(false), [error, setError] = useState(''), [info, setInfo] = useState(false);
   const [scene, setScene] = useState(null), [stats, setStats] = useState(null), [wireframe, setWireframe] = useState(false);
   const restore = useRef(null), infoButton = useRef(null), infoId = useId();
@@ -89,10 +104,20 @@ function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, moda
     else try { restore.current = wireframeView(scene, viewer.current ? getComputedStyle(viewer.current).color : undefined); setWireframe(true); }
     catch { setScene(null); }
   };
+  // A turned card keeps its angle: remembered here at once, then saved with a poster at that angle. A wireframe angle
+  // never becomes the poster.
+  const wireframeOn = useRef(false); wireframeOn.current = wireframe;
+  const turned = async element => {
+    const view = { orbit: element.getCameraOrbit().toString(), target: element.getCameraTarget().toString() };
+    let blob = null;
+    if (!wireframeOn.current) try { blob = await element.toBlob({ mimeType: 'image/webp' }); } catch {}
+    if (blob) { const previous = shots.get(node.id); shots.set(node.id, URL.createObjectURL(blob)); if (previous) URL.revokeObjectURL(previous); }
+    if (!readOnly) setView?.(node.id, view, blob);
+  };
   const panel = info && <ModelInfo node={node} run={run} stats={stats} id={infoId}/>;
   return <>
     <div className={`model-content${info ? ' has-info' : ''}`}>
-      <ModelViewer key={node.data.asset} data={node.data} assetUrl={assetUrl} viewer={viewer} onReady={inspected} onError={setError} modal={modal} orbit={orbit}>{!modal && panel}</ModelViewer>
+      <ModelViewer key={node.data.asset} data={node.data} assetUrl={assetUrl} viewer={viewer} onReady={inspected} onError={setError} modal={modal} orbit={orbit} onView={modal ? undefined : turned}>{!modal && panel}</ModelViewer>
       {modal && panel}
     </div>
     <ModelActions data={node.data} assetUrl={assetUrl} viewer={viewer} loaded={loaded} readOnly={readOnly} save={save} open={open} Icon={Icon} info={info} infoId={infoId} toggleInfo={() => setInfo(value => !value)} wireframe={wireframe} canWireframe={!!scene} toggleWireframe={toggleWireframe} infoButton={infoButton} modal={modal}/>
@@ -103,9 +128,9 @@ function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, moda
 // `Icon` is always passed: the cube placeholder shows while a poster loads at every zoom (an undefined Icon here blanked the
 // whole page on zooming out). Only the expand button depends on full detail.
 function ModelPoster({ id, data, assetUrl, canvas, Icon, expandable, onContextMenu }) {
-  const image = useCanvasImage(data.poster ? assetUrl(data.poster) : '', { small: true, create: !!data.poster });
-  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/>{image.src ? <img src={image.src} alt={data.name} draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={32}/></span>}{expandable && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
-  return <article onContextMenu={onContextMenu} data-feel-node={id} className="node-card model-node lod-node"><i {...lodHandleProps('target')}/><header>{t('3D model')}</header><div className="model-viewer-area">{image.src ? <img src={image.src} alt="" draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={48}/></span>}</div><div className="model-actions"/></article>;
+  const image = useCanvasImage(data.poster ? assetUrl(data.poster) : '', { small: true, create: !!data.poster }), src = shots.get(id) || image.src;
+  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/><i {...lodHandleProps('source')}/>{src ? <img src={src} alt={data.name} draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={32}/></span>}{expandable && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
+  return <article onContextMenu={onContextMenu} data-feel-node={id} className="node-card model-node lod-node"><i {...lodHandleProps('target')}/><i {...lodHandleProps('source')}/><header>{t('3D model')}</header><div className="model-viewer-area">{src ? <img src={src} alt="" draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={48}/></span>}</div><div className="model-actions"/></article>;
 }
 
 export function ModelNode({ id, data, assetUrl, Icon }) {
@@ -113,8 +138,8 @@ export function ModelNode({ id, data, assetUrl, Icon }) {
   const readOnly = useCanvasValue(state => state.readOnly);
   if (detail !== 'full' || data.collapsed) return <NodeContextMenu id={id} type="model" actions={canvas}><ModelPoster id={id} data={data} assetUrl={assetUrl} canvas={canvas} Icon={Icon} expandable={detail === 'full'}/></NodeContextMenu>;
   return <NodeFeedback id={id}><NodeContextMenu id={id} type="model" actions={canvas}><article className="node-card model-node">
-    <Handle type="target" position={Position.Left} isConnectable={false}/><header className="node-drag"><Icon name="cube" size={16}/><span className="model-name">{data.name}</span></header>
-    <ModelContent node={{ id, data }} assetUrl={assetUrl} viewer={viewer} readOnly={readOnly} save={blob => canvas.saveModelView(id, blob)} open={() => canvas.openModel(id, viewer.current?.getCameraOrbit?.().toString())} Icon={Icon}/>
+    <Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} isConnectable={false}/><header className="node-drag"><Icon name="cube" size={16}/><span className="model-name">{data.name}</span></header>
+    <ModelContent node={{ id, data }} assetUrl={assetUrl} viewer={viewer} readOnly={readOnly} save={blob => canvas.saveModelView(id, blob)} open={() => canvas.openModel(id, viewer.current?.getCameraOrbit?.().toString())} Icon={Icon} setView={canvas.turnModel}/>
   </article></NodeContextMenu></NodeFeedback>;
 }
 

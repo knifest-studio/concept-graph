@@ -1592,6 +1592,18 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
     return asset;
   };
+  // The angle someone turned a model card to stays on the board (no undo step, like moving the view), with a poster drawn
+  // at that angle so the zoomed-out card shows the same side. Viewers can turn it for themselves but save nothing.
+  const turnModel = async (nodeId, view, blob) => {
+    if (readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
+    const model = nodeRef.current.find(node => node.id === nodeId && node.type === 'model');
+    if (!model || (model.data.view?.orbit === view.orbit && model.data.view?.target === view.target)) return;
+    let poster;
+    try { if (blob) poster = await uploadEdit(blob); } catch (cause) { console.error('Could not save the model poster:', cause); }
+    if (!alive.current || switchingRef.current || readOnlyRef.current || mcpLocked.current) return;
+    putNodes(current => current.map(item => item.id === nodeId && item.type === 'model' ? { ...item, data: { ...item.data, view, ...(poster ? { poster } : {}) } } : item));
+    markDirty();
+  };
   const saveModelView = async (nodeId, blob) => {
     if (readOnlyRef.current || mcpLocked.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
     const model = nodeRef.current.find(node => node.id === nodeId && node.type === 'model');
@@ -1603,7 +1615,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       const size = imageSize(new Uint8Array(await blob.arrayBuffer())), page = nodePage(model, pagesRef.current);
       const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: model.position.x + 400, y: model.position.y }, data: { asset, caption: uniqueImageName(nodeRef.current, t('{name} view', { name: model.data.name })), createdAt: new Date().toISOString(), ...(size ? { pixels: size, aspect: size.height / size.width } : {}), ...(cloudSession?.user ? { author: boardAuthor(cloudSession.user) } : {}) } }, page);
       const spot = freeSpot(creationGraph(page), node.position, undefined, nodeSize(node)); node.position = spot;
-      checkpoint(); effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
+      // The saved angle stays connected to its model, the way generated images stay connected to their prompt.
+      const edge = { id: id(), source: model.id, target: node.id };
+      checkpoint(); effects.createNodes([node.id]); effects.createEdges([edge.id], [node.id]); putNodes(current => [...current, node]); putEdges(current => [...current, edge]); markDirty();
       if (cloud) track('node_created', { nodeType: 'image', via: 'model-view' });
     } finally { uploads.current--; setUploading(uploads.current > 0); }
   };
@@ -2547,7 +2561,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },

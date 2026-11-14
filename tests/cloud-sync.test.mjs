@@ -273,3 +273,15 @@ test('slideshow fields sync between replicas and clear everywhere', () => {
   const shown = readCloudGraph(a, { groups: [{ id: 'g', name: 'Run', collapsed: true, slideshow: true, slide: 'other', nodeIds: ['n', 'other'] }] }).groups[0];
   assert.equal(Object.hasOwn(shown, 'slideshow'), false); assert.equal(Object.hasOwn(shown, 'slide'), false);
 });
+
+test('a saved 3D view stays connected to its model, while other links into plain images are still dropped', async () => {
+  const Y = await import('yjs'), { applyLocalGraph, readCloudGraph } = await import('../src/cloud-sync.mjs');
+  const doc = new Y.Doc(), asset = n => `${String(n).repeat(8)}-1111-1111-1111-111111111111`;
+  const graph = { nodes: [
+    { id: 'model', type: 'model', position: { x: 0, y: 0 }, data: { asset: `${asset(1)}.glb`, name: 'Axe' } },
+    { id: 'view', type: 'image', position: { x: 400, y: 0 }, data: { asset: `${asset(2)}.png` } },
+    { id: 'other', type: 'image', position: { x: 0, y: 400 }, data: { asset: `${asset(3)}.png` } },
+  ], edges: [{ id: 'saved', source: 'model', target: 'view' }, { id: 'stray', source: 'other', target: 'view' }], groups: [] };
+  applyLocalGraph(doc, graph, { nodes: [], edges: [], groups: [] }, 'test');
+  assert.deepEqual(readCloudGraph(doc).edges.map(edge => edge.id), ['saved']);
+});
