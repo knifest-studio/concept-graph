@@ -10,7 +10,7 @@ const domainOf = address => `@${address.split('@').pop()}`;
 export function TeamAccessDialog({ services, onClose }) {
   const [access, setAccess] = useState(null), [entry, setEntry] = useState(''), [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const first = useRef(null);
+  const first = useRef(null), list = useRef(null), [more, setMore] = useState(false);
   useEffect(() => {
     first.current?.focus();
     let active = true;
@@ -34,6 +34,14 @@ export function TeamAccessDialog({ services, onClose }) {
       people: [...byEmail.values()].map(person => ({ ...person, direct: entries.has(person.email), domain: entries.has(domainOf(person.email)) ? domainOf(person.email) : null,
         admin: admins.has(person.email), owner: person.email === access.owner, used: access.usedToday[person.email] || 0 })).sort((a, b) => b.owner - a.owner) };
   }, [access]);
+  // A fade at the bottom of the list while more people sit below the visible rows, so it is clear the list scrolls.
+  const checkMore = () => { const node = list.current; setMore(!!node && node.scrollTop + node.clientHeight < node.scrollHeight - 2); };
+  useEffect(() => {
+    const node = list.current; if (!node) return;
+    checkMore();
+    const observer = new ResizeObserver(checkMore); observer.observe(node);
+    return () => observer.disconnect();
+  }, [access, filter]);
   const owner = access?.role === 'owner', query = filter.trim().toLowerCase(), shown = people.filter(person => !query || person.email.includes(query) || person.name?.toLowerCase().includes(query));
   return <div className="board-modal" data-analytics-area="dialog:Team access" role="dialog" aria-modal="true" aria-labelledby="team-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
     <div className="share-card team-card">
@@ -50,7 +58,7 @@ export function TeamAccessDialog({ services, onClose }) {
       {domains.length > 0 && <><h3>{t('Domains')}</h3><ul className="share-people">{domains.map(domain => <li key={domain}><span><b>{t('Everyone at {domain}', { domain })}</b></span>
         <span><button type="button" className="share-remove" aria-label={t('Remove {email}', { email: domain })} disabled={busy} onClick={() => change({ nano: { entry: domain, allowed: false } })}>{t('Remove')}</button></span></li>)}</ul></>}
       {access && <><div className="team-people-heading"><h3>{t('People')}</h3>{people.length > 8 && <input type="search" aria-label={t('Find a person')} placeholder={t('Find a person')} value={filter} onChange={event => setFilter(event.target.value)}/>}</div>
-        <ul className="share-people team-people">
+        <div className={`team-people-wrap${more ? ' has-more' : ''}`}><ul ref={list} className="share-people team-people" onScroll={checkMore}>
           {shown.map(person => <li key={person.email}>
             <span><b>{person.name || person.email}</b><small>{[person.name && person.email, person.waiting && t('Hasn’t signed in yet'), person.used > 0 && plural(person.used, '{count} image today', '{count} images today')].filter(Boolean).join(' · ')}</small></span>
             <span>
@@ -60,7 +68,7 @@ export function TeamAccessDialog({ services, onClose }) {
                 onChange={event => change({ admin: { email: person.email, admin: event.target.checked } })}/>{t('Admin')}</label> : person.admin && <span className="share-role">{t('Admin')}</span>}
             </span></li>)}
           {!shown.length && <li className="share-muted">{query ? t('Nobody matches.') : t('Nobody has signed in yet.')}</li>}
-        </ul></>}
+        </ul></div></>}
       {owner && access.imported?.entries > 0 && <p className="share-note team-imported">{t('This list started as a copy of NANO_BANANA_ALLOWED. The site no longer reads that variable, so you can delete it in Cloudflare.')}</p>}
       <div className="share-actions"><span/><button className="primary-button" type="button" onClick={onClose}>{t('Done')}</button></div>
     </div>
