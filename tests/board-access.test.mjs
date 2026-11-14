@@ -252,6 +252,29 @@ runtimeTest('board links serve the app, and Google sign-in returns to the board 
   assert.equal((await request(`/api/auth/google/callback?state=wrong&code=test`, { cookie })).headers.get('Location'), '/?auth_error=failed');
 });
 
+runtimeTest('Google sign-in keeps node links through success, cancellation and failed token exchange', async t => {
+  const { request, env } = setup(t, { GOOGLE_CLIENT_ID: 'client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'secret' });
+  const path = '/b/0f8fad5b-d9cb-469f-a165-70867728950e', hash = '#node=%D0%BD%D0%BE%D0%B4%D0%B0%26%23';
+  const begin = async next => {
+    const response = await request(`/api/auth/google?next=${encodeURIComponent(next)}`), cookie = response.headers.get('Set-Cookie').split(';')[0];
+    const state = JSON.parse(Buffer.from(cookie.slice('cg_google='.length).split('.')[0], 'base64url').toString());
+    return { cookie, state };
+  };
+  for (const next of ['https://attacker.example' + path + hash, '//attacker.example' + path + hash, path + '?next=//attacker.example' + hash, path + '#node=%ZZ', path + '#node=x\n']) assert.equal((await begin(next)).state.next, '/');
+  const { cookie, state } = await begin(path + hash);
+  assert.equal(state.next, path + hash);
+  const token = [{ alg: 'RS256' }, { iss: 'https://accounts.google.com', aud: env.GOOGLE_CLIENT_ID, sub: 'google-1', exp: Math.floor(Date.now() / 1000) + 3600, nonce: state.nonce, email: 'guest@mail.example', email_verified: true, name: 'Guest' }, 'signature']
+    .map(value => Buffer.from(JSON.stringify(value)).toString('base64url')).join('.');
+  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ id_token: token }));
+  t.mock.method(console, 'error', () => {});
+  const callback = query => request(`/api/auth/google/callback?state=${state.state}&${query}`, { cookie });
+  assert.equal((await callback('code=test')).headers.get('Location'), path + hash);
+  assert.equal((await callback('error=access_denied')).headers.get('Location'), path + '?auth_error=cancelled' + hash);
+  assert.equal((await callback('error=server_error')).headers.get('Location'), path + '?auth_error=failed' + hash);
+  fetch.mock.mockImplementation(async () => Response.json({ error: 'invalid_grant' }, { status: 400 }));
+  assert.equal((await callback('code=test')).headers.get('Location'), path + '?auth_error=failed' + hash);
+});
+
 runtimeTest('board connections admit only people with a role and carry the role the Worker set', async t => {
   const { request, person, routed, directory } = setup(t);
   const owner = await person('owner@studio.example', 'Owner'), guest = await person('guest@mail.example', 'Guest'), stranger = await person('stranger@mail.example', 'Stranger');

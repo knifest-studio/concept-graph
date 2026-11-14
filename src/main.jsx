@@ -16,6 +16,7 @@ import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helpe
 import { detectPlatform, loopbackBlocked } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
+import { boardFromPath, nodeFromHash, nodePath } from './cloud-boards.mjs';
 import { AnnotationTools, ArrowNode, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, ShapeNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
 import { arrowPalette, arrowPosition, shiftArrow, boardAuthor, stamps, drawingFromStroke, isAnnotation, penPalette, reconcileArrows, shapeDefault, shapePalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from './sections.mjs';
@@ -895,6 +896,31 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const flow = useReactFlow();
   useEffect(() => { if (cloud && loaded) { analyticsView('board', boardId, activePage); analyticsViewport(() => flow.getViewport().zoom); analyticsReady(); } }, [loaded, boardId, activePage]);
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
+  useEffect(() => {
+    if (!cloudSession || !loaded || !flow.viewportInitialized) return;
+    const jump = () => {
+      if (boardFromPath(location.pathname) !== boardId) return;
+      const nodeId = nodeFromHash(location.hash);
+      if (nodeId === null) return;
+      if (nodeRef.current.some(node => node.id === nodeId)) {
+        // The opening fit and its delayed retries must not take the view back from this link.
+        openingViewDone.current = true; viewerMoved.current = true;
+        latest.current.focusNode(nodeId, 'chat');
+        // focusNode only nudges a node into view, and on a fresh load it left the default viewport in place. A link lands
+        // with the node centred, once its page has rendered; no transition, so nothing on the page can cut it short.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const node = nodeRef.current.find(node => node.id === nodeId);
+          if (!node || !alive.current) return;
+          const size = measureView(viewCache.current)(node), { width, height } = flowStore.getState();
+          const zoom = Math.max(.15, Math.min(1, .8 * width / size.width, .8 * height / size.height));
+          flow.setCenter(node.position.x + size.width / 2, node.position.y + size.height / 2, { zoom });
+        }));
+      } else notify(t('That node is no longer on this board.'));
+      window.history.replaceState(window.history.state, '', location.pathname + location.search);
+    };
+    jump(); window.addEventListener('hashchange', jump); window.addEventListener('popstate', jump);
+    return () => { window.removeEventListener('hashchange', jump); window.removeEventListener('popstate', jump); };
+  }, [loaded, flow.viewportInitialized, boardId]);
   const scoped = useMemo(() => pageContent({ nodes, edges, groups, sections }, activePage, pages), [nodes, edges, groups, sections, activePage, pages]);
   // Board-sized derivations are memoized, so the 1 s generation timer and other small updates do no per-node work.
   const canAlign = useMemo(() => { const alignable = alignIds(scoped); return scoped.nodes.filter(node => alignable.has(node.id) && !isAnnotation(node)).length >= 2; }, [scoped]);
@@ -2177,18 +2203,21 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // The open page's selection for copying; a selected section brings what it holds.
   const boardSelection = () => { const scoped = pageGraph(); return selectedGraph(scoped.nodes, scoped.edges, { sections: scoped.sections, groups: scoped.groups, measure: measureView(viewCache.current) }); };
   const copyNodeId = value => copyText(Array.isArray(value) ? value.join('\n') : value);
-  const copyText = (text, done = t('ID copied.')) => {
+  const copyNodeLink = nodeId => {
+    if (cloudSession) copyText(location.origin + nodePath(boardId, nodeId), t('Link copied. People with access to this board will open it at this node.'), t('Could not copy the link.'));
+  };
+  const copyText = (text, done = t('ID copied.'), failed = t('Could not copy the ID.')) => {
     if (!text || mcpLocked.current) return;
     const fallback = () => {
       const field = document.createElement('textarea');
       field.value = text; field.style.position = 'fixed'; field.style.opacity = '0'; document.body.appendChild(field); field.select();
       const ok = document.execCommand('copy'); field.remove();
-      if (!ok) throw new Error(t('Could not copy the ID.'));
+      if (!ok) throw new Error(failed);
     };
     try {
-      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => notify(done)).catch(() => { try { fallback(); notify(done); } catch { notify(t('Could not copy the ID.')); } });
+      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => notify(done)).catch(() => { try { fallback(); notify(done); } catch { notify(failed); } });
       else { fallback(); notify(done); }
-    } catch { notify(t('Could not copy the ID.')); }
+    } catch { notify(failed); }
   };
 
   useEffect(() => {
@@ -2604,7 +2633,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
   latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
-    chatNode,
+    chatNode, focusNode, copyNodeLink,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
@@ -2613,7 +2642,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const canvasState = { imageIds, modelViewIds, latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, model3dReady: model3d.ready, model3dNote: model3d.note, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
-  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud }));
+  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud, nodeLinks: !!cloudSession }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
   const flowStore = useStoreApi();
   // Zoom reaches the canvas as a CSS variable (group titles) and a detail bucket (card variants), without rendering anything.

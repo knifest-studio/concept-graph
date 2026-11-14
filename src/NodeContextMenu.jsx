@@ -90,6 +90,7 @@ export function NodeContextMenu({ children, id, type, actions, slideshow, masked
       {type === 'section' && <button type="button" role="menuitem" onClick={() => choose(actions.unwrapSection)}>{t('Remove section; keep contents')}</button>}
       <button type="button" role="menuitem" onClick={() => choose(actions.removeNode)}>{type === 'group' ? t('Delete group; keep nodes') : type === 'section' ? t('Delete section and contents') : t('Delete node')}</button></>}
       <button type="button" role="menuitem" onClick={() => choose(actions.copyNodeId)}><span>{type === 'group' ? t('Copy group ID') : type === 'section' ? t('Copy section ID') : t('Copy node ID')}</span><kbd>{idShortcut}</kbd></button>
+      {actions.nodeLinks && !['group', 'section'].includes(type) && <button type="button" role="menuitem" onClick={() => choose(actions.copyNodeLink)}>{t('Copy link to node')}</button>}
     </div>, document.body)}
   </>;
 }

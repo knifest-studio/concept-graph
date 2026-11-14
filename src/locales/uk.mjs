@@ -488,6 +488,10 @@ export default {
   'Copy group ID': 'Копіювати ID групи',
   'Copy section ID': 'Копіювати ID секції',
   'Copy node ID': 'Копіювати ID ноди',
+  'Copy link to node': 'Копіювати посилання на ноду',
+  'Link copied. People with access to this board will open it at this node.': 'Посилання скопійовано. Люди з доступом до цієї дошки відкриють її на цій ноді.',
+  'Could not copy the link.': 'Не вдалося скопіювати посилання.',
+  'That node is no longer on this board.': 'Цієї ноди більше немає на дошці.',
 
   // Board tools: stickies, shapes, arrows, stamps, pen
   'Custom': 'Власний',

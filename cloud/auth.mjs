@@ -142,7 +142,11 @@ export async function googleSignIn(request, env) {
   return authRedirect(target.href, [oauthCookie(await signPayload(state, env.SESSION_SECRET), url)]);
 }
 
-const withError = (next, value) => `${next}${next.includes('?') ? '&' : '?'}auth_error=${value}`;
+const withError = (next, value) => {
+  const url = new URL(next, 'https://return.invalid');
+  url.searchParams.set('auth_error', value);
+  return url.pathname + url.search + url.hash;
+};
 
 export async function googleCallback(request, env) {
   const url = new URL(request.url), cookies = [oauthCookie('', url)];

@@ -21,7 +21,7 @@ import { terminalRun } from './run-outputs.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { sharedPreviews } from './canvas-thumbnails.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
-import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNames } from './cloud-boards.mjs';
+import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNames, signInReturn } from './cloud-boards.mjs';
 import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './board-templates.mjs';
 import { ShareDialog } from './ShareDialog.jsx';
 import { VersionHistory } from './VersionHistory.jsx';
@@ -560,7 +560,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   if (user === undefined) return <div className="startup">{t('Checking sign-in…')}</div>;
   if (!user) return <main className="cloud-startup"><section className="cloud-card"><img src="/favicon.svg" alt="" width="40"/><h1>Concept Graph Cloud</h1><p>{boardId ? t('Sign in with Google to open this board.') : t('Sign in with Google to see your boards and the boards shared with you.')}</p>
     {error && <p role="alert" className="cloud-error">{error}</p>}
-    <a className="primary-button" href={boardId ? `/api/auth/google?next=${encodeURIComponent(boardPath(boardId))}` : '/api/auth/google'} style={{ display: 'inline-block', textDecoration: 'none' }}>{t('Sign in with Google')}</a>
+    <a className="primary-button" href={boardId ? `/api/auth/google?next=${encodeURIComponent(signInReturn(boardPath(boardId) + location.hash))}` : '/api/auth/google'} style={{ display: 'inline-block', textDecoration: 'none' }} onClick={event => { if (boardId) event.currentTarget.href = `/api/auth/google?next=${encodeURIComponent(signInReturn(boardPath(boardId) + location.hash))}`; }}>{t('Sign in with Google')}</a>
     <p><a className="cloud-nav" href="/privacy">{t('Privacy')}</a></p>
     {devLogin && <form onSubmit={signIn}><p>{t('Local development sign-in')}</p>
       <label htmlFor="cloud-name">{t('Display name')}</label><input id="cloud-name" autoComplete="nickname" required maxLength={40} value={name} onChange={event => setName(event.target.value)}/>

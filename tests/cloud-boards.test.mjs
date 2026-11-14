@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import { boardStats } from '../cloud/board-stats.mjs';
 import { applyLocalGraph } from '../src/cloud-sync.mjs';
-import { boardFromPath, boardPath, coverHue, relativeTime, signInReturn } from '../src/cloud-boards.mjs';
+import { boardFromPath, boardPath, coverHue, nodeFromHash, nodePath, relativeTime, signInReturn } from '../src/cloud-boards.mjs';
 
 test('board covers use the latest four distinct valid image assets from a Yjs snapshot', () => {
   const doc = new Y.Doc(), restored = new Y.Doc();
@@ -47,4 +47,25 @@ test('board links put the board in the URL and only a board link can be a sign-i
   assert.equal(boardFromPath(boardPath(id)), id);
   for (const value of [`/b/${id}`]) assert.equal(signInReturn(value), value);
   for (const value of [undefined, null, '', '/', '//evil.example', 'https://evil.example/b/' + id, `/b/${id}/`, `/b/${id}?x=1`, `/b/${id.toUpperCase()}`, '/b/not-a-board', `/b/${id}/../api`]) assert.equal(signInReturn(value), '/', String(value));
+});
+
+test('node links encode IDs as one fragment value without changing the board route', () => {
+  const board = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.equal(nodePath(board, 'image-1'), `/b/${board}#node=image-1`);
+  for (const id of ['image-1', 'нода 🎨', 'a&node=b#c?d/e+f%=g', "!~*'()._-", 'x'.repeat(120), 'н'.repeat(120)]) {
+    const url = new URL(nodePath(board, id), 'https://cloud.example');
+    assert.equal(url.origin, 'https://cloud.example'); assert.equal(url.search, '');
+    assert.equal(boardFromPath(url.pathname), board); assert.equal(nodeFromHash(url.hash), id);
+    assert.equal(signInReturn(url.pathname + url.hash), url.pathname + url.hash);
+  }
+});
+
+test('node fragments reject empty, ambiguous, malformed and oversized values', () => {
+  for (const hash of [undefined, null, 42, '', '#', '#other=x', '#node=', '#node=a&node=b', '#node=a#node=b', '#node=a?x=y', '#node=%', '#node=%GG', '#node=%E0%A4%A', '#node=%FF', '#node=x\n', '#node=' + 'x'.repeat(121), '#node=' + '%41'.repeat(1500)]) assert.equal(nodeFromHash(hash), null, String(hash));
+});
+
+test('sign-in accepts only a valid node fragment on a same-site board path', () => {
+  const path = '/b/0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.equal(signInReturn(path + '#node=a%26b'), path + '#node=a%26b');
+  for (const value of ['https://evil.example' + path + '#node=x', '//evil.example' + path + '#node=x', '/\\evil.example' + path + '#node=x', path + '?next=//evil.example#node=x', path + '/#node=x', path + '#other=x', path + '#node=', path + '#node=%ZZ', path + '#node=x#other=y', path + '#node=x\r\nLocation: evil', path + '\n#node=x', path + '#node=' + 'x'.repeat(121)]) assert.equal(signInReturn(value), '/', value);
 });
