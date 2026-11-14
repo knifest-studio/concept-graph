@@ -634,6 +634,7 @@ runtimeTest('Topaz upscales through fal.ai’s queue with the site key, and the 
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     calls.push({ url: String(url), method: init.method || 'GET', auth: init.headers?.Authorization, body: init.body && JSON.parse(init.body) });
     if (String(url) === 'https://queue.fal.run/fal-ai/topaz/upscale/image') return Response.json({ request_id: 'job-1', status_url: `${queue}/status`, response_url: queue, cancel_url: `${queue}/cancel` });
+    if (String(url) === `${queue}/status/stream`) return new Response('data: {"status":"IN_PROGRESS"}\n\ndata: {"status":"COMPLETED"}\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
     if (String(url) === `${queue}/status`) return Response.json({ status: 'COMPLETED' });
     if (String(url) === queue) return Response.json({ image: { url: 'https://v3.fal.media/files/out.png', content_type: 'image/png' } });
     if (String(url) === 'https://v3.fal.media/files/out.png') return new Response(png(2560, 1920));
@@ -796,6 +797,7 @@ runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters
       assert.equal(activeDownloads, 0); pendingModel = modeler; calls.push({ modeler, input: JSON.parse(init.body) });
       return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result', cancel_url: 'https://queue.fal.run/cancel' });
     }
+    if (url === 'https://queue.fal.run/status/stream') return new Response('data: {"status":"COMPLETED"}\n\n');
     if (url === 'https://queue.fal.run/status') return Response.json({ status: 'COMPLETED' });
     if (url === 'https://queue.fal.run/result') return Response.json({ [pendingModel === 'rodin' ? 'model_mesh' : 'model_glb']: { url: 'https://media.example/cube.glb' }, ...(pendingModel === 'hunyuan' ? { thumbnail: { url: 'https://media.example/poster.png' } } : {}) });
     assert.equal(init.headers, undefined);

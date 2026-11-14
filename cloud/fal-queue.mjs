@@ -1,7 +1,34 @@
 import { NanoError } from './nano-banana.mjs';
 
 export const falHost = 'https://queue.fal.run';
-const poll = 1500;
+// Waiting holds one status stream open instead of polling: a Worker on the free plan may make only 50 outbound requests
+// per invocation (https://developers.cloudflare.com/workers/platform/limits/, read 2026-11-14), and a 3D model takes
+// minutes; polling every 1.5 s hit "Too many subrequests" on the first real Hunyuan run. `<status_url>/stream` sends the
+// same status objects as server-sent events and stays open until COMPLETED (https://fal.ai/docs/documentation/model-apis/inference/queue,
+// read 2026-11-14). A dropped stream costs one status check and a reopen, at most `streamTries` times (≤ 2 + 2×12 requests a job).
+const poll = 1500, streamTries = 12;
+// The first COMPLETED status in an event stream, or null if the stream ends before one.
+async function completedFrom(body, signal) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let text = '';
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) return null;
+      text += value;
+      let end;
+      while ((end = text.search(/\r?\n\r?\n/)) >= 0) {
+        const event = text.slice(0, end), data = event.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        text = text.slice(end).replace(/^\r?\n\r?\n/, '');
+        let status = null;
+        try { status = data ? JSON.parse(data) : null; } catch {}
+        if (status?.status === 'COMPLETED') return status;
+      }
+      if (text.length > 1024 * 1024) text = '';
+    }
+  } finally { reader.cancel().catch(() => {}); }
+}
 const localEndpoint = value => {
   try { const url = new URL(value); return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && ['http:', 'https:'].includes(url.protocol) ? url.origin : null; }
   catch { return null; }
@@ -47,12 +74,20 @@ export async function falQueue({ key, endpoint = falHost, model, input, signal, 
   signal?.addEventListener('abort', cancel, { once: true });
   if (signal?.aborted) { signal.removeEventListener('abort', cancel); cancel(); throw signal.reason || new DOMException('Aborted', 'AbortError'); }
   try {
-    for (;;) {
+    let done = null;
+    for (let attempt = 0; !done; attempt++) {
+      if (attempt === streamTries) throw new NanoError('busy', `The ${name} is taking too long. Try again.`);
+      const stream = await fetcher(`${statusUrl}/stream`, { headers, signal, redirect: 'manual' });
+      if (stream.ok && stream.body) done = await completedFrom(stream.body, signal);
+      else await stream.body?.cancel();
+      if (done) break;
+      // The stream ended (or isn't offered) before COMPLETED: one plain check decides, then it is opened again.
       const response = await fetcher(statusUrl, { headers, signal, redirect: 'manual' }), status = await json(response);
       if (!response.ok) throw error(response.status, detailOf(status));
-      if (status?.status === 'COMPLETED') { if (status.error) throw error(422, status.error); break; }
-      await wait(poll, signal);
+      if (status?.status === 'COMPLETED') done = status;
+      else await wait(poll, signal);
     }
+    if (done.error) throw error(422, done.error);
     const response = await fetcher(responseUrl, { headers, signal, redirect: 'manual' }), result = await json(response);
     if (!response.ok) throw error(response.status, detailOf(result));
     return result;

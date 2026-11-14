@@ -69,6 +69,7 @@ function fakeFetch(result, { status = 200, error, onCall = () => {} } = {}) {
   return async (address, init = {}) => {
     onCall(String(address), init);
     if (init.method === 'POST') return Response.json(status === 200 ? { status_url: queue + '/status', response_url: queue, cancel_url: queue + '/cancel' } : { detail: error || 'Bad image' }, { status });
+    if (address === queue + '/status/stream') return new Response('data: {"status":"IN_QUEUE","queue_position":0}\n\ndata: {"status":"COMPLETED"}\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
     if (address === queue + '/status') return Response.json({ status: 'COMPLETED' });
     if (address === queue) return Response.json(result);
     if (String(address).endsWith('.glb')) return new Response(cubeGlb());
@@ -110,6 +111,21 @@ test('queue errors, unsafe hosts and result URLs fail without exposing the key; 
   assert.deepEqual(cancelled, [queue + '/cancel']);
   const endpoint = 'http://127.0.0.1:8790', local = endpoint + '/model.glb';
   assert.equal((await falModel3d({ endpoint, modeler: 'trellis', fetcher: async (url, init) => init.method === 'POST' ? Response.json({ status_url: endpoint + '/status', response_url: endpoint + '/result' }) : url.endsWith('/status') ? Response.json({ status: 'COMPLETED' }) : Response.json({ model_glb: { url: local } }) })).url, local);
+});
+
+test('a status stream that ends early costs one status check and a reopen, not a poll every few seconds', async () => {
+  const calls = [];
+  let streams = 0;
+  const result = await falQueue({ key: 'secret', model: 'test', input: {}, fetcher: async (url, init = {}) => {
+    calls.push(String(url));
+    if (init.method === 'POST') return Response.json({ status_url: queue + '/status', response_url: queue });
+    if (url === queue + '/status/stream') return new Response(++streams === 1 ? 'data: {"status":"IN_PROGRESS"}\r\n\r\n' : 'event: x\ndata: {"status":\n\ndata: {"status":"COMPLETED"}\n\n');
+    if (url === queue + '/status') return Response.json({ status: 'IN_PROGRESS' });
+    if (url === queue) return Response.json({ ok: true });
+    throw new Error('Unexpected URL: ' + url);
+  } });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls.slice(1), [queue + '/status/stream', queue + '/status', queue + '/status/stream', queue]);
 });
 
 function bucket() {

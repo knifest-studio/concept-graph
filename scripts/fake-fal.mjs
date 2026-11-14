@@ -27,13 +27,25 @@ export function fakeFalHandler({ delay = 2000 } = {}) {
       console.log(`${new Date().toISOString()} queued ${model} ${id}`);
       return send(response, 200, { request_id: id, status_url: `${url}/status`, response_url: url, cancel_url: `${url}/cancel` });
     }
-    const match = path.match(/^\/requests\/([\da-f-]+)(?:\/(status|cancel))?$/), job = match && jobs.get(match[1]);
+    const match = path.match(/^\/requests\/([\da-f-]+)(?:\/(status\/stream|status|cancel))?$/), job = match && jobs.get(match[1]);
     if (!job) return send(response, 404, { detail: 'Job not found.' });
     if (request.method === 'PUT' && match[2] === 'cancel') { job.cancelled = true; return send(response, 200, { status: 'CANCELLATION_REQUESTED' }); }
     if (request.method !== 'GET') return send(response, 405, { detail: 'Use GET or PUT cancel.' });
     if (job.cancelled) return send(response, 422, { detail: 'Cancelled.' });
     const complete = Date.now() - job.at >= delay;
     if (match[2] === 'status') return send(response, 200, { status: complete ? 'COMPLETED' : 'IN_PROGRESS' });
+    // Server-sent status events until COMPLETED, as fal's `status/stream` does.
+    if (match[2] === 'status/stream') {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      const tick = () => {
+        if (job.cancelled || response.destroyed) return response.end();
+        const finished = Date.now() - job.at >= delay;
+        response.write(`data: ${JSON.stringify({ status: finished ? 'COMPLETED' : 'IN_PROGRESS' })}\n\n`);
+        if (finished) return response.end();
+        setTimeout(tick, Math.min(250, delay));
+      };
+      return tick();
+    }
     if (!complete) return send(response, 400, { detail: 'Still running.' });
     if ([topazModel, seedvrModel].includes(job.model)) return send(response, 200, { image: { url: `${origin}/upscaled.png` } });
     const file = { url: `${origin}/cube.glb` };

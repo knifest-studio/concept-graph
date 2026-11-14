@@ -609,7 +609,9 @@ export class BoardRoom extends YServer {
       const model = await falModel3d({ ...options, key: this.env.FAL_KEY, modeler: job.request.modeler, input, onQueued: () => { result.usd = job.estimates[index]; } });
       signal.throwIfAborted();
       const asset = `${crypto.randomUUID()}.glb`;
-      await storeModelGlb(await model3dFile(model.url, options), this.env.FILES, asset, signal);
+      // A file that isn't a usable GLB says why in History instead of a bare "failed".
+      try { await storeModelGlb(await model3dFile(model.url, options), this.env.FILES, asset, signal); }
+      catch (cause) { if (signal.aborted || cause instanceof NanoError) throw cause; console.error('Could not store the 3D model:', model.url, cause); throw new NanoError('upstream', `The 3D generator returned a model the board can’t store: ${String(cause?.message || cause).slice(0, 200)}`); }
       let poster = image.asset;
       if (model.thumbnail) {
         try {
