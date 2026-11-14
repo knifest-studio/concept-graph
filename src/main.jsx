@@ -366,6 +366,18 @@ function UpscaleNode({ id, data, selected }) {
 
 const modelerOptions = [[modelers.hunyuan, 'Hunyuan 3D'], [modelers.trellis, 'TRELLIS 2'], [modelers.rodin, 'Rodin'], [modelers.tripo, 'Tripo']];
 const modelerHints = { hunyuan: 'Detailed textures · about $0.38 a model', trellis: '1024p geometry and textures · about $0.30 a model', rodin: 'PBR materials · about $0.40 a model', tripo: 'Clean textures · about $0.30 a model' };
+// What each generator suits, from 2026 hands-on comparisons (read 2026-11-14): a portrait test ranked Tripo first on faces,
+// hair and skin, Hunyuan second (stiffer faces), Rodin soft-skinned and TRELLIS 2 sculpted with holes
+// (https://www.vitalify.asia/en/blog/ai-image-to-3d-generators-comparison); Rodin targets hard-surface props and stylised
+// characters, not photoreal heads, and Hunyuan suits characters and objects you will rig or retopologise
+// (https://fuser.studio/articles/best-ai-3d-model-generators). Tripo H3.1 is Tripo's high-fidelity model
+// (https://developers.tripo3d.com/en/docs/models-and-versions).
+const modelerTips = {
+  hunyuan: 'All-rounder for characters and objects: clean geometry and detailed textures. Faces can look a little stiff.',
+  trellis: 'A quick base mesh from a concept image, to refine later. Weak on faces, hair and thin parts; may leave holes.',
+  rodin: 'Hard-surface props, weapons, vehicles and stylised characters with PBR materials. Not for photoreal people.',
+  tripo: 'Best for people and realistic characters: the most faithful faces, hair and skin in recent tests.',
+};
 function Model3dNode({ id, data, selected }) {
   const canvas = useCanvas(), view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, images: (state.inputs.get(id) || noInputs).images, nanoReady: state.model3dReady, nanoNote: state.model3dNote, falReady: state.falReady, readOnly: state.readOnly, focus: state.focusId === id }), shallowEqual);
   const pending = view.active || view.starting, canCancel = view.starting || view.byName === view.userName, modeler = modelerOf({ data });
@@ -378,7 +390,7 @@ function Model3dNode({ id, data, selected }) {
       <div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{t('Generating 3D')}… {view.timer}</span>}
         <button className={`run-button nano${pending ? ' run-pending' : ''}`} type="button" aria-label={t('Generate 3D models')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun || blocked || view.readOnly} data-tooltip={blocked ? note : !view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxModel3dImages }) : t('Generate 3D models')}><Icon name="play" size={12}/><span>{t('Generate')}</span></button></div>
         {pending && canCancel && view.active && <button className="run-cancel" type="button" onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
-    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{blocked ? note : t(modelerHints[modeler])}</small></div>
+    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} data-tooltip={t(modelerTips[value])} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{blocked ? note : t(modelerHints[modeler])}</small></div>
     <div className="node-inputs">{view.images ? plural(view.images, '{count} image to turn into 3D', '{count} images to turn into 3D') : t('Connect images, then click Generate')}</div>
     {failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}<Handle type="source" position={Position.Right}/>
   </article></NodeContextMenu>;
