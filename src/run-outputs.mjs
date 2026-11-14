@@ -23,7 +23,7 @@ export function placeRunOutput(before, { runId, nodeId, run: current, author, fi
   let node = graph.nodes.find(node => node.id === id);
   if (!node) {
     node = imageNode({ id: runId, target, by: run.by }, asset, output.index, dimensions);
-    if (model) { node.type = 'model'; node.data = { asset, name: uniqueModelName(graph.nodes, model.name), ...(model.poster ? { poster: model.poster } : {}), runId, createdAt: node.data.createdAt, ...(run.by ? { author: run.by } : {}) }; }
+    if (model) { node.type = 'model'; node.data = { ...model, asset, name: uniqueModelName(graph.nodes, model.name), runId, createdAt: node.data.createdAt, ...(run.by ? { author: run.by } : {}) }; }
     node.id = id;
     if (!model) node.data.caption = uniqueImageName(graph.nodes, output.caption);
     positionRunOutput(node, graph, run);

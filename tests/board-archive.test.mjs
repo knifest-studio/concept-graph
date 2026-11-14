@@ -266,17 +266,22 @@ test('imports cannot create a board too large for the normal save endpoint', asy
 test('format 9 round trips model GLBs and posters, including historical snapshots, and rejects malformed GLBs', async t => {
   const { cubeGlb } = await import('./fixtures/cube-glb.mjs');
   const { source, destination } = await fixture(t), saved = structuredClone(board), glb = '44444444-4444-4444-4444-444444444444.glb';
-  const model = { id: 'model', type: 'model', position: { x: 700, y: 200 }, data: { asset: glb, poster: historical, name: 'Robot 3D' } };
+  const facts = { modeler: 'trellis', source: { nodeId: 'source-image', name: 'Robot' }, bytes: cubeGlb().length, usd: .3 };
+  const model = { id: 'model', type: 'model', position: { x: 700, y: 200 }, data: { asset: glb, poster: historical, name: 'Robot 3D', ...facts } };
   saved.graph.nodes.push(model); saved.graph.runs[0].snapshot.push(structuredClone(model));
   await writeFile(path.join(source, glb), cubeGlb());
   const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive), manifest = JSON.parse(files.get('board.json'));
   assert.equal(manifest.version, 9); assert.ok(files.has('assets/' + glb));
   const imported = await importBoardArchive(archive, destination), output = imported.graph.nodes.find(n => n.type === 'model');
   assert.notEqual(output.data.asset, glb); assert.notEqual(output.data.poster, historical);
+  for (const key of Object.keys(facts)) { assert.deepEqual(output.data[key], facts[key]); assert.deepEqual(imported.graph.runs[0].snapshot.at(-1).data[key], facts[key]); }
   assert.deepEqual(await readFile(path.join(destination, output.data.asset)), Buffer.from(cubeGlb()));
   assert.equal(imported.graph.runs[0].snapshot.at(-1).data.asset, output.data.asset); assert.equal(imported.graph.runs[0].snapshot.at(-1).data.poster, output.data.poster);
   manifest.version = 8; files.set('board.json', Buffer.from(JSON.stringify(manifest))); await assert.rejects(importBoardArchive(await pack(files), destination), /3D models/);
   manifest.version = 9;
+  manifest.board.graph.nodes.at(-1).data.bytes = -1; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /Invalid model file size/);
+  manifest.board.graph.nodes.at(-1).data.bytes = facts.bytes;
   const bad = Buffer.from(cubeGlb()); bad[0] = 0;
   const { createHash } = await import('node:crypto'); manifest.assets[glb].sha256 = createHash('sha256').update(bad).digest('hex'); files.set('assets/' + glb, bad); files.set('board.json', Buffer.from(JSON.stringify(manifest)));
   await assert.rejects(importBoardArchive(await pack(files), destination), /GLB magic/);

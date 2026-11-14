@@ -97,6 +97,7 @@ const finishBoardEdit = () => { const element = document.activeElement; if (elem
 
 function Icon({ name, size = 18 }) {
   const paths = {
+    info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></>,
     cube: <><path d="m12 3 9 5v8l-9 5-9-5V8Z"/><path d="m3 8 9 5 9-5m-9 5v8m-5-16 9 5"/></>,
     sound: <><path d="M11 4 6 8H3v8h3l5 4Z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></>,
     muted: <><path d="M11 4 6 8H3v8h3l5 4Z"/><path d="m16 9 6 6m0-6-6 6"/></>,
@@ -2470,6 +2471,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const inputMemo = useRef(null);
   const inputs = useMemo(() => inputMemo.current = inputCounts(nodes, edges, inputMemo.current), [nodes, edges]);
   const lookups = useMemo(() => runLookups(runs), [runs]);
+  const imageIds = useMemo(() => new Set(nodes.filter(node => node.type === 'image').map(node => node.id)), [inputs.counts]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
   const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
   const edgesChanged = changes => { changes = changes.filter(change => flow.getEdge(change.id)?.className !== 'pending-edge'); if (!changes.length || mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
@@ -2527,14 +2529,14 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
-  const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
+  const canvasState = { imageIds, latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, model3dReady: model3d.ready, model3dNote: model3d.note, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud }));

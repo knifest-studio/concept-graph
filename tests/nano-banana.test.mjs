@@ -816,6 +816,9 @@ runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters
     const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(r => r.id === started.run.id), model = graph.nodes.find(n => n.data.runId === run.id);
     assert.deepEqual([run.status, run.task, run.model, run.label], ['completed', 'model3d', model3dModels[modeler], '3D model']);
     assert.equal(model.type, 'model'); assert.match(model.data.asset, /\.glb$/); assert.ok(files.has('assets/' + model.data.asset));
+    assert.equal(model.data.modeler, modeler); assert.deepEqual(model.data.source, { nodeId: 'i', name: 'Front view' });
+    assert.equal(model.data.bytes, cubeGlb().length); assert.equal(model.data.usd, model3dPrices[modeler]);
+    assert.equal(model.data.author.name, requester.name); assert.ok(Number.isFinite(Date.parse(model.data.createdAt))); validateGraph(graph);
     assert.equal(model.data.name, modeler === 'hunyuan' ? 'Front view 3D' : modeler === 'trellis' ? 'Front view 3D 2' : 'Front view 3D 3');
     assert.equal(modeler === 'hunyuan' ? model.data.poster !== reference : model.data.poster === reference, true);
     assert.equal(files.get('assets/' + model.data.asset).httpMetadata.contentType, 'model/gltf-binary');

@@ -4,6 +4,7 @@ import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/lay
 import { validateSections } from './src/sections.mjs';
 import { nearestFreePosition } from './src/node-placement.mjs';
 import { validateImageEdits, generationReferences, maskInstruction } from './src/image-edits.mjs';
+import { maxModelBytes } from './src/model-assets.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
 export const generationSettings = Object.freeze({ model: 'gpt-6-luna', effort: 'low' });
@@ -50,7 +51,7 @@ export const gptImageModel = 'gpt-image-2.5-flare';
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin' });
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -113,6 +114,14 @@ export function validateGraph(value) {
     if (node.type === 'model' && !/^[\da-f-]{36}\.glb$/.test(node.data.asset || '')) throw new Error('Invalid model asset.');
     if (node.type === 'model' && node.data.poster !== undefined && !/^[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(node.data.poster)) throw new Error('Invalid model poster.');
     if (node.type === 'model' && (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120)) throw new Error('Invalid model name.');
+    if (node.type === 'model' && node.data.modeler !== undefined && !Object.values(modelers).includes(node.data.modeler)) throw new Error('Invalid 3D modeler.');
+    if (node.type === 'model' && node.data.bytes !== undefined && (!Number.isSafeInteger(node.data.bytes) || node.data.bytes < 20 || node.data.bytes > maxModelBytes)) throw new Error('Invalid model file size.');
+    if (node.type === 'model' && node.data.usd !== undefined && (!Number.isFinite(node.data.usd) || node.data.usd < 0 || node.data.usd > 1000)) throw new Error('Invalid model cost.');
+    if (node.type === 'model' && node.data.source !== undefined) {
+      const source = node.data.source;
+      if (!source || typeof source !== 'object' || Array.isArray(source) || Object.keys(source).some(key => !['nodeId', 'name'].includes(key))
+        || !['nodeId', 'name'].every(key => typeof source[key] === 'string' && source[key].trim() && source[key].length <= 120)) throw new Error('Invalid model source.');
+    }
     if (node.type === 'text' && node.data.scale !== undefined && ![2, 4].includes(node.data.scale)) throw new Error('Invalid upscale size.');
     if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
     if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
@@ -180,7 +189,9 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   const top = topLayer(graph.nodes), rank = layerIndex(nodeIds.map(id => originals.get(id)));
   const nodes = nodeIds.map(id => {
     const node = originals.get(id);
-    const data = { ...structuredClone(node.data), createdAt };
+    // A model copy keeps its generation facts; copying it did not generate a new GLB.
+    const data = { ...structuredClone(node.data), ...(node.type === 'model' ? {} : { createdAt }) };
+    if (node.type === 'model' && data.source && ids.has(data.source.nodeId)) data.source.nodeId = ids.get(data.source.nodeId);
     if (node.type === 'text' && data.mainImage !== undefined) {
       if (graph.edges.some(edge => edge.source === data.mainImage && edge.target === id)) data.mainImage = ids.get(data.mainImage) || data.mainImage;
       else delete data.mainImage;

@@ -609,8 +609,9 @@ export class BoardRoom extends YServer {
       const model = await falModel3d({ ...options, key: this.env.FAL_KEY, modeler: job.request.modeler, input, onQueued: () => { result.usd = job.estimates[index]; } });
       signal.throwIfAborted();
       const asset = `${crypto.randomUUID()}.glb`;
+      let storedBytes;
       // A file that isn't a usable GLB says why in History instead of a bare "failed".
-      try { await storeModelGlb(await model3dFile(model.url, options), this.env.FILES, asset, signal); }
+      try { storedBytes = await storeModelGlb(await model3dFile(model.url, options), this.env.FILES, asset, signal); }
       catch (cause) { if (signal.aborted || cause instanceof NanoError) throw cause; console.error('Could not store the 3D model:', model.url, cause); throw new NanoError('upstream', `The 3D generator returned a model the board can’t store: ${String(cause?.message || cause).slice(0, 200)}`); }
       let poster = image.asset;
       if (model.thumbnail) {
@@ -622,7 +623,7 @@ export class BoardRoom extends YServer {
         } catch (cause) { if (signal.aborted) throw cause; console.error('Could not save the 3D poster:', cause); }
       }
       if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) return;
-      if (this.placeOutput(job, index, asset, undefined, { name: `${image.label || 'Image'} 3D`, poster })) result.placed++;
+      if (this.placeOutput(job, index, asset, undefined, { name: `${image.label || 'Image'} 3D`, poster, modeler: job.request.modeler, source: { nodeId: image.nodeId, name: image.label || 'Image' }, bytes: storedBytes, usd: result.usd })) result.placed++;
     } finally { release(); }
   }
 

@@ -71,6 +71,21 @@ test('model assets, posters and names validate independently, and clipboard/dupl
   assert.equal(cloneSelection(clip).nodes[0].data.asset, asset); assert.equal(cloneSelection(clip).nodes[0].data.poster, poster);
 });
 
+test('model facts are optional, bounded and survive copies without changing generation time', () => {
+  const facts = { modeler: 'hunyuan', source: { nodeId: 'i0', name: 'Cube' }, bytes: cubeGlb().length, usd: .375, createdAt: '2026-11-14T10:00:00Z', author: { name: 'Lead' } };
+  const g = graph(); g.nodes.push({ ...model(), data: { ...model().data, ...facts } }); validateGraph(g);
+  for (const key of ['modeler', 'source', 'bytes', 'usd']) { const old = structuredClone(g); delete old.nodes.at(-1).data[key]; validateGraph(old); }
+  for (const change of [
+    { modeler: 'unknown' }, { modeler: 3 }, { modeler: null }, { bytes: 19 }, { bytes: 1.5 }, { bytes: '100' }, { bytes: maxModelBytes + 1 }, { bytes: Infinity },
+    { usd: -1 }, { usd: NaN }, { usd: Infinity }, { usd: '0.375' }, { usd: 1001 }, { usd: null },
+    ...[null, [], {}, { nodeId: 'i0' }, { nodeId: 3, name: 'Cube' }, { nodeId: '', name: 'Cube' }, { nodeId: 'x'.repeat(121), name: 'Cube' }, { nodeId: 'i0', name: ' ' }, { nodeId: 'i0', name: 'x'.repeat(121) }, { nodeId: 'i0', name: 'Cube', extra: true }].map(source => ({ source })),
+  ]) { const bad = structuredClone(g); Object.assign(bad.nodes.at(-1).data, change); assert.throws(() => validateGraph(bad), /Invalid/); }
+  const copied = duplicateNodes(g, ['model', 'i0'], { ids: new Map([['model', 'copy-model'], ['i0', 'copy-image']]) });
+  assert.deepEqual(copied.nodes[0].data, { ...g.nodes.at(-1).data, source: { ...facts.source, nodeId: 'copy-image' } });
+  const clip = readNodeClipboard(JSON.stringify(selectedGraph([{ ...g.nodes.at(-1), selected: true }], [])));
+  assert.deepEqual(cloneSelection(clip).nodes[0].data, g.nodes.at(-1).data);
+});
+
 test('GLB validation rejects magic, version, declared length and oversize, and fixture has a real cube mesh', () => {
   const bytes = cubeGlb(); assert.equal(validateGlb(bytes), bytes); assert.equal(glbLength(bytes), bytes.length);
   const document = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + new DataView(bytes.buffer).getUint32(12, true))));
@@ -152,13 +167,13 @@ function bucket() {
   }; } };
 }
 test('R2 stores small valid GLB with its type and streams large GLBs in bounded parts; invalid streams never complete', async () => {
-  const bytes = cubeGlb(), small = bucket(); await storeModelGlb(new Response(bytes), small, asset);
+  const bytes = cubeGlb(), small = bucket(); assert.equal(await storeModelGlb(new Response(bytes), small, asset), bytes.length);
   assert.equal(small.writes[0].metadata.httpMetadata.contentType, 'model/gltf-binary'); assert.deepEqual(small.writes[0].bytes, bytes);
   for (const value of [new Uint8Array(12), bytes.subarray(0, bytes.length - 1)]) { const files = bucket(); await assert.rejects(storeModelGlb(new Response(value), files, asset), /GLB/); assert.equal(files.writes.length, 0); }
   const files = bucket(); await assert.rejects(storeModelGlb(new Response(bytes, { headers: { 'Content-Length': String(maxModelBytes + 1) } }), files, asset), /80 MB/); assert.equal(files.writes.length, 0);
   const length = 11 * 1024 * 1024, header = bytes.slice(0, 12); new DataView(header.buffer).setUint32(8, length, true);
   const response = extra => { let sent = 0; return new Response(new ReadableStream({ pull(controller) { if (sent >= length + extra) { controller.close(); return; } const chunk = new Uint8Array(Math.min(64 * 1024, length + extra - sent)); if (!sent) chunk.set(header); sent += chunk.length; controller.enqueue(chunk); } })); };
-  const large = bucket(); await storeModelGlb(response(0), large, asset); assert.equal(large.state.complete, true); assert.deepEqual(large.parts, [5*1024*1024, 5*1024*1024, 1024*1024]);
+  const large = bucket(); assert.equal(await storeModelGlb(response(0), large, asset), length); assert.equal(large.state.complete, true); assert.deepEqual(large.parts, [5*1024*1024, 5*1024*1024, 1024*1024]);
   const bad = bucket(); await assert.rejects(storeModelGlb(response(-1), bad, asset), /length/); assert.equal(bad.state.aborted, true); assert.equal(bad.state.complete, false);
   const aborted = bucket(), controller = new AbortController(); controller.abort(); await assert.rejects(storeModelGlb(new Response(bytes), aborted, asset, controller.signal), /abort/i); assert.equal(aborted.writes.length, 0);
 });
@@ -180,13 +195,15 @@ test('3D placement, history, placeholders, plain groups, covers and undo preserv
 });
 
 test('MCP adds one 3D generator connected only to image nodes and describes model assets/posters', () => {
-  const tool = toolByName.get('add_model3d_node'), g = graph(1); g.nodes.push(model());
+  const tool = toolByName.get('add_model3d_node'), g = graph(1), generated = model();
+  Object.assign(generated.data, { modeler: 'rodin', source: { nodeId: 'i0', name: 'Cube' }, bytes: cubeGlb().length, usd: .4 }); g.nodes.push(generated);
   const args = { boardId: '11111111-1111-1111-1111-111111111111', imageIds: ['i0'] }; checkArgs(args, tool.inputSchema);
   const ctx = { graph: g, args, prepared: { fal: true }, templates: [], user: { name: 'Lead' } };
   const { graph: next, result } = runBoardTool(tool, ctx); assert.equal(next.nodes.find(n => n.id === result.nodeId).data.modeler, 'hunyuan'); assert.ok(next.edges.some(e => e.source === 'i0' && e.target === result.nodeId));
   assert.throws(() => runBoardTool(tool, { ...ctx, prepared: { fal: false } }), /fal.ai key/);
   assert.throws(() => runBoardTool(tool, { ...ctx, args: { imageIds: ['model'] } }), /image nodes/);
   const shown = runBoardTool(toolByName.get('get_board'), { ...ctx, args: {} }).result.nodes.find(n => n.type === 'model'); assert.equal(shown.data.asset, asset); assert.equal(shown.data.poster, poster);
+  assert.deepEqual(shown.data, generated.data);
   checkArgs({ boardId: args.boardId, nodeId: 'model' }, toolByName.get('get_image').inputSchema);
 });
 

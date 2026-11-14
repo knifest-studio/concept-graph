@@ -77,6 +77,7 @@ export async function storeModelGlb(file, files, asset, signal) {
       if (filled) parts.push(await upload.uploadPart(parts.length + 1, buffer.subarray(0, filled)));
       await upload.complete(parts);
     } else await files.put(`assets/${asset}`, buffer.subarray(0, filled), metadata);
+    return total;
   } catch (cause) {
     await reader.cancel().catch(() => {});
     if (upload) await upload.abort().catch(() => {});
