@@ -2,7 +2,7 @@ import { track, analyticsView, analyticsReady, analyticsViewport, analyticsVia }
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
-import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
+import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, useUpdateNodeInternals, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
 // React Flow's own drag helper (pinned by @xyflow/react), so the selection box's inside drags a selection like React Flow does.
 import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
@@ -248,7 +248,9 @@ function FullImageNode(props) {
 }
 
 function ExpandedImageNode({ id, data, selected }) {
-  const canvas = useCanvas();
+  const canvas = useCanvas(), fromModel = useCanvasValue(state => state.modelViewIds.has(id)), updateNodeInternals = useUpdateNodeInternals();
+  // React Flow keeps the handles it measured; one that appears later (a model connection arriving) needs a re-measure.
+  useEffect(() => { updateNodeInternals(id); }, [fromModel]);
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
   const [captionFocused, setCaptionFocused] = useState(false), [caption, setCaption] = useState(data.caption || '');
   const captionInput = useRef(null), captionBeforeEdit = useRef(), captionCheckpoint = useRef(null), captionEdited = useRef(false);
@@ -276,7 +278,7 @@ function ExpandedImageNode({ id, data, selected }) {
   const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
   return <NodeContextMenu id={id} type="image" actions={canvas} masked={!!data.mask}><div className="image-node-wrapper">
     <input ref={captionInput} className={`image-node-caption nodrag${data.caption?.trim() ? '' : ' unnamed'}`} aria-label={t('Image name')} title={view.readOnly ? undefined : t('Edit image name')} readOnly={view.readOnly} maxLength={120} value={captionFocused ? caption : imageName({ data })} onFocus={() => { setCaption(imageName({ data })); captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => { if (!view.readOnly && !captionEdited.current && !data.caption?.trim()) canvas.editCaption(id, imageName({ data })); setCaptionFocused(false); }} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); captionEdited.current = true; setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/><article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
-    {data.runId && <Handle type="target" position={Position.Left} isConnectable={false}/>}
+    {(data.runId || fromModel) && <Handle type="target" position={Position.Left} isConnectable={false}/>}
     {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName({ data })} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
     {data.mask && <ImageMask data={data} preview={hovered || focused || selected}/>}<div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
     <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
@@ -310,11 +312,12 @@ function CollapsedImage({ asset, id }) {
 }
 
 function CollapsedNode({ id, data, kind }) {
-  const canvas = useCanvas(), isImage = kind === 'image';
+  const canvas = useCanvas(), isImage = kind === 'image', fromModel = useCanvasValue(state => state.modelViewIds.has(id)), updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => { updateNodeInternals(id); }, [fromModel]);
   const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
   return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
-      {isImage ? data.runId && <Handle type="target" position={Position.Left} isConnectable={false} aria-label={t('Image input')}/> : <PromptInputs data={data}/>}
+      {isImage ? (data.runId || fromModel) && <Handle type="target" position={Position.Left} isConnectable={false} aria-label={t('Image input')}/> : <PromptInputs data={data}/>}
       {isImage ? <><CollapsedImage asset={data.asset} id={id}/>{data.mask && <ImageMask data={data}/>}</> : <Icon name="text" size={26}/>}
       {busy(run) && <span className="collapsed-run-dot" aria-label={t('Generating')} title={t('Generating…')}/>}
       {['failed', 'error'].includes(run?.status) && <span className="collapsed-run-dot failed" aria-label={t(run.error)} title={t(run.error)}/>}
@@ -395,7 +398,7 @@ function ImageMask({ data, preview = true }) {
 }
 
 function LightNode({ id, type, data, selected }) {
-  const isImage = type === 'image', canvas = useCanvas();
+  const isImage = type === 'image', canvas = useCanvas(), fromModel = useCanvasValue(state => state.modelViewIds.has(id));
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
     return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, falReady: state.falReady, create: state.detail !== 'tiny' || !state.crowded,
@@ -403,11 +406,11 @@ function LightNode({ id, type, data, selected }) {
   }, shallowEqual);
   const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesSiteGenerator(data), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
-    {isImage ? data.runId && <LodHandle type="target"/> : <PromptInputs data={data} light/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
+    {isImage ? (data.runId || fromModel) && <LodHandle type="target"/> : <PromptInputs data={data} light/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
     {isImage && data.mask && <ImageMask data={data} preview={false}/>} {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
   </article>;
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
-  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/>{data.mask && <ImageMask data={data} preview={false}/>}<ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
+  if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{(data.runId || fromModel) && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/>{data.mask && <ImageMask data={data} preview={false}/>}<ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
   if (data.task === model3dTask) return <article data-feel-node={id} className={`node-card text-node lod-node describe-node upscale-node model3d-node${view.working ? ' working' : ''}`}>
     <LodHandle type="target"/><header><span className="describe-label"><Icon name="cube" size={14}/>{t('3D model')}</span></header>
@@ -2504,6 +2507,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const inputs = useMemo(() => inputMemo.current = inputCounts(nodes, edges, inputMemo.current), [nodes, edges]);
   const lookups = useMemo(() => runLookups(runs), [runs]);
   const imageIds = useMemo(() => new Set(nodes.filter(node => node.type === 'image').map(node => node.id)), [inputs.counts]);
+  // Images saved from a 3D model: they need an input point for the model's connection, as generated images do.
+  const modelViewIds = useMemo(() => { const models = new Set(nodes.filter(node => node.type === 'model').map(node => node.id)); return new Set(edges.filter(edge => models.has(edge.source)).map(edge => edge.target)); }, [nodes, edges]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
   const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
   const edgesChanged = changes => { changes = changes.filter(change => flow.getEdge(change.id)?.className !== 'pending-edge'); if (!changes.length || mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
@@ -2568,7 +2573,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
-  const canvasState = { imageIds, latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
+  const canvasState = { imageIds, modelViewIds, latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, model3dReady: model3d.ready, model3dNote: model3d.note, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud }));
