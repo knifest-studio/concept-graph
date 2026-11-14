@@ -43,6 +43,7 @@ import { switchNodeTemplate, templateFromNode } from './node-template.mjs';
 import { GettingStarted, useGettingStarted } from './GettingStarted.jsx';
 import { HelpMenu } from './HelpMenu.jsx';
 import { isHelpShortcut, isMacPlatform, shortcutLabel } from './shortcuts.mjs';
+import { installBackdropClose } from './backdrop-close.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx';
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
@@ -2891,4 +2892,5 @@ const cloudServices = {
     } catch (error) { helperToken = previous; throw error; }
   },
 };
+installBackdropClose();
 createRoot(document.getElementById('root')).render(cloud ? <React.Suspense fallback={<div className="startup">{t('Opening cloud workspace…')}</div>}><CloudWorkspace Editor={App} HelperSetup={HelperSetup} services={cloudServices}/></React.Suspense> : <Workspace/>);
