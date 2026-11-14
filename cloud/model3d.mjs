@@ -3,12 +3,17 @@ import { glbLength, maxModelBytes } from '../src/model-assets.mjs';
 import { falHost, falQueue, falResultUrl, safeFalEndpoint } from './fal-queue.mjs';
 import { imageFormat, readBody } from './assets.mjs';
 import { upscaleSettings } from './upscale.mjs';
-import { NanoError, nanoSettings, nanoStatus } from './nano-banana.mjs';
+import { NanoError, nanoSettings } from './nano-banana.mjs';
 
 // fal model schemas and prices read 2026-11-14:
 // https://fal.ai/models/fal-ai/hunyuan-3d/v3.1/pro/image-to-3d/api (Normal, no PBR/extra views/custom face count)
 // https://fal.ai/models/fal-ai/trellis-2/api (1024) and https://fal.ai/models/fal-ai/hyper3d/rodin/v2.5/api (High, PBR GLB).
-export const model3dStatus = (user, env, directory) => nanoStatus(user, env, directory, { ...nanoSettings(env), configured: upscaleSettings(env).fal });
+export async function model3dStatus(user, env, directory) {
+  const configured = upscaleSettings(env).fal, allowed = await directory.model3dAllowed(user.email);
+  if (!configured || !allowed) return { configured, allowed };
+  const { dailyImages, monthlyUsd } = nanoSettings(env), { usedToday, teamSpentUsd } = await directory.nanoUsage(user.email);
+  return { configured, allowed, dailyImages, usedToday, monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
+}
 export const model3dPrices = Object.freeze({ hunyuan: .375, trellis: .30, rodin: .40 });
 export function model3dRequest(graph, nodeId) {
   const { target, images } = runInputs(graph, nodeId);

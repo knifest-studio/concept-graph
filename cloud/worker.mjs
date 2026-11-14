@@ -72,17 +72,17 @@ async function signedIn(env) {
   catch { return []; }
 }
 
-// Site admins choose who may use the site's Gemini key; the site owner also chooses the admins.
+// Site admins choose image and per-person 3D access; the site owner also chooses the admins.
 async function teamRoute(request, env, user, url) {
   const store = directory(env), shown = async access => json({ access: { ...access, people: await signedIn(env) } });
   if (request.method === 'GET') {
     const access = await store.teamAccess(user.email);
-    return access ? shown(access) : error('Only site admins can see who may use Nano Banana.', 403);
+    return access ? shown(access) : error('Only site admins can see generation access.', 403);
   }
   if (request.method !== 'PATCH') return error('Method not allowed.', 405);
   const origin = request.headers.get('Origin');
   if (origin && origin !== url.origin) return error('Invalid origin.', 403);
-  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, admin: input.admin });
+  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, admin: input.admin });
   return result.error ? error(result.error, result.status) : shown(result.access);
 }
 
@@ -99,7 +99,7 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
     const result = await (await getServerByName(env.BoardRoom, boardId)).cancelNano({ runId, email: user.email });
     return result.error ? error(result.error, result.status) : json({ ok: true });
   }
-  // The room checks setup and the shared allowed list for the provider saved on this prompt.
+  // The room checks setup and the image or 3D allowed list for the saved node.
   const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
   const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
@@ -187,7 +187,7 @@ async function route(request, env) {
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
-  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal, ...(upscaleSettings(env).fal ? { model3d: await model3dStatus(user, env, directory(env)) } : {}) }) : error('Method not allowed.', 405);
+  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, directory(env)) }) : error('Method not allowed.', 405);
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
   if (voiceMatch) {
     if (method !== 'POST') return error('Method not allowed.', 405);

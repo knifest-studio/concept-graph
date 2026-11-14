@@ -336,8 +336,8 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   const lead = await cookie('lead@studio.example'), outsider = await cookie('guest@gmail.example', 'Guest'), path = `/api/boards/${board.id}/nano`;
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false });
-  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
+  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false } });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);
@@ -361,7 +361,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal(budget.status, 429); assert.deepEqual(await budget.json(), { error: 'Team budget for this month is used up.' });
   delete env.GEMINI_API_KEY;
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 503);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true, gptImage: { configured: false, allowed: true }, fal: false });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: false, allowed: true, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
   assert.equal(directory.nanoUsage('solo@mail.example').usedToday, 0);
 });
 
@@ -789,7 +789,7 @@ runtimeTest('a PNG answer is cut back here, images other than PNGs are padded th
 
 runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters sequentially and refund unstarted work', async t => {
   const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), { model3dModels } = await import('../graph.mjs');
-  const { boardRoom, board, directory, files, settle } = cloudSetup(t, { FAL_KEY: 'fal-test-key' }); await boardRoom.setName(board.id);
+  const { boardRoom, board, directory, files, settle } = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'fal-test-key' }); await boardRoom.setName(board.id);
   const { model3dPrices } = await import('../cloud/model3d.mjs'); let pendingModel = null, activeDownloads = 0, maxDownloads = 0, calls = [];
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     if (init.method === 'POST') {
@@ -829,7 +829,7 @@ runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters
 
 runtimeTest('3D rejects invalid files after billing, keeps successful partial outputs, and enforces access/daily/monthly limits', async t => {
   const { cubeGlb } = await import('./fixtures/cube-glb.mjs');
-  const app = cloudSetup(t, { FAL_KEY: 'key', NANO_BANANA_DAILY_IMAGES: '2', NANO_BANANA_MONTHLY_USD: '1' }); await app.boardRoom.setName(app.board.id);
+  const app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key', NANO_BANANA_DAILY_IMAGES: '2', NANO_BANANA_MONTHLY_USD: '1' }); await app.boardRoom.setName(app.board.id);
   const before = readCloudGraph(app.boardRoom.document), generator = { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } };
   const second = { id: 'i2', type: 'image', position: { x: 0, y: 500 }, data: { asset: reference, caption: 'Side view' } };
   applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, generator, second], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }, { id: '3di2', source: 'i2', target: '3d' }] }, before, 'seed');
@@ -842,7 +842,15 @@ runtimeTest('3D rejects invalid files after billing, keeps successful partial ou
   });
   const requester = { ...user, email: 'lead@studio.example' };
   assert.equal((await app.boardRoom.startNano({ nodeId: '3d', requester: { ...requester, email: 'outsider@example.com' } })).status, 403);
-  const run = await app.boardRoom.startNano({ nodeId: '3d', requester }); await app.settle();
+  app.directory.changeTeamAccess(requester.email, { model3d: { email: requester.email, allowed: false } });
+  assert.equal(app.directory.nanoAllowed(requester.email), true);
+  const denied = await app.boardRoom.startNano({ nodeId: '3d', requester });
+  assert.equal(denied.status, 403); assert.equal(denied.error, '3D generation isn’t available for your account. Ask a site admin for access.');
+  assert.equal(submissions, 0); assert.deepEqual(app.directory.nanoUsage(requester.email), { usedToday: 0, teamSpentUsd: 0 });
+  app.directory.changeTeamAccess(requester.email, { model3d: { email: requester.email, allowed: true } });
+  app.directory.changeTeamAccess(requester.email, { nano: { entry: '@studio.example', allowed: false } });
+  assert.equal(app.directory.nanoAllowed(requester.email), false);
+  const run = await app.boardRoom.startNano({ nodeId: '3d', requester }); assert.ok(run.run); await app.settle();
   const saved = app.boardRoom.document.getMap('runs').get(run.run.id);
   assert.equal(saved.status, 'completed'); assert.equal(saved.count, 1); assert.match(saved.error, /1 of 2 images failed/);
   assert.deepEqual(app.directory.nanoUsage(requester.email), { usedToday: 1, teamSpentUsd: .75 });
@@ -850,7 +858,7 @@ runtimeTest('3D rejects invalid files after billing, keeps successful partial ou
 });
 
 runtimeTest('3D shrinks large images via IMAGES and fails before billing when resize is unavailable', async t => {
-  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
   const before = readCloudGraph(app.boardRoom.document);
   applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } }], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }] }, before, 'seed');
   app.files.set('assets/' + reference, { bytes: png(5000, 4500), size: 33 });
@@ -868,7 +876,7 @@ runtimeTest('3D shrinks large images via IMAGES and fails before billing when re
 });
 
 runtimeTest('concurrent 3D runs share one room lane; cancelling a queued run starts no extra paid call', async t => {
-  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
   const before = readCloudGraph(app.boardRoom.document), generators = ['3da', '3db'].map(id => ({ id, type: 'text', position: { x: 0, y: 500 }, data: { text: '', task: 'model3d' } }));
   applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, ...generators], edges: [...before.edges, ...generators.map(n => ({ id: 'e' + n.id, source: 'i', target: n.id }))] }, before, 'seed');
   const entered = gate(), release = gate(); let submissions = 0;
@@ -883,14 +891,14 @@ runtimeTest('concurrent 3D runs share one room lane; cancelling a queued run sta
   assert.deepEqual(app.directory.nanoUsage(requester.email), { usedToday: 1, teamSpentUsd: .375 });
 });
 
-runtimeTest('fal-only sites report the shared 3D allowance without requiring Gemini configuration', async t => {
-  const app = cloudSetup(t, { FAL_KEY: 'key', GEMINI_API_KEY: '' }), cookie = await app.cookie('lead@studio.example');
+runtimeTest('fal-only sites report the separate 3D access and shared allowance without requiring Gemini configuration', async t => {
+  const app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key', GEMINI_API_KEY: '' }), cookie = await app.cookie('lead@studio.example');
   const status = await (await app.request('/api/nano', { cookie })).json();
   assert.equal(status.configured, false); assert.equal(status.model3d.configured, true); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 50);
 });
 
 runtimeTest('a 3D thumbnail that fails to store falls back to the source poster', async t => {
-  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
   const before = readCloudGraph(app.boardRoom.document);
   applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } }], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }] }, before, 'seed');
   const put = app.env.FILES.put.bind(app.env.FILES);

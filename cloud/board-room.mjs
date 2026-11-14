@@ -328,7 +328,7 @@ export class BoardRoom extends YServer {
     // The room chooses the provider from its authoritative prompt, after the client's edits arrive.
     const model3d = isModel3d(node), fal = model3d || (isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana);
     if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: model3d ? '3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.' : fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : `${name} isn’t set up on this site.`, status: 503 };
-    if (!await this.directory().nanoAllowed(requester.email)) return { error: `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
+    if (model3d ? !await this.directory().model3dAllowed(requester.email) : !await this.directory().nanoAllowed(requester.email)) return { error: model3d ? '3D generation isn’t available for your account. Ask a site admin for access.' : `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
     const busy = () => this.nanoStarting.has(nodeId) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run));
     if (busy()) return { error: 'This prompt is already generating.', status: 409 };
     let request;

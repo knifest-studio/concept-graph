@@ -20,12 +20,29 @@ import { generationRows } from '../src/generation-tray.mjs';
 import { blockedMediaSelector } from '../src/analytics-privacy.mjs';
 import * as Y from 'yjs';
 import { applyLocalGraph } from '../src/cloud-sync.mjs';
+import { nanoState } from '../src/generator.mjs';
+import { setLanguage, t as translate } from '../src/i18n.mjs';
 
 const image = '11111111-1111-1111-1111-111111111111.png', asset = '22222222-2222-2222-2222-222222222222.glb';
 const poster = '33333333-3333-3333-3333-333333333333.png';
 const node = (id, type, data) => ({ id, type, position: { x: 0, y: 0 }, data });
 const model = () => node('model', 'model', { asset, poster, name: 'Cube 3D' });
 const graph = (count = 1, modeler) => ({ nodes: [node('g', 'text', { text: '', task: 'model3d', ...(modeler ? { modeler } : {}) }), ...Array.from({ length: count }, (_, i) => node('i' + i, 'image', { asset: image, caption: 'Cube' }))], edges: Array.from({ length: count }, (_, i) => ({ id: 'e' + i, source: 'i' + i, target: 'g' })), groups: [], runs: [], revision: 0 });
+
+test('3D readiness blocks separate access and quota failures with translated reasons', () => {
+  const status = { configured: true, allowed: true, dailyImages: 50, usedToday: 1, monthlyUsd: 50, teamSpentUsd: .375 };
+  assert.equal(nanoState(status, 'model3d').ready, true);
+  const denied = nanoState({ configured: true, allowed: false }, 'model3d');
+  assert.equal(denied.ready, false); assert.equal(denied.note, '3D generation isn’t available for your account. Ask a site admin for access.');
+  assert.match(nanoState({ configured: false, allowed: true }, 'model3d').note, /3D generation isn’t set up/);
+  assert.equal(nanoState({ ...status, usedToday: 50 }, 'model3d').ready, false);
+  assert.equal(nanoState({ ...status, teamSpentUsd: 50 }, 'model3d').ready, false);
+  setLanguage('uk');
+  try {
+    assert.match(nanoState({ configured: true, allowed: false }, 'model3d').note, /Генерація 3D недоступна/);
+    assert.equal(translate('3D models for {name}', { name: 'Lead' }), '3D-моделі для Lead');
+  } finally { setLanguage('en'); }
+});
 
 test('3D task validates modelers and one to four direct images; models are excluded from every prompt reference', () => {
   for (const modeler of Object.keys(model3dModels)) {

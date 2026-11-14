@@ -115,13 +115,13 @@ function kv() {
   };
 }
 
-function setup(t) {
+function setup(t, settings = {}) {
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
-  const directory = new Directory({ storage: { sql } }, {}), files = new Map(), rooms = new Map(), waits = [];
+  const directory = new Directory({ storage: { sql } }, settings), files = new Map(), rooms = new Map(), waits = [];
   const env = {
-    SESSION_SECRET: 'session-test', OAUTH_KV: kv(),
+    SESSION_SECRET: 'session-test', OAUTH_KV: kv(), ...settings,
     Directory: { idFromName: name => name, get: () => directory },
     BoardRoom: { idFromName: name => name, get: name => rooms.get(name) || room(name) },
     FILES: {
@@ -143,7 +143,7 @@ function setup(t) {
   };
   const ctx = { waitUntil: promise => waits.push(promise), passThroughOnException() {}, props: {} };
   const request = (path, init = {}) => worker.fetch(new Request(`${site}${path}`, { redirect: 'manual', ...init }), env, ctx);
-  return { env, directory, files, rooms, room, request };
+  return { env, directory, files, rooms, room, request, settle: () => Promise.all(waits) };
 }
 
 const cookies = response => response.headers.getSetCookie().map(cookie => cookie.split(';')[0]);
@@ -432,4 +432,33 @@ runtimeTest('cloud MCP creates 3D generators and reads a model poster without re
   const imageContent = await lead.tool('get_image', { boardId, nodeId: modelId }); assert.equal(imageContent[1].type, 'image'); assert.equal(imageContent[1].mimeType, 'image/png'); assert.equal(imageContent[1].data, Buffer.from(png(400, 200)).toString('base64'));
   const outsider = await connect(request, 'outsider@example.com', 'Outsider'); assert.match((await outsider.tool('get_image', { boardId, nodeId: modelId })).error, /access/);
   assert.match((await lead.tool('get_image', { boardId, nodeId: added.nodeId })).error, /no image or model poster/);
+});
+
+runtimeTest('UI and MCP enforce separate 3D access and whoami reports it independently of Nano Banana', async t => {
+  const { directory, rooms, request, settle } = setup(t, { SITE_OWNER_EMAIL: 'owner@studio.example', FAL_KEY: 'test-fal', GEMINI_API_KEY: 'test-gemini', NANO_BANANA_ALLOWED: '@studio.example' });
+  const lead = await connect(request, 'lead@studio.example'), { board } = await lead.tool('create_board', { name: '3D access' }), boardId = board.id;
+  const uploaded = await lead.tool('upload_image', { data: Buffer.from(png(400, 200)).toString('base64') });
+  const image = await lead.tool('add_image_node', { boardId, asset: uploaded.asset, caption: 'Cube' });
+  const { nodeId } = await lead.tool('add_model3d_node', { boardId, imageIds: [image.nodeId] });
+  const identity = await lead.tool('whoami'); assert.equal(identity.nanoBanana.allowed, true); assert.equal(identity.model3d.allowed, false);
+  const start = () => request(`/api/boards/${boardId}/nano`, { method: 'POST', headers: { Cookie: lead.session }, body: JSON.stringify({ nodeId }) });
+  const denied = await start(); assert.equal(denied.status, 403);
+  const message = '3D generation isn’t available for your account. Ask a site admin for access.';
+  assert.equal((await denied.json()).error, message); assert.equal((await lead.tool('start_run', { boardId, nodeId })).error, message);
+  assert.equal(rooms.get(boardId).document.getMap('runs').size, 0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 0);
+  directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'lead@studio.example', allowed: true }, nano: { entry: '@studio.example', allowed: false } });
+  const allowed = await lead.tool('whoami'); assert.equal(allowed.nanoBanana.allowed, false); assert.equal(allowed.model3d.allowed, true); assert.equal(allowed.model3d.dailyImages, 50);
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'); let submissions = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') { submissions++; return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }
+    if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' });
+    if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/cube.glb' } });
+    return new Response(cubeGlb());
+  });
+  const started = await lead.tool('start_run', { boardId, nodeId }); assert.ok(started.runId); await settle();
+  assert.equal(rooms.get(boardId).document.getMap('runs').get(started.runId).status, 'completed');
+  assert.equal((await start()).status, 202); await settle(); assert.equal(submissions, 2);
+  const usage = (await lead.tool('whoami')).model3d; assert.equal(usage.usedToday, 2); assert.equal(usage.teamSpentUsd, .75);
+  directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'lead@studio.example', allowed: false } });
+  assert.equal((await lead.tool('whoami')).model3d.allowed, false); assert.equal((await start()).status, 403);
 });

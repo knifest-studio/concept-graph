@@ -373,9 +373,9 @@ function Model3dNode({ id, data, selected }) {
       <div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{t('Generating 3D')}… {view.timer}</span>}
         <button className={`run-button nano${pending ? ' run-pending' : ''}`} type="button" aria-label={t('Generate 3D models')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun || blocked || view.readOnly} data-tooltip={blocked ? note : !view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxModel3dImages }) : t('Generate 3D models')}><Icon name="play" size={12}/><span>{t('Generate')}</span></button></div>
         {pending && canCancel && view.active && <button className="run-cancel" type="button" onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
-    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{!view.falReady ? note : t(modelerHints[modeler])}</small></div>
+    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{blocked ? note : t(modelerHints[modeler])}</small></div>
     <div className="node-inputs">{view.images ? plural(view.images, '{count} image to turn into 3D', '{count} images to turn into 3D') : t('Connect images, then click Generate')}</div>
-    {selected && blocked && view.falReady && !pending && <NanoReadiness note={note}/>}{failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}<Handle type="source" position={Position.Right}/>
+    {failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}<Handle type="source" position={Position.Right}/>
   </article></NodeContextMenu>;
 }
 const ModelNode = props => <ModelCard {...props} assetUrl={assetUrl} Icon={Icon}/>;
@@ -905,7 +905,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const gettingStartedSteps = checklistSteps(guide.state, helperNeeded, showHelperStep.current ? false : readiness.key === 'ready');
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
   const nano = nanoState(cloudSession?.nano), nanoRef = useRef(nano); nanoRef.current = nano;
-  const model3d = nanoState(cloudSession?.nano?.model3d || cloudSession?.nano), model3dRef = useRef(model3d); model3dRef.current = model3d;
+  const model3d = nanoState(cloudSession?.nano?.model3d, model3dTask), model3dRef = useRef(model3d); model3dRef.current = model3d;
   const gpt = nanoState(cloudSession?.nano?.gptImage, generators.gptImage), gptRef = useRef(gpt); gptRef.current = gpt;
   const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] }), nodeCommit = useRef(null);
   const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false), cloudRuns = useRef({ source: null, shown: new WeakMap() });

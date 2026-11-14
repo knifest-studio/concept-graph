@@ -83,4 +83,48 @@ runtimeTest('without a site owner nobody manages access, and the copied list sti
   const { request, directory } = setup(t, { SITE_OWNER_EMAIL: undefined });
   assert.equal((await request('/api/cloud/team', { email: 'owner@studio.example' })).status, 403);
   assert.equal(directory.nanoAllowed('solo@mail.example'), true);
+  assert.deepEqual(directory.model3dEntries(), []);
+});
+
+runtimeTest('3D seeds only the owner once, and revocation survives restarts and owner changes', t => {
+  const { env, sql, directory } = setup(t);
+  assert.deepEqual(directory.model3dEntries().map(row => row.email), ['owner@studio.example']);
+  assert.equal(directory.model3dAllowed(' OWNER@Studio.example '), true);
+  for (const address of ['solo@mail.example', 'x@team.example', '@team.example', null]) assert.equal(directory.model3dAllowed(address), false);
+  directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'owner@studio.example', allowed: false } });
+  assert.equal(new Directory({ storage: { sql } }, env).model3dAllowed('owner@studio.example'), false);
+  env.SITE_OWNER_EMAIL = 'replacement@studio.example';
+  assert.deepEqual(new Directory({ storage: { sql } }, env).model3dEntries(), []);
+});
+
+runtimeTest('admins manage per-person 3D separately from image access, including people who have not signed in', async t => {
+  const { request, directory } = setup(t, { FAL_KEY: 'test-fal' });
+  const patch = (email, model3d) => request('/api/cloud/team', { method: 'PATCH', email, data: { model3d } });
+  assert.equal((await patch('new@studio.example', { email: 'new@studio.example', allowed: true })).status, 403);
+  assert.equal(directory.model3dAllowed('new@studio.example'), false);
+  await request('/api/cloud/team', { method: 'PATCH', email: 'owner@studio.example', data: { admin: { email: 'admin@studio.example', admin: true } } });
+  assert.equal(directory.model3dAllowed('admin@studio.example'), false, 'admin status grants no 3D');
+  const granted = await (await patch('admin@studio.example', { email: ' Waiting@Studio.example ', allowed: true })).json();
+  const entry = granted.access.model3d.find(item => item.email === 'waiting@studio.example');
+  assert.equal(entry.addedBy, 'admin@studio.example'); assert.ok(entry.addedAt);
+  assert.equal(directory.model3dAllowed('waiting@studio.example'), true); assert.equal(directory.nanoAllowed('waiting@studio.example'), false);
+  assert.deepEqual((await (await request('/api/nano', { email: 'solo@mail.example' })).json()).model3d, { configured: true, allowed: false });
+  const status = await (await request('/api/nano', { email: 'waiting@studio.example' })).json();
+  assert.equal(status.allowed, false); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 50);
+  await patch('admin@studio.example', { email: 'waiting@studio.example', allowed: false });
+  assert.equal((await (await request('/api/nano', { email: 'waiting@studio.example' })).json()).model3d.allowed, false);
+  for (const email of ['@studio.example', 'studio.example', 'not an email', 'a@b@c', '', null]) assert.equal((await patch('admin@studio.example', { email, allowed: true })).status, 400, String(email));
+  for (const allowed of [undefined, 'true', 1]) assert.equal((await patch('admin@studio.example', { email: 'valid@example.com', allowed })).status, 400);
+  assert.equal((await patch('owner@studio.example', null)).status, 400);
+});
+
+runtimeTest('3D access stays bounded and existing grants remain idempotent at the limit', async t => {
+  const { directory, sql, request } = setup(t);
+  for (let i = 0; i < 999; i++) sql.exec('INSERT INTO model3d_access (email, addedAt) VALUES (?, ?)', `person${i}@example.com`, '2026-11-14');
+  const change = (email, allowed) => directory.changeTeamAccess('owner@studio.example', { model3d: { email, allowed } });
+  assert.equal(change('overflow@example.com', true).status, 400);
+  assert.ok(change('owner@studio.example', true).access);
+  assert.ok(change('person0@example.com', false).access); assert.ok(change('overflow@example.com', true).access);
+  const status = await (await request('/api/nano', { email: 'owner@studio.example' })).json();
+  assert.deepEqual(status.model3d, { configured: false, allowed: true });
 });
