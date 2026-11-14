@@ -8,6 +8,7 @@ export const sharedPreviews = { enabled: false };
 const previewUrl = source => /^\/assets\/[\da-f-]{36}\.(?:png|jpg|webp)$/.test(source) ? `${source}/thumb` : null;
 
 export async function createCanvasThumbnail(source, options = {}) {
+  if (/\.glb(?:[?#]|$)/i.test(source)) return { src: '' };
   if (/\.gif(?:[?#]|$)/i.test(source)) return { src: source };
   const fetchImage = options.fetchImage || globalThis.fetch;
   const decode = options.decode || globalThis.createImageBitmap;

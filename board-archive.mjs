@@ -7,11 +7,13 @@ import yazl from 'yazl';
 import { validateGraph, imageFormat } from './graph.mjs';
 import { boardName } from './workspace.mjs';
 import { hasPageData, validPageId } from './src/pages.mjs';
+import { maxModelBytes, validateGlb } from './src/model-assets.mjs';
 import { imageAssets } from './src/image-edits.mjs';
 
 export const maxBoardArchiveBytes = 512 * 1024 * 1024;
 const maxManifestBytes = 32 * 1024 * 1024, maxImageBytes = 30 * 1024 * 1024, maxEntries = 5000;
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
+const assetLimit = asset => asset.endsWith('.glb') ? maxModelBytes : maxImageBytes;
 const format = 'concept-graph-board';
 const fail = message => { throw new Error(message); };
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 120;
@@ -31,7 +33,7 @@ function validateArchiveGraph(graph) {
   const runIds = new Set();
   for (const run of graph.runs) {
     if (!run || !validId(run.id) || runIds.has(run.id) || !validId(run.nodeId)
-      || !['queued', 'running', 'completed', 'error', 'cancelled'].includes(run.status)
+      || !['queued', 'running', 'completed', 'error', 'failed', 'cancelled'].includes(run.status)
       || !Array.isArray(run.outputIds) || run.outputIds.length > 2000 || !run.outputIds.every(validId)
       || !Number.isFinite(Date.parse(run.createdAt))) fail('Invalid generation history.');
     runIds.add(run.id);
@@ -98,6 +100,12 @@ function hasImageEdits(graph) {
   return found;
 }
 
+function hasModels(graph) {
+  let found = false;
+  visitNodes(graph, node => { if (node?.type === 'model' || node?.data?.task === 'model3d') found = true; });
+  return found;
+}
+
 function referencedAssets(graph) {
   const assets = new Set();
   visitNodes(graph, node => {
@@ -121,12 +129,12 @@ export async function exportBoardArchive(board, assetsDir) {
   let total = 0;
   for (const asset of needed) {
     const filename = path.join(assetsDir, asset), info = await stat(filename);
-    if (!info.isFile() || info.size > maxImageBytes) fail('An image exceeds the 30 MB limit.');
+    if (!info.isFile() || info.size > assetLimit(asset)) fail('An asset exceeds its file size limit (images 30 MB, models 80 MB).');
     total += info.size;
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasModels(saved.graph) ? 9 : hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -158,9 +166,9 @@ export async function importBoardArchive(bytes, assetsDir) {
     for await (const entry of zip.eachEntry()) {
       const name = entry.fileName;
       if (entries.size >= maxEntries || entries.has(name)) fail('The archive has too many entries or duplicate filenames.');
-      if (name !== 'board.json' && !/^assets\/[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(name)) fail('The archive contains an unexpected file path.');
+      if (name !== 'board.json' && !/^assets\/[\da-f-]{36}\.(png|jpg|webp|gif|glb)$/.test(name)) fail('The archive contains an unexpected file path.');
       if (!entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0o170000) === 0o120000) fail('Encrypted files, links, or unsupported compression are not allowed.');
-      const limit = name === 'board.json' ? maxManifestBytes : maxImageBytes;
+      const limit = name === 'board.json' ? maxManifestBytes : assetLimit(name);
       if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0 || entry.uncompressedSize > limit) fail('An archive entry exceeds its size limit.');
       expanded += entry.uncompressedSize;
       if (expanded > maxBoardArchiveBytes) fail('The expanded archive exceeds 512 MB.');
@@ -171,7 +179,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
@@ -184,6 +192,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     // Apps before shapes and arrows refuse format 7.
     if (manifest.version < 7 && hasShapes(board.graph)) fail('This board uses shapes or arrows and requires a newer board format.');
     if (manifest.version < 8 && hasImageEdits(board.graph)) fail('This board uses image crops or masks and requires a newer board format.');
+    if (manifest.version < 9 && hasModels(board.graph)) fail('This board uses 3D models and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');
@@ -194,9 +203,10 @@ export async function importBoardArchive(bytes, assetsDir) {
     staging = await mkdtemp(path.join(path.dirname(assetsDir), '.board-import-'));
     const remap = new Map();
     for (const asset of needed) {
-      const image = await readEntry(zip, entries.get(`assets/${asset}`), maxImageBytes);
+      const image = await readEntry(zip, entries.get(`assets/${asset}`), assetLimit(asset));
       if (createHash('sha256').update(image).digest('hex') !== inventory[asset].sha256) fail('An image checksum does not match; the archive may be damaged.');
-      if ('.' + imageFormat(image) !== path.extname(asset)) fail('An image format does not match its filename.');
+      if (asset.endsWith('.glb')) validateGlb(image);
+      else if ('.' + imageFormat(image) !== path.extname(asset)) fail('An image format does not match its filename.');
       const name = randomUUID() + path.extname(asset);
       await writeFile(path.join(staging, name), image, { flag: 'wx' });
       remap.set(asset, name);
@@ -208,6 +218,7 @@ export async function importBoardArchive(bytes, assetsDir) {
         if (node.data.uncropped) node.data.uncropped.asset = remap.get(node.data.uncropped.asset);
         if (node.data.mask) for (const key of ['asset', 'marked', 'base', 'source']) node.data.mask[key] = remap.get(node.data.mask[key]);
       }
+      if (node?.type === 'model') { node.data.asset = remap.get(node.data.asset); if (node.data.poster) node.data.poster = remap.get(node.data.poster); }
       if (node?.type === 'text' && node.data.template) node.data.template.assets = node.data.template.assets.map(asset => remap.get(asset));
     };
     graph.nodes.forEach(remapNode);

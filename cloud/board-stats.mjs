@@ -5,9 +5,10 @@ export function boardStats(doc) {
   let imageCount = 0;
   const top = [], newer = (a, b) => a.time > b.time || (a.time === b.time && a.index < b.index);
   for (const node of doc.getMap('nodes').values()) {
-    if (node?.get?.('type') !== 'image') continue;
-    const data = node.get('data'), asset = data?.get?.('asset'), entry = { asset, index: imageCount++, time: Date.parse(data?.get?.('createdAt')) || 0 };
-    if (typeof asset !== 'string' || !assetPattern.test(asset)) continue;
+    const type = node?.get?.('type');
+    if (!['image', 'model'].includes(type)) continue;
+    const data = node.get('data'), asset = data?.get?.(type === 'model' ? 'poster' : 'asset'), entry = { asset, index: imageCount++, time: Date.parse(data?.get?.('createdAt')) || 0 };
+    if (typeof asset !== 'string' || !assetPattern.test(asset) || asset.endsWith('.glb')) continue;
     // The four newest distinct images, ties in document order, as a full sort would choose.
     const same = top.findIndex(item => item.asset === asset);
     if (same >= 0) { if (newer(entry, top[same])) top[same] = entry; else continue; }

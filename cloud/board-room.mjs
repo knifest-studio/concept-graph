@@ -4,7 +4,7 @@ import { boardStats } from './board-stats.mjs';
 import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
 import { gptImageCost, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from './gpt-image.mjs';
-import { generators, imageSize, isSiteGenerator, isUpscale, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
+import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
@@ -14,6 +14,7 @@ import { BoardChat } from './chat.mjs';
 import { voiceHasSpace, voiceSignal } from './voice.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 import { reframePng } from './png-frame.mjs';
+import { falModel3d, model3dFile, model3dInput, model3dPoster, model3dPrices, model3dRequest, storeModelGlb } from './model3d.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
 
@@ -322,23 +323,23 @@ export class BoardRoom extends YServer {
   async startNano({ nodeId, client, clock, requester }) {
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
     const graph = readCloudGraph(this.document), node = graph.nodes.find(item => item.id === nodeId);
-    const gpt = !isUpscale(node) && node?.data.generator === generators.gptImage, name = gpt ? 'GPT Image' : 'Nano Banana';
+    const gpt = !isUpscale(node) && !isModel3d(node) && node?.data.generator === generators.gptImage, name = isModel3d(node) ? '3D generation' : gpt ? 'GPT Image' : 'Nano Banana';
     const settings = gpt ? gptImageSettings(this.env) : nanoSettings(this.env);
     // The room chooses the provider from its authoritative prompt, after the client's edits arrive.
-    const fal = isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana;
-    if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : `${name} isn’t set up on this site.`, status: 503 };
+    const model3d = isModel3d(node), fal = model3d || (isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana);
+    if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: model3d ? '3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.' : fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : `${name} isn’t set up on this site.`, status: 503 };
     if (!await this.directory().nanoAllowed(requester.email)) return { error: `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
     const busy = () => this.nanoStarting.has(nodeId) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run));
     if (busy()) return { error: 'This prompt is already generating.', status: 409 };
     let request;
-    try { request = isUpscale(node) ? upscaleRequest(graph, nodeId) : gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); }
+    try { request = model3d ? model3dRequest(graph, nodeId) : isUpscale(node) ? upscaleRequest(graph, nodeId) : gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); }
     catch (cause) { return { error: cause.message, status: 400 }; }
     // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
     // image per connected image, each reserved at the largest size it could come out.
     const describe = !!request.describe, measure = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const sources = request.upscale ? await this.imageSizes(request.images) : [];
-    const calls = request.upscale ? request.images.length : describe ? 1 : promptVariants(request.target);
-    const estimates = Array.from({ length: calls }, (_, index) => request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
+    const calls = request.upscale || model3d ? request.images.length : describe ? 1 : promptVariants(request.target);
+    const estimates = Array.from({ length: calls }, (_, index) => model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
     this.nanoStarting.add(nodeId);
     const reservations = [], release = async () => { for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 }); };
     try {
@@ -347,12 +348,12 @@ export class BoardRoom extends YServer {
         const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1 });
         if (reserved.error) {
           await release();
-          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} ${request.upscale ? 'images' : 'variants'} fit; ${request.upscale ? 'connect' : 'choose'} fewer.` } : reserved;
+          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} ${request.upscale || request.model3d ? 'images' : 'variants'} fit; ${request.upscale || request.model3d ? 'connect' : 'choose'} fewer.` } : reserved;
         }
         reservations.push(reserved.reservation);
       }
-      const task = describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale ? { variants: calls } : {}), ...task };
+      const task = model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {
@@ -423,7 +424,7 @@ export class BoardRoom extends YServer {
     const node = readCloudGraph(this.document).nodes.find(item => item.id === nodeId);
     if (!node) return { error: `Node not found: ${nodeId}` };
     if (node.type !== 'text') return { error: 'Generate from a prompt (a text node).' };
-    if (!isSiteGenerator(node.data.generator) && !isUpscale(node)) {
+    if (!isSiteGenerator(node.data.generator) && !isUpscale(node) && !isModel3d(node)) {
       const answer = await this.askTabs(user, { type: 'agent-generate', nodeId });
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
@@ -582,6 +583,47 @@ export class BoardRoom extends YServer {
     }));
   }
 
+  async callModel3d(job, index, result) {
+    // All 3D jobs in this room share this lane; failed/cancelled work releases it too.
+    const previous = this.model3dLane || Promise.resolve();
+    let release;
+    this.model3dLane = new Promise(resolve => { release = resolve; });
+    await previous;
+    const signal = job.controller.signal;
+    try {
+      signal.throwIfAborted();
+      const image = job.request.images[index], object = await this.env.FILES.get(`assets/${image.asset}`);
+      if (!object) throw new NanoError('bad_request', 'An image is missing from storage. Reconnect it and try again.');
+      let bytes = new Uint8Array(await object.arrayBuffer()), size = imageSize(bytes), mimeType = imageTypes[image.asset.split('.').pop()];
+      if (!size) throw new NanoError('bad_request', 'Could not read the size of an image to turn into 3D.');
+      // Hunyuan accepts JPG/PNG/WebP at 128–5000 px and up to 8 MB. Re-encode GIFs too; no model gets animation.
+      if (bytes.length > 6 * 1024 * 1024 || Math.max(size.width, size.height) > 4096 || mimeType === 'image/gif') {
+        if (!this.env.IMAGES) throw new NanoError('config', 'This image needs resizing. Ask the site owner to enable Cloudflare Images, or connect a smaller PNG, JPEG or WebP.');
+        bytes = await this.transformImage(bytes, { width: Math.min(2048, size.width), height: Math.min(2048, size.height), fit: 'scale-down' }, 'image/jpeg');
+        size = imageSize(bytes); mimeType = 'image/jpeg';
+      }
+      if (bytes.length > 8 * 1024 * 1024 || !size || (job.request.modeler === 'hunyuan' && Math.min(size.width, size.height) < 128)) throw new NanoError('bad_request', 'Use an image at least 128 px on each side and at most 8 MB for 3D generation.');
+      const settings = upscaleSettings(this.env), options = { endpoint: settings.endpoint, signal };
+      const input = model3dInput(job.request.modeler, `data:${mimeType};base64,${base64(bytes)}`);
+      bytes = null;
+      const model = await falModel3d({ ...options, key: this.env.FAL_KEY, modeler: job.request.modeler, input, onQueued: () => { result.usd = job.estimates[index]; } });
+      signal.throwIfAborted();
+      const asset = `${crypto.randomUUID()}.glb`;
+      await storeModelGlb(await model3dFile(model.url, options), this.env.FILES, asset, signal);
+      let poster = image.asset;
+      if (model.thumbnail) {
+        try {
+          const thumbnail = await model3dPoster(model.thumbnail, options);
+          const stored = `${crypto.randomUUID()}.${thumbnail.format}`;
+          await this.env.FILES.put(`assets/${stored}`, thumbnail.bytes, { httpMetadata: { contentType: imageTypes[thumbnail.format] } });
+          poster = stored;
+        } catch (cause) { if (signal.aborted) throw cause; console.error('Could not save the 3D poster:', cause); }
+      }
+      if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) return;
+      if (this.placeOutput(job, index, asset, undefined, { name: `${image.label || 'Image'} 3D`, poster })) result.placed++;
+    } finally { release(); }
+  }
+
   // One connected image becomes one larger image, placed beside the upscale node in the order of the connections. Once
   // Google or fal.ai has taken the call it may be billed even without an answer, so the estimate stands until one arrives.
   async callUpscale(job, index, reference, result) {
@@ -657,11 +699,11 @@ export class BoardRoom extends YServer {
     }
   }
 
-  placeOutput(job, index, asset, dimensions) {
+  placeOutput(job, index, asset, dimensions, model) {
     let placed = false;
     this.document.transact(() => {
       const before = readCloudGraph(this.document);
-      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index, ...(job.request.upscale ? { caption: `${job.request.images[index]?.label || 'Image'} upscaled` } : {}) }, asset, dimensions });
+      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index, ...(job.request.upscale ? { caption: `${job.request.images[index]?.label || 'Image'} upscaled` } : {}) }, asset, dimensions, model });
       if (graph) { applyLocalGraph(this.document, graph, before, origin); placed = true; }
     }, origin);
     return placed;
@@ -671,23 +713,29 @@ export class BoardRoom extends YServer {
   // as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
     const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
-    const name = request.upscale ? 'The upscale' : run.provider === generators.gptImage ? 'GPT Image' : 'Nano Banana';
-    const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, nanoTimeout);
+    const name = request.model3d ? '3D generation' : request.upscale ? 'The upscale' : run.provider === generators.gptImage ? 'GPT Image' : 'Nano Banana';
+    const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, request.model3d ? 14 * 60 * 1000 : nanoTimeout);
     const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
     let outcome = { status: 'completed' };
     try {
-      const references = await this.references([...request.images, ...(request.mask ? [{ asset: request.mask }] : [])], request.upscale, name), mask = request.mask ? references.pop() : undefined;
+      const references = request.model3d ? [] : await this.references([...request.images, ...(request.mask ? [{ asset: request.mask }] : [])], request.upscale, name), mask = request.mask ? references.pop() : undefined;
       if (job.cancelled) return;
-      const calls = await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result, mask)));
+      const calls = [];
+      // Sequential across the room as well as within a run: model downloads never overlap.
+      if (request.model3d) for (const [index, result] of results.entries()) {
+        try { await this.callModel3d(job, index, result); calls.push({ status: 'fulfilled' }); }
+        catch (reason) { calls.push({ status: 'rejected', reason }); }
+      }
+      else calls.push(...await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result, mask))));
       const failures = calls.filter(call => call.status === 'rejected').map(call => call.reason);
       if (failures.length === calls.length) throw failures[0];
       // Some variants (or images) arrived: the run succeeds, and History says what the others ran into.
       if (failures.length) {
         const reason = failures[0] instanceof NanoError ? failures[0].message : `${name} failed.`;
-        outcome = { status: 'completed', error: `${failures.length} of ${calls.length} ${request.upscale ? 'images' : 'variants'} failed: ${reason}` };
+        outcome = { status: 'completed', error: `${failures.length} of ${calls.length} ${request.upscale || request.model3d ? 'images' : 'variants'} failed: ${reason}` };
       }
     } catch (cause) {
-      outcome = { status: 'failed', error: job.timedOut ? `${name} took longer than 5 minutes. Try again.` : cause instanceof NanoError ? cause.message
+      outcome = { status: 'failed', error: job.timedOut ? `${name} took longer than ${request.model3d ? 14 : 5} minutes. Try again.` : cause instanceof NanoError ? cause.message
         : cause?.name === 'TypeError' ? `Could not reach ${request.upscale ? 'the upscaler' : name}. Try again.` : `${name} failed. Try again.` };
       if (!(cause instanceof NanoError) && !job.cancelled) console.error(`${name} failed:`, cause);
     } finally {

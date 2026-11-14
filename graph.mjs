@@ -17,7 +17,13 @@ export const isDescribe = node => node?.type === 'text' && node.data?.task === d
 // Topaz or SeedVR2 through fal.ai, or Nano Banana redrawing it at 2K or 4K.
 export const upscaleTask = 'upscale';
 export const isUpscale = node => node?.type === 'text' && node.data?.task === upscaleTask;
-export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node);
+export const model3dTask = 'model3d';
+export const isModel3d = node => node?.type === 'text' && node.data?.task === model3dTask;
+export const modelers = Object.freeze({ hunyuan: 'hunyuan', trellis: 'trellis', rodin: 'rodin' });
+export const modelerOf = node => Object.values(modelers).includes(node?.data?.modeler) ? node.data.modeler : modelers.hunyuan;
+export const maxModel3dImages = 4;
+export const model3dModels = Object.freeze({ hunyuan: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', trellis: 'fal-ai/trellis-2', rodin: 'fal-ai/hyper3d/rodin/v2.5' });
+export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node) && !isModel3d(node);
 // A prompt switched to GPT Image keeps a connected main image, or takes the first image connected to it.
 export function mainImageFor(nodes, edges, node) {
   if (!isGptImage(node)) return undefined;
@@ -44,7 +50,7 @@ export const gptImageModel = 'gpt-image-2.5-flare';
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2' });
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -85,7 +91,7 @@ export function validateGraph(value) {
   for (const node of value.nodes) {
     if (!node || typeof node.id !== 'string' || node.id.length > 120 || ids.has(node.id)) throw new Error('Invalid or duplicate node.');
     ids.add(node.id);
-    if (!['text', 'image', 'drawing', 'sticky', 'stamp', 'shape', 'arrow'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
+    if (!['text', 'image', 'model', 'drawing', 'sticky', 'stamp', 'shape', 'arrow'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
       || !node.data || typeof node.data !== 'object' || Array.isArray(node.data)) throw new Error('Invalid node.');
     if (node.page !== undefined && !validPageId(node.page)) throw new Error('Invalid node page.');
     if (node.z !== undefined && !validLayer(node.z)) throw new Error('Invalid node layer.');
@@ -100,9 +106,13 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && !isSiteGenerator(node.data.generator)) throw new Error('Invalid image generator.');
     if (node.type === 'text' && node.data.mainImage !== undefined && (typeof node.data.mainImage !== 'string' || node.data.mainImage.length > 120)) throw new Error('Invalid main image.');
-    if (node.type === 'text' && node.data.generator === generators.gptImage && [describeTask, upscaleTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
-    if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask].includes(node.data.task)) throw new Error('Invalid node task.');
+    if (node.type === 'text' && node.data.generator === generators.gptImage && [describeTask, upscaleTask, model3dTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
+    if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask, model3dTask].includes(node.data.task)) throw new Error('Invalid node task.');
     if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
+    if (node.type === 'text' && node.data.modeler !== undefined && !Object.values(modelers).includes(node.data.modeler)) throw new Error('Invalid 3D modeler.');
+    if (node.type === 'model' && !/^[\da-f-]{36}\.glb$/.test(node.data.asset || '')) throw new Error('Invalid model asset.');
+    if (node.type === 'model' && node.data.poster !== undefined && !/^[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(node.data.poster)) throw new Error('Invalid model poster.');
+    if (node.type === 'model' && (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120)) throw new Error('Invalid model name.');
     if (node.type === 'text' && node.data.scale !== undefined && ![2, 4].includes(node.data.scale)) throw new Error('Invalid upscale size.');
     if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
     if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
@@ -197,6 +207,14 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   return { nodes, edges };
 }
 
+export function uniqueModelName(nodes, base) {
+  base = (base || '3D model').trim().slice(0, 120);
+  const used = new Set(nodes.filter(node => node.type === 'model').map(node => node.data.name));
+  let name = base, number = 2;
+  while (used.has(name)) { const suffix = ` ${number++}`; name = base.slice(0, 120 - suffix.length) + suffix; }
+  return name;
+}
+
 export function imageName(node) {
   if (node?.data?.caption?.trim()) return node.data.caption.trim();
   const label = (node?.data?.label || '').trim().split(/[/\\]/).pop().replace(/\.[^.\s]+$/, '').trim();
@@ -245,20 +263,21 @@ export function runInputs(graph, nodeId) {
   validateGraph(graph);
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const target = nodes.get(nodeId);
-  if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
+  if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !isModel3d(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
   const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
   let images = ordered.flatMap(node => node.type === 'image' ? [imageReference(node)]
-    : (node.data.template?.assets || []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
-  if (isDescribe(target) || isUpscale(target)) images = images.map(({ mask, ...image }) => image);
+    : (node.type === 'text' ? node.data.template?.assets || [] : []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
+  if (isDescribe(target) || isUpscale(target) || isModel3d(target)) images = images.map(({ mask, ...image }) => image);
   else {
     if (images.filter(image => image.mask).length > 1) throw new Error('Only one masked image per prompt. Remove the mask from the others or duplicate the node.');
     const stale = images.find(image => image.mask && image.mask.source !== image.asset);
     if (stale) throw new Error(`The mask on “${stale.label}” no longer matches the image. Paint it again.`);
   }
-  if (isUpscale(target)) {
+  if (isUpscale(target) || isModel3d(target)) {
+    const model3d = isModel3d(target), limit = model3d ? maxModel3dImages : maxUpscaleImages;
     const pictures = ordered.filter(node => node.type === 'image').map(node => { const { mask, ...image } = imageReference(node); return image; });
-    if (!pictures.length) throw new Error('Connect an image to upscale.');
-    if (pictures.length > maxUpscaleImages) throw new Error(`Connect at most ${maxUpscaleImages} images to one upscale node.`);
+    if (!pictures.length) throw new Error(model3d ? 'Connect an image to turn into 3D.' : 'Connect an image to upscale.');
+    if (pictures.length > limit) throw new Error(`Connect at most ${limit} images to one ${model3d ? '3D' : 'upscale'} node.`);
     return { target, ordered, images: pictures, context: [] };
   }
   if (generationReferences(images, target.data.generator === generators.gptImage).length > 10) throw new Error('Use at most 10 connected reference images per run.');
@@ -279,7 +298,7 @@ export const promptText = node => [node.data.template?.instructions.trim() ? `Cu
 export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
   const { target, ordered, images, context } = runInputs(graph, nodeId);
   // An upscale has no prompt; this shape only lets the editor notice changed inputs. Codex never runs it.
-  if (isUpscale(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: upscaleTask };
+  if (isUpscale(target) || isModel3d(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: target.data.task };
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
   const attachments = generationReferences(images, maskInput);
   if (attachments.length > 10) throw new Error('Use at most 10 connected reference images per run.');
@@ -346,7 +365,7 @@ export function reconcileStampGraph(before, next) {
 export function groupRunOutputs(graph, run, newOutputId) {
   const grouped = new Set((graph.groups || []).flatMap(group => group.nodeIds)), page = runOutputPage(graph, run), resolve = pageResolver(boardPages(graph));
   // A run whose page was deleted continues on the first page; a group never spans both.
-  const existing = new Set(graph.nodes.filter(node => node.type === 'image' && resolve(node.page) === page).map(node => node.id));
+  const existing = new Set(graph.nodes.filter(node => ['image', 'model'].includes(node.type) && resolve(node.page) === page).map(node => node.id));
   // Once the user removes this group, never recreate it during the same run.
   if (run.autoGroupId) {
     const group = (graph.groups || []).find(item => item.id === run.autoGroupId);
@@ -362,7 +381,7 @@ export function groupRunOutputs(graph, run, newOutputId) {
   let number = 1; while (names.has(`Group ${number}`)) number++;
   const id = crypto.randomUUID();
   // One run's images fold into a slideshow that shows one of them at a time.
-  groups.push({ id, name: `Group ${number}`, nodeIds: outputs, collapsed: false, slideshow: true });
+  groups.push({ id, name: `Group ${number}`, nodeIds: outputs, collapsed: false, slideshow: !graph.nodes.some(node => outputs.includes(node.id) && node.type === 'model') });
   run.autoGroupId = id;
   graph.revision++;
   return true;
@@ -370,10 +389,12 @@ export function groupRunOutputs(graph, run, newOutputId) {
 
 export const captionHeight = node => node.type === 'image' && !node.data?.collapsed ? 24 : 0;
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
+  : node.type === 'model' ? { width: 310, height: 386 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
 // Shared with the canvas, so a server can reserve a prompt's text and Inputs row without browser measurements.
 export function textNodeSize(node, inputs = false) {
+  if (isModel3d(node)) return { width: 310, height: 180 };
   if (node.data?.height) return { width: 310, height: node.data.height };
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
   return { width: 310, height: Math.min(310, Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0))) };

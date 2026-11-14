@@ -21,7 +21,7 @@ export function runPlaceholders(graph, runs, page, spawns) {
     if (!['running', 'queued'].includes(run.status)) continue;
     const prompt = byId.get(run.nodeId);
     if (!prompt || nodePage(prompt, pages) !== page || runOutputPage(graph, run) !== page) continue;
-    const task = run.task || prompt.data.task, describe = task === 'describe', upscale = task === 'upscale', outputIds = run.outputIds || [];
+    const task = run.task || prompt.data.task, describe = task === 'describe', model3d = task === 'model3d', upscale = task === 'upscale' || model3d, outputIds = run.outputIds || [];
     const expected = describe ? 1 : upscale ? (run.images?.length || run.snapshot?.filter(node => node.type === 'image').length
       || new Set(graph.edges.filter(edge => edge.target === run.nodeId && byId.get(edge.source)?.type === 'image').map(edge => edge.source)).size || 1)
       : isSiteGenerator(run.provider) ? run.variants || 1 : codexImageActive(run) ? outputIds.length + 1 : 1;
@@ -31,13 +31,13 @@ export function runPlaceholders(graph, runs, page, spawns) {
     // Browser measurements are not stored; predict with the same bounds the server and shared document receive.
     const scratch = { ...graph, nodes: graph.nodes.map(({ measured, ...node }) => node) }, placement = { ...run, outputIds: [...outputIds] };
     for (let slot = outputIds.length; slot < expected; slot++) {
-      const aspect = upscale ? knownAspect(inputs[slot]) || 1 : knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1;
-      const id = `${run.id}-pending-${slot}`, output = { id, type: describe ? 'text' : 'image',
+      const aspect = model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1;
+      const id = `${run.id}-pending-${slot}`, output = { id, type: describe ? 'text' : model3d ? 'model' : 'image',
         position: { x: target.position.x + 390, y: target.position.y + (describe ? 0 : slot * 340) }, data: { aspect, runId: run.id } };
       positionRunOutput(output, scratch, placement);
       const size = nodeSize(output), spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
       nodes.push({ ...output, type: 'pending', selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
-        measured: size, style: size, data: { ...output.data, ...animation, describe, status: run.status === 'queued' ? 'Queued' : describe ? 'Describing' : upscale ? 'Upscaling' : 'Generating', seed: describe ? undefined : waitingSeed(id) } });
+        measured: size, style: size, data: { ...output.data, ...animation, describe, status: run.status === 'queued' ? 'Queued' : describe ? 'Describing' : model3d ? 'Generating 3D' : upscale ? 'Upscaling' : 'Generating', seed: describe ? undefined : waitingSeed(id) } });
       edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, type: 'pending', data: animation, className: 'pending-edge', selectable: false, deletable: false, focusable: false });
       scratch.nodes.push(output); placement.outputIds.push(id);
     }

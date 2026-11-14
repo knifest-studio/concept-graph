@@ -419,3 +419,17 @@ runtimeTest('ICE endpoint requires authentication and board access, including vi
   assert.equal((await request(path, { method: 'POST', headers: { ...headers, Origin: 'https://elsewhere.example' } })).status, 403);
   assert.equal((await request(path, { headers })).status, 405);
 });
+
+runtimeTest('cloud MCP creates 3D generators and reads a model poster without returning GLB as image bytes', async t => {
+  const { env, request, rooms, files } = setup(t), lead = await connect(request, 'lead@studio.example'), created = await lead.tool('create_board', { name: '3D models' }), boardId = created.board.id;
+  env.FAL_KEY = 'fake-fal-key';
+  const uploaded = await lead.tool('upload_image', { data: Buffer.from(png(400, 200)).toString('base64') });
+  const image = await lead.tool('add_image_node', { boardId, asset: uploaded.asset, caption: 'Cube' });
+  const added = await lead.tool('add_model3d_node', { boardId, imageIds: [image.nodeId], modeler: 'rodin' }); assert.ok(added.nodeId);
+  const room = rooms.get(boardId), before = readCloudGraph(room.document), modelId = 'test-model';
+  applyLocalGraph(room.document, { ...before, nodes: [...before.nodes, { id: modelId, type: 'model', position: { x: 800, y: 0 }, data: { asset: '11111111-1111-1111-1111-111111111111.glb', poster: uploaded.asset, name: 'Cube 3D' } }] }, before, 'test');
+  const view = await lead.tool('get_board', { boardId }); assert.equal(view.nodes.find(n => n.id === modelId).data.poster, uploaded.asset);
+  const imageContent = await lead.tool('get_image', { boardId, nodeId: modelId }); assert.equal(imageContent[1].type, 'image'); assert.equal(imageContent[1].mimeType, 'image/png'); assert.equal(imageContent[1].data, Buffer.from(png(400, 200)).toString('base64'));
+  const outsider = await connect(request, 'outsider@example.com', 'Outsider'); assert.match((await outsider.tool('get_image', { boardId, nodeId: modelId })).error, /access/);
+  assert.match((await lead.tool('get_image', { boardId, nodeId: added.nodeId })).error, /no image or model poster/);
+});

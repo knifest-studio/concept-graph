@@ -8,7 +8,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor } from '../graph.mjs';
+import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
@@ -27,8 +27,9 @@ import { CopyCustomNodes } from './CopyCustomNodes.jsx';
 import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDiscovery } from './custom-node-discovery.mjs';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
+import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
 import { ImageEditor } from './ImageEditor.jsx';
-import { hasGenerationPrompt } from './image-edits.mjs';
+import { hasGenerationPrompt, imageAssets } from './image-edits.mjs';
 import { nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -96,6 +97,7 @@ const finishBoardEdit = () => { const element = document.activeElement; if (elem
 
 function Icon({ name, size = 18 }) {
   const paths = {
+    cube: <><path d="m12 3 9 5v8l-9 5-9-5V8Z"/><path d="m3 8 9 5 9-5m-9 5v8m-5-16 9 5"/></>,
     sound: <><path d="M11 4 6 8H3v8h3l5 4Z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></>,
     muted: <><path d="M11 4 6 8H3v8h3l5 4Z"/><path d="m16 9 6 6m0-6-6 6"/></>,
     mic: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></>,
@@ -165,7 +167,7 @@ function PromptInputs({ data, light = false }) {
 
 function FullTextNode(props) {
   const working = useCanvasValue(state => busy(state.latestRun.get(props.id)) || state.starting === props.id);
-  return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : props.data.task === upscaleTask ? <UpscaleNode {...props}/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
+  return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : props.data.task === model3dTask ? <Model3dNode {...props}/> : props.data.task === upscaleTask ? <UpscaleNode {...props}/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
 }
 
 function ExpandedTextNode({ id, data, selected }) {
@@ -357,6 +359,27 @@ function UpscaleNode({ id, data, selected }) {
   </article></NodeContextMenu>;
 }
 
+const modelerOptions = [[modelers.hunyuan, 'Hunyuan 3D'], [modelers.trellis, 'TRELLIS 2'], [modelers.rodin, 'Rodin']];
+const modelerHints = { hunyuan: 'Detailed textures · about $0.38 a model', trellis: '1024p geometry and textures · about $0.30 a model', rodin: 'PBR materials · about $0.40 a model' };
+function Model3dNode({ id, data, selected }) {
+  const canvas = useCanvas(), view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, images: (state.inputs.get(id) || noInputs).images, nanoReady: state.model3dReady, nanoNote: state.model3dNote, falReady: state.falReady, readOnly: state.readOnly, focus: state.focusId === id }), shallowEqual);
+  const pending = view.active || view.starting, canCancel = view.starting || view.byName === view.userName, modeler = modelerOf({ data });
+  const blocked = !view.falReady || !view.nanoReady, canRun = view.images > 0 && view.images <= maxModel3dImages;
+  const note = !view.falReady ? t('3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.') : view.nanoNote;
+  useEffect(() => { if (view.focus) canvas.clearFocus(); }, [view.focus]);
+  return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node describe-node upscale-node model3d-node ${pending ? 'working' : ''}`}>
+    <Handle type="target" position={Position.Left} aria-label={t('Connect images to turn into 3D')}/>
+    <header className="node-drag"><span className="describe-label"><Icon name="cube" size={14}/>{t('3D model')}</span><button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button>
+      <div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{t('Generating 3D')}… {view.timer}</span>}
+        <button className={`run-button nano${pending ? ' run-pending' : ''}`} type="button" aria-label={t('Generate 3D models')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun || blocked || view.readOnly} data-tooltip={blocked ? note : !view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxModel3dImages }) : t('Generate 3D models')}><Icon name="play" size={12}/><span>{t('Generate')}</span></button></div>
+        {pending && canCancel && view.active && <button className="run-cancel" type="button" onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{!view.falReady ? note : t(modelerHints[modeler])}</small></div>
+    <div className="node-inputs">{view.images ? plural(view.images, '{count} image to turn into 3D', '{count} images to turn into 3D') : t('Connect images, then click Generate')}</div>
+    {selected && blocked && view.falReady && !pending && <NanoReadiness note={note}/>}{failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}<Handle type="source" position={Position.Right}/>
+  </article></NodeContextMenu>;
+}
+const ModelNode = props => <ModelCard {...props} assetUrl={assetUrl} Icon={Icon}/>;
+
 // How large an image is, once known: generated and upscaled images record their pixel size. The badge keeps a readable
 // size on screen when the board is zoomed out; the zoom is read in tenths, so panning never re-renders it.
 const ResolutionBadge = ({ pixels }) => { const label = resolutionLabel(pixels); return label ? <ScaledBadge label={label} title={`${pixels.width} × ${pixels.height}`}/> : null; };
@@ -384,6 +407,11 @@ function LightNode({ id, type, data, selected }) {
   // Captions are left out zoomed out: at this size they would only be specks of text over the board.
   if (isImage) return <div data-feel-node={id} className="image-node-wrapper lod-node"><article className="node-card image-node">{data.runId && <LodHandle type="target"/>}<LightImage id={id} asset={data.asset} aspect={data.aspect} create={view.create}/>{data.mask && <ImageMask data={data} preview={false}/>}<ResolutionBadge pixels={data.pixels}/><LodHandle type="source"/></article></div>;
   // Same rows as the full card, so the card keeps its height (and its links stay put) when zooming in or out.
+  if (data.task === model3dTask) return <article data-feel-node={id} className={`node-card text-node lod-node describe-node upscale-node model3d-node${view.working ? ' working' : ''}`}>
+    <LodHandle type="target"/><header><span className="describe-label"><Icon name="cube" size={14}/>{t('3D model')}</span></header>
+    <div className="upscale-settings" aria-hidden="true"><div className="upscale-options">{modelerOptions.map(([value, label]) => <span key={value} data-on={modelerOf({ data }) === value || undefined}>{label}</span>)}</div><small>{t(modelerHints[modelerOf({ data })])}</small></div>
+    <div className="node-inputs">{view.images ? plural(view.images, '{count} image to turn into 3D', '{count} images to turn into 3D') : t('Connect images, then click Generate')}</div><LodHandle type="source"/>
+  </article>;
   if (data.task === upscaleTask) {
     const upscaler = upscalerOf({ data }), scale = upscaleScale({ data }), sizes = upscaler === upscalers.nanoBanana ? [[2, '2K'], [4, '4K']] : [[2, '×2'], [4, '×4']], unset = upscaler !== upscalers.nanoBanana && !view.falReady;
     return <article data-feel-node={id} className={`node-card text-node lod-node describe-node upscale-node${view.working ? ' working' : ''}`}>
@@ -518,7 +546,7 @@ function AnnotationNode(props) {
   const canvas = useCanvas(), Component = useDetail(props.id) === 'full' ? { drawing: DrawingNode, sticky: StickyNode, stamp: StampNode, shape: ShapeNode, arrow: ArrowNode }[props.type] : LightAnnotation;
   return <Component {...props} actions={canvas}/>;
 }
-const nodeTypes = { text: TextNode, image: ImageNode, pending: PendingNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode, shape: AnnotationNode, arrow: AnnotationNode };
+const nodeTypes = { text: TextNode, image: ImageNode, model: ModelNode, pending: PendingNode, group: GroupNode, section: SectionNode, drawing: AnnotationNode, sticky: AnnotationNode, stamp: AnnotationNode, shape: AnnotationNode, arrow: AnnotationNode };
 function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
@@ -529,7 +557,7 @@ const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge };
 const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
 // One generation in the History tab. Memoized: a board can hold thousands, and only active runs need the 1 s timer.
 const HistoryItem = React.memo(function HistoryItem({ run, now, page, canCancel, canvas }) {
-  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : plural(run.outputIds.length, '{count} image', '{count} images')}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
+  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : run.task === model3dTask ? `${modelNames[run.model] || t('3D model')} · ${plural(run.outputIds.length, '{count} model', '{count} models')}` : plural(run.outputIds.length, '{count} image', '{count} images')}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
 });
 const noSections = Object.freeze([]);
 
@@ -778,7 +806,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const [status, setStatus] = useState({}), [saved, setSaved] = useState('Loading…'), [loaded, setLoaded] = useState(false);
   const [limitsVersion, setLimitsVersion] = useState(0);
   const [toast, setToast] = useState(''), [viewId, setViewId] = useState(null), [viewSize, setViewSize] = useState(null), [starting, setStarting] = useState(null);
-  const [imageEdit, setImageEdit] = useState(null);
+  const [imageEdit, setImageEdit] = useState(null), [modelView, setModelView] = useState(null);
   const [tab, setTab] = useState('canvas');
   const [diagnosticsId, setDiagnosticsId] = useState(null);
   const diagnosticsReturnFocus = useRef(null);
@@ -836,7 +864,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // A viewer of a shared board sees it live and can select, copy and look around but change nothing; the room ignores their edits too.
   const readOnly = cloud && cloudSession.role === 'view', readOnlyRef = useRef(readOnly), canRename = !cloud || cloudSession.role === 'owner'; readOnlyRef.current = readOnly;
   useEffect(() => { if (readOnly) setImageEdit(null); }, [readOnly]);
-  modalOpen.current = !!help || !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || copyTemplates || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
+  modalOpen.current = !!modelView || !!help || !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || copyTemplates || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   useEffect(() => {
     const receive = event => { if (event.key === discoveryKey) { const value = readDiscovery(); discoveryRef.current = value; setDiscovery(value); if (value.used || value.invitationSeen) setTemplateInvitation(false); if (value.used) setTemplateTip(null); } };
     window.addEventListener('storage', receive);
@@ -877,6 +905,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const gettingStartedSteps = checklistSteps(guide.state, helperNeeded, showHelperStep.current ? false : readiness.key === 'ready');
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
   const nano = nanoState(cloudSession?.nano), nanoRef = useRef(nano); nanoRef.current = nano;
+  const model3d = nanoState(cloudSession?.nano?.model3d || cloudSession?.nano), model3dRef = useRef(model3d); model3dRef.current = model3d;
   const gpt = nanoState(cloudSession?.nano?.gptImage, generators.gptImage), gptRef = useRef(gpt); gptRef.current = gpt;
   const nodeRef = useRef([]), edgeRef = useRef([]), base = useRef({ revision: 0, nodes: [], edges: [] }), nodeCommit = useRef(null);
   const cloudBase = useRef({ nodes: [], edges: [], groups: [], runs: [] }), applyingCloud = useRef(false), cloudOfflineEdits = useRef(false), cloudRuns = useRef({ source: null, shown: new WeakMap() });
@@ -939,7 +968,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     putNodes(current => current.some(node => node.selected) ? current.map(node => node.selected ? { ...node, selected: false } : node) : current);
     putGroups(current => current.some(group => group.selected) ? current.map(group => group.selected ? { ...group, selected: false } : group) : current);
     deselectSections();
-    setFocusId(null); setViewId(null); viewerMoved.current = true;
+    setFocusId(null); setViewId(null); setModelView(null); viewerMoved.current = true;
     rememberPage();
     if (!restoreView) return true;
     const remembered = pagePreference.current.viewports[target];
@@ -1444,6 +1473,15 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       putEdges(current => [...current, ...added]); if (cloud) track('connections_made', { count: added.length }); markDirty();
     } catch (error) { notify(error.message); }
   };
+  const addModel3d = (sourceIds = pageGraph().nodes.filter(node => node.selected && node.type === 'image').map(node => node.id)) => {
+    if (!cloud || mcpLocked.current || !loaded || switchingRef.current) return;
+    try {
+      const sources = sourceIds.slice(0, maxModel3dImages), node = addText(sources.length ? promptSpot(sources[0]) : undefined, '', null, { task: model3dTask, modeler: modelers.hunyuan });
+      if (!sources.length) return;
+      const added = sources.map(source => ({ id: id(), source, target: node.id })); effects.createEdges(added.map(edge => edge.id), added.map(edge => edge.target));
+      putNodes(current => nameImageConnections(current, edgeRef.current, added)); putEdges(current => [...current, ...added]); markDirty();
+    } catch (error) { notify(error.message); }
+  };
   const promptFrom = sourceId => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
     if (!['text', 'image'].includes(nodeRef.current.find(node => node.id === sourceId)?.type)) return;
@@ -1497,6 +1535,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const at = { x: point.x - 155, y: point.y - 40 };
     if (value?.kind === 'text') addText(at);
     else if (value?.kind === 'describe') addText(at, '', null, { task: describeTask });
+    else if (value?.kind === 'model3d' && cloud) addText(at, '', null, { task: model3dTask, modeler: modelers.hunyuan });
     else if (value?.kind === 'upscale' && cloud) addText(at, '', null, upscaleData());
     else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template, {}, 'drop'); }
     // Images still come from a file; they are placed where the item was dropped.
@@ -1534,6 +1573,21 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (!alive.current || readOnlyRef.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
     const { asset } = await api('/api/assets', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
     return asset;
+  };
+  const saveModelView = async (nodeId, blob) => {
+    if (readOnlyRef.current || mcpLocked.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
+    const model = nodeRef.current.find(node => node.id === nodeId && node.type === 'model');
+    if (!model) throw new Error(t('Node not found.'));
+    uploads.current++; setUploading(true);
+    try {
+      const asset = await uploadEdit(blob);
+      if (!alive.current || switchingRef.current || readOnlyRef.current || mcpLocked.current) throw new Error(t('Could not save this view. Try again.'));
+      const size = imageSize(new Uint8Array(await blob.arrayBuffer())), page = nodePage(model, pagesRef.current);
+      const node = assignPage({ id: id(), type: 'image', z: nextLayer(nodeRef.current), position: { x: model.position.x + 400, y: model.position.y }, data: { asset, caption: uniqueImageName(nodeRef.current, t('{name} view', { name: model.data.name })), createdAt: new Date().toISOString(), ...(size ? { pixels: size, aspect: size.height / size.width } : {}), ...(cloudSession?.user ? { author: boardAuthor(cloudSession.user) } : {}) } }, page);
+      const spot = freeSpot(creationGraph(page), node.position, undefined, nodeSize(node)); node.position = spot;
+      checkpoint(); effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
+      if (cloud) track('node_created', { nodeType: 'image', via: 'model-view' });
+    } finally { uploads.current--; setUploading(uploads.current > 0); }
   };
   const applyImageEdit = (data, makePrompt) => {
     if (!alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
@@ -1851,6 +1905,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, ...change } } : item));
     markDirty();
   };
+  const setModeler = (nodeId, modeler) => {
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (mcpLocked.current || readOnlyRef.current || node?.data.task !== model3dTask || node.data.modeler === modeler) return;
+    checkpoint(); putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, modeler } } : item)); markDirty();
+  };
   const setGenerator = (nodeId, generator) => {
     const node = nodeRef.current.find(item => item.id === nodeId);
     if (mcpLocked.current || node?.type !== 'text' || (node.data.generator || null) === (generator || null)) return;
@@ -2071,12 +2130,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       if (selection) {
         event.preventDefault();
         const position = flow.screenToFlowPosition(mouse.current);
-        const assets = [...new Set(selection.nodes.filter(node => node.type === 'image').map(node => node.data.asset))];
+        const assets = [...new Set(selection.nodes.flatMap(imageAssets))];
         uploads.current++; setUploading(true);
         try {
           await Promise.all(assets.map(async asset => {
             const response = await request(`/assets/${asset}`, { method: cloud ? 'GET' : 'HEAD' });
-            if (!response.ok) throw new Error(t('A copied image is unavailable in this app installation.'));
+            if (!response.ok) throw new Error(t('A copied asset is unavailable in this app installation.'));
             if (cloud) response.body?.cancel().catch(() => {});
           }));
           insertSelection(selection, position);
@@ -2146,7 +2205,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     catch (error) { notify(error.message); return; }
     if (starting || generationStarting.current) return;
     const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesSiteGenerator(runNode?.data);
-    const site = runNode?.data.generator === generators.gptImage ? gptRef.current : nanoRef.current;
+    const site = runNode?.data.task === model3dTask ? model3dRef.current : runNode?.data.generator === generators.gptImage ? gptRef.current : nanoRef.current;
     if (nanoRun && !(isDescribe(runNode) ? site.selectable : site.ready)) { notify(site.note); cloudSession.refreshNano?.(); return; }
     if (!nanoRun && readinessRef.current.key !== 'ready') {
       pendingIntent.current = requested; fixReadiness();
@@ -2169,7 +2228,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [result], true);
       setRuns(current => current.some(r => r.id === result.id) ? current : [...current, result]);
     } catch (error) {
-      if (cloud && !userGeneration.current?.runId) track('generation_failed', { generator: runNode?.data.generator || 'codex', task: runNode?.data.task || 'image', variants: runNode?.data.variants || 1, duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
+      if (cloud && !userGeneration.current?.runId) track('generation_failed', { generator: runNode?.data.task === model3dTask ? 'fal' : runNode?.data.generator || 'codex', model: runNode?.data.task === model3dTask ? model3dModels[modelerOf(runNode)] : undefined, task: runNode?.data.task || 'image', variants: runNode?.data.variants || 1, duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
       effects.failedStart();
       if (error.value?.graph) mergeRemote(error.value.graph);
       if (nanoRun) cloudSession.refreshNano?.();
@@ -2399,7 +2458,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
   const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
-  const viewNode = viewId ? nodes.find(node => node.id === viewId) : undefined;
+  useEffect(() => { if (loaded && modelView && !nodes.some(node => node.id === modelView.id && node.type === 'model')) setModelView(null); }, [loaded, nodes, modelView]);
+  const viewNode = viewId ? nodes.find(node => node.id === viewId && node.type === 'image') : undefined;
   const viewRun = runs.find(run => run.id === viewNode?.data.runId);
   const viewInputs = viewRun?.snapshot?.filter(node => node.id !== viewRun.nodeId) || [];
   const viewInfo = viewNode && imageInfo(viewNode, runs, viewSize?.asset === viewNode.data.asset ? viewSize : undefined);
@@ -2467,7 +2527,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
@@ -2475,9 +2535,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
   const canvasState = { latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
-    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
+    nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoBudget: nano.budget, falReady: nano.fal, model3dReady: model3d.ready, model3dNote: model3d.note, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
-  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud }));
+  const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud }));
   useLayoutEffect(() => { canvasStore.update(canvasState); });
   const flowStore = useStoreApi();
   // Zoom reaches the canvas as a CSS variable (group titles) and a detail bucket (card variants), without rendering anything.
@@ -2538,7 +2598,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
 
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
       <div className="sidebar-tabs"><button data-tooltip={t('Show creation tools')} className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>{t('Create')}</button><button data-tooltip={t('View generation history')} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>{t('History')} <small>{runs.length}</small></button></div>
-      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button>{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Make larger copies of connected or selected images')} aria-label={t('Add upscale image node')} {...toolDrag({ kind: 'upscale' })} onClick={() => addUpscale()}><span className="tool-icon describe upscale"><Icon name="upscale"/></span><span>{t('Upscale image')}</span></button>}</div>}<CustomNodesCard cloud={cloud} hosted={hosted} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} templates={templates} error={templatesError} retry={refreshTemplates} toolDrag={toolDrag} add={template => addText(undefined, '', template)} edit={template => setTemplateForm({ template })} view={setTemplateDetails} create={(source = 'sidebar') => { setTemplateInvitation(false); setTemplateForm({ template: null, source }); }} copy={() => setCopyTemplates(true)} invitation={templateInvitation && !readOnly && !modalOpen.current} dismiss={() => { if (cloud) track('tip_event', { tip: 'custom_nodes_invite', action: 'dismissed' }); recordDiscovery({ invitationSeen: true }); setTemplateInvitation(false); }} Icon={Icon}/>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
+      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button>{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Make larger copies of connected or selected images')} aria-label={t('Add upscale image node')} {...toolDrag({ kind: 'upscale' })} onClick={() => addUpscale()}><span className="tool-icon describe upscale"><Icon name="upscale"/></span><span>{t('Upscale image')}</span></button>}{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Turn connected or selected images into 3D models')} aria-label={t('Add 3D model node')} {...toolDrag({ kind: 'model3d' })} onClick={() => addModel3d()}><span className="tool-icon describe"><Icon name="cube"/></span><span>{t('3D model')}</span></button>}</div>}<CustomNodesCard cloud={cloud} hosted={hosted} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} templates={templates} error={templatesError} retry={refreshTemplates} toolDrag={toolDrag} add={template => addText(undefined, '', template)} edit={template => setTemplateForm({ template })} view={setTemplateDetails} create={(source = 'sidebar') => { setTemplateInvitation(false); setTemplateForm({ template: null, source }); }} copy={() => setCopyTemplates(true)} invitation={templateInvitation && !readOnly && !modalOpen.current} dismiss={() => { if (cloud) track('tip_event', { tip: 'custom_nodes_invite', action: 'dismissed' }); recordDiscovery({ invitationSeen: true }); setTemplateInvitation(false); }} Icon={Icon}/>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
       <div className="sidebar-bottom"><span className="legend-text"/> {t('Text')} <span className="legend-image"/> {t('Image')}</div>
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addImages([...event.dataTransfer.files], position); }}>
@@ -2580,6 +2640,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">{t('Connect your ChatGPT account')}</h2><p>{t('Sign in to generate images with your Codex account. Your boards and images stay on this computer.')}</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>{t('Sign in with ChatGPT')}</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>{t('Not now')}</button></div></div>}
     {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">{t('Sign in with ChatGPT')}</h2><p>{t('Continue in your browser to connect your account. Return here when you finish.')}</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">{t('Continue in browser')}</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>{t('Cancel')}</button></div></div>}
     {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
+    {modelView && nodes.some(node => node.id === modelView.id && node.type === 'model') && <ModelDialog key={modelView.id} node={nodes.find(node => node.id === modelView.id)} orbit={modelView.orbit} assetUrl={assetUrl} onClose={() => setModelView(null)} save={saveModelView} readOnly={readOnly} Icon={Icon}/>}
     {viewNode && !imageEdit && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
       <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
       <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName(viewNode)} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>

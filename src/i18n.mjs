@@ -30,6 +30,14 @@ export function t(text, values) {
     const match = /^The mask on “(.*)” no longer matches the image\. Paint it again\.$/s.exec(text);
     if (match) return t('The mask on “{name}” no longer matches the image. Paint it again.', { name: match[1] });
   }
+  if (!values && typeof text === 'string') {
+    let match = /^The 3D generator could not use this image: (.*)$/s.exec(text);
+    if (match) return t('The 3D generator could not use this image: {error}', { error: match[1] });
+    match = /^The 3D generator failed \((\d+)\)\. Try again\.$/.exec(text);
+    if (match) return t('The 3D generator failed ({status}). Try again.', { status: match[1] });
+    match = /^(\d+) of (\d+) images failed: (.*)$/s.exec(text);
+    if (match) return t('{count} of {total} images failed: {error}', { count: match[1], total: match[2], error: t(match[3]) });
+  }
   const translated = dictionaries[current]?.[text];
   return fill(typeof translated === 'string' ? translated : text, values);
 }

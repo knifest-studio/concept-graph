@@ -727,3 +727,12 @@ runtimeTest('analytics ingestion requires a signed-in cookie, the admin page is 
   directory.env.SITE_OWNER_EMAIL = 'person@example.com';
   assert.notEqual((await request('/api/analytics/overview', { cookie })).status, 403);
 });
+
+runtimeTest('GLB assets are authenticated and served as model/gltf-binary for GET and HEAD', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = setup(t), asset = '11111111-1111-1111-1111-111111111111.glb';
+  app.files.set('assets/' + asset, { body: cubeGlb(), size: cubeGlb().length, httpEtag: '"cube"' });
+  const cookie = `cg_session=${await signSession({ name: 'Artist', email: 'artist@example.com' }, app.env.SESSION_SECRET)}`;
+  const response = await app.request('/assets/' + asset, { cookie }); assert.equal(response.status, 200); assert.equal(response.headers.get('Content-Type'), 'model/gltf-binary'); assert.deepEqual(new Uint8Array(await response.arrayBuffer()), cubeGlb());
+  const head = await app.request('/assets/' + asset, { method: 'HEAD', cookie }); assert.equal(head.status, 200); assert.equal(head.headers.get('Content-Type'), 'model/gltf-binary'); assert.equal((await head.arrayBuffer()).byteLength, 0);
+  assert.equal((await app.request('/assets/' + asset)).status, 401);
+});

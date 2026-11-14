@@ -1,3 +1,4 @@
+import { falHost, falQueue, falResultUrl, safeFalEndpoint } from './fal-queue.mjs';
 import { runInputs, nanoModel, seedvrModel, topazModel, upscalerOf, upscalers, upscaleScale } from '../graph.mjs';
 import { imageFormat, imageTypes } from './assets.mjs';
 import { NanoError, nanoPrices } from './nano-banana.mjs';
@@ -10,7 +11,7 @@ import { NanoError, nanoPrices } from './nano-banana.mjs';
 export const upscaleModels = Object.freeze({ [upscalers.topaz]: topazModel, [upscalers.seedvr]: seedvrModel, [upscalers.nanoBanana]: nanoModel });
 // Nothing larger than 8K on its long side: bigger files would be slow for everyone on the board to open.
 export const maxUpscaleSide = 8192;
-const falHost = 'https://queue.fal.run', poll = 1500;
+
 
 // Prices read 2026-11-05 from the fal.ai model pages: Topaz is $0.08 per image up to 24 MP of output, doubling with each
 // size step to $1.36 at 512 MP; SeedVR2 is $0.001 per output megapixel. Nano Banana 2.1 bills 1,680 output tokens at 2K
@@ -81,50 +82,15 @@ export const nanoUpscalePrompt = 'Upscale this image to a higher resolution. Kee
 // The answer comes back as a JPEG; Google accepts no other mime_type here.
 export const nanoUpscaleFormat = (scale, frame) => ({ type: 'image', image_size: scale === 4 ? '4K' : '2K', ...(frame ? { aspect_ratio: nanoAspect(frame) } : {}) });
 
-const falError = (status, detail) => {
-  if ([401, 403].includes(status)) return new NanoError('config', 'fal.ai rejected the site’s key. Ask the site owner to check FAL_KEY.');
-  if (status === 402) return new NanoError('config', 'The site’s fal.ai account is out of credit. Ask the site owner to top it up.');
-  if (status === 422 || status === 400) return new NanoError('bad_request', `The upscaler could not use this image${detail ? `: ${String(detail).replace(/\s+/g, ' ').slice(0, 200)}` : '.'}`);
-  if (status === 429 || status >= 500) return new NanoError('busy', 'The upscaler is busy right now. Try again in a minute.');
-  return new NanoError('upstream', `The upscaler failed${status ? ` (${status})` : ''}. Try again.`);
-};
-const detailOf = body => typeof body?.detail === 'string' ? body.detail : Array.isArray(body?.detail) ? body.detail.map(item => item?.msg).filter(Boolean).join('; ') : body?.error;
-const json = async response => response.json().catch(() => null);
-const wait = (milliseconds, signal) => new Promise((resolve, reject) => {
-  const timer = setTimeout(resolve, milliseconds);
-  signal?.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason || new DOMException('Aborted', 'AbortError')); }, { once: true });
-});
-
-// One upscale on fal.ai's queue. A cancelled call is also cancelled there, so the site is not billed for work nobody wants.
-// `onQueued` runs once fal.ai has accepted the job, from when it may bill it.
-export async function falUpscale({ key, endpoint = falHost, model, input, signal, onQueued = () => {}, fetcher = fetch }) {
-  const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
-  const submitted = await fetcher(`${endpoint}/${model}`, { method: 'POST', headers, body: JSON.stringify(input), signal });
-  const queued = await json(submitted);
-  if (!submitted.ok) throw falError(submitted.status, detailOf(queued));
-  const own = url => typeof url === 'string' && url.startsWith(`${endpoint}/`) ? url : null;
-  const statusUrl = own(queued?.status_url), responseUrl = own(queued?.response_url), cancelUrl = own(queued?.cancel_url);
-  if (!statusUrl || !responseUrl) throw new NanoError('upstream', 'The upscaler returned an unreadable response. Try again.');
-  onQueued();
-  const cancel = () => { if (cancelUrl) fetcher(cancelUrl, { method: 'PUT', headers }).catch(() => {}); };
-  signal?.addEventListener('abort', cancel, { once: true });
-  try {
-    for (;;) {
-      const response = await fetcher(statusUrl, { headers, signal }), status = await json(response);
-      if (!response.ok) throw falError(response.status, detailOf(status));
-      if (status?.status === 'COMPLETED') { if (status.error) throw falError(422, status.error); break; }
-      await wait(poll, signal);
-    }
-    const response = await fetcher(responseUrl, { headers, signal }), result = await json(response);
-    if (!response.ok) throw falError(response.status, detailOf(result));
-    const url = result?.image?.url;
-    // fal.ai serves results over HTTPS (or inline); a local fake may use its own plain-HTTP address.
-    if (typeof url !== 'string' || !(/^(https:|data:image\/)/.test(url) || (endpoint !== falHost && url.startsWith(`${endpoint}/`)))) throw new NanoError('upstream', 'The upscaler returned no image. Try again.');
-    const file = await fetcher(url, { signal });
-    if (!file.ok) throw new NanoError('upstream', 'Could not download the upscaled image. Try again.');
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let format;
-    try { format = imageFormat(bytes); } catch { throw new NanoError('upstream', 'The upscaler returned an image format the board cannot show.'); }
-    return { bytes, format, contentType: imageTypes[format] };
-  } finally { signal?.removeEventListener('abort', cancel); }
+export async function falUpscale(options) {
+  const { endpoint, signal, fetcher = fetch } = options, result = await falQueue(options);
+  const url = result?.image?.url;
+  // fal.ai serves results over HTTPS (or inline); a local fake may use its own plain-HTTP address.
+  if (!falResultUrl(url, safeFalEndpoint(endpoint), true)) throw new NanoError('upstream', 'The upscaler returned no image. Try again.');
+  const file = await fetcher(url, { signal });
+  if (!file.ok) throw new NanoError('upstream', 'Could not download the upscaled image. Try again.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let format;
+  try { format = imageFormat(bytes); } catch { throw new NanoError('upstream', 'The upscaler returned an image format the board cannot show.'); }
+  return { bytes, format, contentType: imageTypes[format] };
 }

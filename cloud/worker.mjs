@@ -1,10 +1,11 @@
 import { getServerByName, routePartykitRequest } from 'partyserver';
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
-import { assetPattern, imageFormat, imageTypes, readBody } from './assets.mjs';
+import { assetPattern, imageFormat, imageTypes, assetTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
 import { nanoStatus } from './nano-banana.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
+import { model3dStatus } from './model3d.mjs';
 import { upscaleSettings } from './upscale.mjs';
 import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
@@ -186,7 +187,7 @@ async function route(request, env) {
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
-  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal }) : error('Method not allowed.', 405);
+  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal, ...(upscaleSettings(env).fal ? { model3d: await model3dStatus(user, env, directory(env)) } : {}) }) : error('Method not allowed.', 405);
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
   if (voiceMatch) {
     if (method !== 'POST') return error('Method not allowed.', 405);
@@ -320,7 +321,7 @@ async function route(request, env) {
     const object = await env.FILES.get(`assets/${asset}`);
     if (!object) return error('Asset not found.', 404);
     const headers = {
-      'Content-Type': imageTypes[asset.split('.').pop()],
+      'Content-Type': assetTypes[asset.split('.').pop()],
       'Cache-Control': 'private, max-age=31536000, immutable',
       'ETag': object.httpEtag,
       'X-Content-Type-Options': 'nosniff'

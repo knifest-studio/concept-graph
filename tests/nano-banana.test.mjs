@@ -785,3 +785,121 @@ runtimeTest('a PNG answer is cut back here, images other than PNGs are padded th
   assert.deepEqual(imageSize(new Uint8Array(Buffer.from(calls[0].body.input[1].data, 'base64'))), { width: 200, height: 100 });
   assert.deepEqual(readCloudGraph(boardRoom.document).nodes.find(node => node.data.runId === result.run.id).data.pixels, { width: 320, height: 180 });
 });
+
+runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters sequentially and refund unstarted work', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), { model3dModels } = await import('../graph.mjs');
+  const { boardRoom, board, directory, files, settle } = cloudSetup(t, { FAL_KEY: 'fal-test-key' }); await boardRoom.setName(board.id);
+  const { model3dPrices } = await import('../cloud/model3d.mjs'); let pendingModel = null, activeDownloads = 0, maxDownloads = 0, calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') {
+      const modeler = Object.keys(model3dModels).find(key => String(url).endsWith(model3dModels[key])); assert.ok(modeler);
+      assert.equal(activeDownloads, 0); pendingModel = modeler; calls.push({ modeler, input: JSON.parse(init.body) });
+      return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result', cancel_url: 'https://queue.fal.run/cancel' });
+    }
+    if (url === 'https://queue.fal.run/status') return Response.json({ status: 'COMPLETED' });
+    if (url === 'https://queue.fal.run/result') return Response.json({ [pendingModel === 'rodin' ? 'model_mesh' : 'model_glb']: { url: 'https://media.example/cube.glb' }, ...(pendingModel === 'hunyuan' ? { thumbnail: { url: 'https://media.example/poster.png' } } : {}) });
+    assert.equal(init.headers, undefined);
+    if (url.endsWith('.png')) return new Response(png(640, 480));
+    if (url.endsWith('.glb')) {
+      activeDownloads++; maxDownloads = Math.max(maxDownloads, activeDownloads);
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(cubeGlb()); controller.close(); activeDownloads--; } }));
+    }
+    throw new Error('Unexpected: ' + url);
+  });
+  const requester = { ...user, email: 'lead@studio.example' }; let spent = 0;
+  for (const modeler of Object.keys(model3dModels)) {
+    const before = readCloudGraph(boardRoom.document), id = '3d-' + modeler;
+    applyLocalGraph(boardRoom.document, { ...before, nodes: [...before.nodes, { id, type: 'text', position: { x: 0, y: 500 }, data: { text: '', task: 'model3d', modeler } }], edges: [...before.edges, { id: 'e-' + modeler, source: 'i', target: id }] }, before, 'seed');
+    const started = await boardRoom.startNano({ nodeId: id, requester }); assert.ok(started.run); await settle();
+    const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(r => r.id === started.run.id), model = graph.nodes.find(n => n.data.runId === run.id);
+    assert.deepEqual([run.status, run.task, run.model, run.label], ['completed', 'model3d', model3dModels[modeler], '3D model']);
+    assert.equal(model.type, 'model'); assert.match(model.data.asset, /\.glb$/); assert.ok(files.has('assets/' + model.data.asset));
+    assert.equal(model.data.name, modeler === 'hunyuan' ? 'Front view 3D' : modeler === 'trellis' ? 'Front view 3D 2' : 'Front view 3D 3');
+    assert.equal(modeler === 'hunyuan' ? model.data.poster !== reference : model.data.poster === reference, true);
+    assert.equal(files.get('assets/' + model.data.asset).httpMetadata.contentType, 'model/gltf-binary');
+    assert.ok(graph.edges.some(e => e.source === id && e.target === model.id)); spent += model3dPrices[modeler];
+    assert.ok(Math.abs(directory.nanoUsage(requester.email).teamSpentUsd - spent) < 1e-9);
+  }
+  assert.equal(maxDownloads, 1); assert.equal(calls.length, 3); assert.equal(directory.nanoUsage(requester.email).usedToday, 3);
+  delete boardRoom.env.FAL_KEY;
+  assert.equal((await boardRoom.startNano({ nodeId: '3d-hunyuan', requester })).status, 503);
+});
+
+runtimeTest('3D rejects invalid files after billing, keeps successful partial outputs, and enforces access/daily/monthly limits', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs');
+  const app = cloudSetup(t, { FAL_KEY: 'key', NANO_BANANA_DAILY_IMAGES: '2', NANO_BANANA_MONTHLY_USD: '1' }); await app.boardRoom.setName(app.board.id);
+  const before = readCloudGraph(app.boardRoom.document), generator = { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } };
+  const second = { id: 'i2', type: 'image', position: { x: 0, y: 500 }, data: { asset: reference, caption: 'Side view' } };
+  applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, generator, second], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }, { id: '3di2', source: 'i2', target: '3d' }] }, before, 'seed');
+  let submissions = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') { submissions++; return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }
+    if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' });
+    if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/model.glb' } });
+    return new Response(submissions === 1 ? cubeGlb() : new Uint8Array(12));
+  });
+  const requester = { ...user, email: 'lead@studio.example' };
+  assert.equal((await app.boardRoom.startNano({ nodeId: '3d', requester: { ...requester, email: 'outsider@example.com' } })).status, 403);
+  const run = await app.boardRoom.startNano({ nodeId: '3d', requester }); await app.settle();
+  const saved = app.boardRoom.document.getMap('runs').get(run.run.id);
+  assert.equal(saved.status, 'completed'); assert.equal(saved.count, 1); assert.match(saved.error, /1 of 2 images failed/);
+  assert.deepEqual(app.directory.nanoUsage(requester.email), { usedToday: 1, teamSpentUsd: .75 });
+  const rejected = await app.boardRoom.startNano({ nodeId: '3d', requester }); assert.equal(rejected.status, 429); assert.match(rejected.error, /budget|limit/); assert.equal(submissions, 2);
+});
+
+runtimeTest('3D shrinks large images via IMAGES and fails before billing when resize is unavailable', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const before = readCloudGraph(app.boardRoom.document);
+  applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } }], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }] }, before, 'seed');
+  app.files.set('assets/' + reference, { bytes: png(5000, 4500), size: 33 });
+  const requester = { ...user, email: 'lead@studio.example' };
+  const failed = await app.boardRoom.startNano({ nodeId: '3d', requester }); await app.settle();
+  assert.match(app.boardRoom.document.getMap('runs').get(failed.run.id).error, /needs resizing/); assert.equal(app.directory.nanoUsage(requester.email).usedToday, 0);
+  const transforms = []; let submitted;
+  app.boardRoom.env.IMAGES = { input: () => ({ transform: value => { transforms.push(value); return { output: async ({ format }) => { assert.equal(format, 'image/jpeg'); return { response: () => new Response(png(2048, 1843)) }; } }; } }) };
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') { submitted = JSON.parse(init.body); return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }
+    if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' }); if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/model.glb' } }); return new Response(cubeGlb());
+  });
+  const success = await app.boardRoom.startNano({ nodeId: '3d', requester }); await app.settle();
+  assert.equal(app.boardRoom.document.getMap('runs').get(success.run.id).status, 'completed'); assert.match(submitted.input_image_url, /^data:image\/jpeg;base64,/); assert.equal(transforms[0].width, 2048); assert.equal(transforms[0].height, 2048);
+});
+
+runtimeTest('concurrent 3D runs share one room lane; cancelling a queued run starts no extra paid call', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const before = readCloudGraph(app.boardRoom.document), generators = ['3da', '3db'].map(id => ({ id, type: 'text', position: { x: 0, y: 500 }, data: { text: '', task: 'model3d' } }));
+  applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, ...generators], edges: [...before.edges, ...generators.map(n => ({ id: 'e' + n.id, source: 'i', target: n.id }))] }, before, 'seed');
+  const entered = gate(), release = gate(); let submissions = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') { submissions++; entered.open(); await release.promise; return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result', cancel_url: 'https://queue.fal.run/cancel' }); }
+    if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' }); if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/model.glb' } }); return new Response(cubeGlb());
+  });
+  const requester = { ...user, email: 'lead@studio.example' }, first = await app.boardRoom.startNano({ nodeId: '3da', requester }); await entered.promise;
+  const second = await app.boardRoom.startNano({ nodeId: '3db', requester }); assert.equal(submissions, 1);
+  await app.boardRoom.cancelNano({ runId: second.run.id, email: requester.email }); release.open(); await app.settle();
+  assert.equal(submissions, 1); assert.equal(app.boardRoom.document.getMap('runs').get(first.run.id).status, 'completed'); assert.equal(app.boardRoom.document.getMap('runs').get(second.run.id).status, 'cancelled');
+  assert.deepEqual(app.directory.nanoUsage(requester.email), { usedToday: 1, teamSpentUsd: .375 });
+});
+
+runtimeTest('fal-only sites report the shared 3D allowance without requiring Gemini configuration', async t => {
+  const app = cloudSetup(t, { FAL_KEY: 'key', GEMINI_API_KEY: '' }), cookie = await app.cookie('lead@studio.example');
+  const status = await (await app.request('/api/nano', { cookie })).json();
+  assert.equal(status.configured, false); assert.equal(status.model3d.configured, true); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 50);
+});
+
+runtimeTest('a 3D thumbnail that fails to store falls back to the source poster', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs'), app = cloudSetup(t, { FAL_KEY: 'key' }); await app.boardRoom.setName(app.board.id);
+  const before = readCloudGraph(app.boardRoom.document);
+  applyLocalGraph(app.boardRoom.document, { ...before, nodes: [...before.nodes, { id: '3d', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } }], edges: [...before.edges, { id: '3di', source: 'i', target: '3d' }] }, before, 'seed');
+  const put = app.env.FILES.put.bind(app.env.FILES);
+  t.mock.method(app.env.FILES, 'put', async (key, ...args) => { if (key.endsWith('.png')) throw new Error('thumbnail write failed'); return put(key, ...args); });
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' });
+    if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' });
+    if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/model.glb' }, thumbnail: { url: 'https://media.example/poster.png' } });
+    return new Response(url.endsWith('.glb') ? cubeGlb() : png(256, 256));
+  });
+  const started = await app.boardRoom.startNano({ nodeId: '3d', requester: { ...user, email: 'lead@studio.example' } }); await app.settle();
+  const graph = readCloudGraph(app.boardRoom.document); assert.equal(graph.runs.find(run => run.id === started.run.id).status, 'completed'); assert.equal(graph.nodes.find(node => node.data.runId === started.run.id).data.poster, reference);
+});

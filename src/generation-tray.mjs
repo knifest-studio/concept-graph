@@ -1,3 +1,4 @@
+import { modelNames } from '../graph.mjs';
 import { runElapsed } from '../timing.mjs';
 import { plural, t } from './i18n.mjs';
 
@@ -19,9 +20,9 @@ export function generationRows(runs, previous = [], now = Date.now(), dismissed 
     if (!running && (!Number.isFinite(settledAt) || (!old && now - settledAt >= 4000) || (!error && now - settledAt >= 4000))) return [];
     const count = run.count ?? run.outputIds?.length ?? 0;
     const describe = run.task === 'describe';
-    const status = running ? run.status === 'queued' ? t('Queued') : describe ? t('Describing') : run.task === 'upscale' ? t('Upscaling') : t('Generating') : error ? t('Failed · {error}', { error: t(run.error || 'Generation failed').split(/\r?\n/)[0] }) : run.status === 'cancelled' ? t('Cancelled') : describe ? t('Done · description') : plural(count, 'Done · {count} image', 'Done · {count} images');
+    const status = running ? run.status === 'queued' ? t('Queued') : describe ? t('Describing') : run.task === 'model3d' ? t('Generating 3D') : run.task === 'upscale' ? t('Upscaling') : t('Generating') : error ? t('Failed · {error}', { error: t(run.error || 'Generation failed').split(/\r?\n/)[0] }) : run.status === 'cancelled' ? t('Cancelled') : describe ? t('Done · description') : run.task === 'model3d' ? plural(count, 'Done · {count} model', 'Done · {count} models') : plural(count, 'Done · {count} image', 'Done · {count} images');
     return [{ run, active: running, error, settledAt, fading: !running && !error && now - settledAt >= 3500,
-      label: (run.label || run.target?.data.text || run.target?.data.template?.name || t('Generation')).trim().split(/\r?\n/)[0],
+      label: (run.task === 'model3d' && modelNames[run.model] ? `${modelNames[run.model]} · ` : '') + (run.label || run.target?.data.text || run.target?.data.template?.name || t('Generation')).trim().split(/\r?\n/)[0],
       status, elapsed: formatElapsed(runElapsed(run, now)) }];
   }).sort((a, b) => Number(b.active) - Number(a.active) || (Date.parse(a.run.createdAt || a.run.startedAt) || 0) - (Date.parse(b.run.createdAt || b.run.startedAt) || 0) || a.run.id.localeCompare(b.run.id));
 }

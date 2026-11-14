@@ -11,7 +11,8 @@ export function validateImageEdits(data) {
   if (data.mask !== undefined && (!object(data.mask) || !['asset', 'marked', 'base'].every(key => png(data.mask[key])) || !asset(data.mask.source))) throw new Error('Invalid image mask.');
 }
 
-export const imageAssets = node => node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key])].filter(Boolean) : node?.data?.template?.assets || [];
+// All node assets, including 3D models and their image posters, must survive copies and archives.
+export const imageAssets = node => node?.type === 'model' ? [node.data.asset, node.data.poster].filter(Boolean) : node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key])].filter(Boolean) : node?.data?.template?.assets || [];
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 export function cropRect(rect, pixels) {
   const x = clamp(Math.round(rect.x), 0, pixels.width - 1), y = clamp(Math.round(rect.y), 0, pixels.height - 1);

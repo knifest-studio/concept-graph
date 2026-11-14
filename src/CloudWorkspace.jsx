@@ -279,10 +279,10 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     const startedRun = run => {
       if (!analyticsEnabled() || ownRuns.has(run.id)) return;
       let input; try { input = collectInputs(reader.read(), run.nodeId); } catch {}
-      const fields = { run: run.id, generator: run.provider || input?.target?.data.generator || 'codex', task: run.task || 'image',
+      const fields = { run: run.id, generator: run.task === 'model3d' ? 'fal' : run.provider || input?.target?.data.generator || 'codex', model: run.model, task: run.task || 'image',
         variants: run.variants || input?.target?.data.variants || 1, references: input?.images?.length || 0, masked: !!input?.snapshot?.some(node => node.type === 'image' && node.data?.mask) };
       ownRuns.set(run.id, fields); track('generation_started', fields);
-      if (run.task === 'describe' || run.task === 'upscale') track(`${run.task}_started`, fields);
+      if (['describe', 'upscale', 'model3d'].includes(run.task)) track(`${run.task}_started`, fields);
       finishedRun(doc.getMap('runs').get(run.id) || run);
     };
     const analyticsRuns = event => { for (const id of event.keysChanged) finishedRun(doc.getMap('runs').get(id)); };

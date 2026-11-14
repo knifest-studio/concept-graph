@@ -4,13 +4,14 @@ import { getServerByName } from 'partyserver';
 import { sessionIdentity, validateName } from './auth.mjs';
 import { imageFormat, imageTypes, readBody } from './assets.mjs';
 import { base64, nanoStatus } from './nano-banana.mjs';
+import { model3dStatus } from './model3d.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
 import { canEdit } from './access.mjs';
 import { checkArgs, fail, listedTools, toolByName } from './mcp-tools.mjs';
 
 const versions = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const maxRequest = 30 * 1024 * 1024, maxUpload = 20 * 1024 * 1024, maxShown = 4.5 * 1024 * 1024;
-const instructions = 'Concept Graph team boards: prompts, images and notes on a shared canvas. Start with list_boards, then get_board; look at images with get_image. '
+const instructions = 'Concept Graph team boards: prompts, images, 3D models and notes on a shared canvas. Start with list_boards, then get_board; look at images with get_image. '
   + 'Every change appears at once for everyone on the board, made in the name of the person who connected you, so ask before deleting boards, pages or much content. '
   + 'list_chat reads persistent board chat (50 per page); send_chat posts as this person, marked via agent, with an optional nodeId link. Viewers can use both. Chat is separate from canvas versions. '
   + 'start_run generates like the Generate button: Nano Banana or GPT Image on the team API keys with shared access and limits, Codex on this person\'s own computer through their open board.';
@@ -38,7 +39,7 @@ const boardName = value => { try { return validateName(value, 80); } catch (caus
 
 // Account tools: what the Worker answers without opening a board.
 const account = {
-  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)) }),
+  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), model3d: await model3dStatus(user, env, directory(env)) }),
   list_boards: async (env, user) => ({ boards: (await directory(env).boardsFor(user.email)).map(brief) }),
   create_board: async (env, user, args) => {
     const store = directory(env), board = await store.createBoard(boardName(args.name), user);
@@ -71,7 +72,19 @@ const account = {
   // As on the board, the shared preview stands in for the original when there is one.
   get_image: async (env, user, args) => {
     const content = [];
-    for (const asset of args.assets) {
+    let assets = args.assets;
+    if (args.nodeId !== undefined) {
+      if (!args.boardId || assets) fail('For a node, pass boardId and nodeId without assets.');
+      const board = await boardAccess(env, user, args.boardId, 'view');
+      const answer = await (await getServerByName(env.BoardRoom, board.id)).mcp({ tool: 'get_board', args: { boardId: board.id, runs: 0 }, user });
+      if (answer.error) fail(answer.error);
+      const node = answer.value.nodes.find(item => item.id === args.nodeId);
+      const asset = node?.type === 'model' ? node.data.poster : node?.type === 'image' ? node.data.asset : null;
+      if (!asset) fail('This node has no image or model poster.');
+      assets = [asset];
+    }
+    if (!assets?.length) fail('Pass assets, or boardId and nodeId.');
+    for (const asset of assets) {
       const object = (!args.original && await env.FILES.get(`thumbs/${asset}`)) || await env.FILES.get(`assets/${asset}`);
       if (!object) { content.push({ type: 'text', text: `${asset}: not found.` }); continue; }
       if (object.size > maxShown) { content.push({ type: 'text', text: `${asset}: ${Math.round(object.size / 1048576)} MB is too large to show; leave out original to see its preview.` }); continue; }

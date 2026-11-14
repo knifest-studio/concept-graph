@@ -34,7 +34,7 @@ export function preserveRemoteImageCaptions(snapshotNodes, currentNodes, changes
 export function freshOutputNodes(nodes, snapshot, runs) {
   const ids = new Set(snapshot.nodes.map(node => node.id));
   const outputs = runs && new Set(runs.flatMap(run => run.outputIds || []));
-  return nodes.filter(node => node.type === 'image' && node.data.runId && node.data.createdAt >= snapshot.capturedAt && !ids.has(node.id) && (!outputs || outputs.has(node.id)));
+  return nodes.filter(node => ['image', 'model'].includes(node.type) && node.data.runId && node.data.createdAt >= snapshot.capturedAt && !ids.has(node.id) && (!outputs || outputs.has(node.id)));
 }
 
 // Accept new server groups without undoing local deletion or regrouping.

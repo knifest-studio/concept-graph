@@ -1,11 +1,11 @@
-import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs, uniqueImageName } from '../graph.mjs';
+import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs, uniqueImageName, uniqueModelName, isModel3d } from '../graph.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 export const terminalRun = status => ['completed', 'failed', 'cancelled'].includes(status);
 export const runOutputId = (runId, index) => `${runId}-output-${index}`;
 // What history shows for a run of this prompt: its page, a short label and the custom node it used.
-export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || (isDescribe(target) ? 'Describe image' : isUpscale(target) ? 'Upscale image' : 'Generation')).slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
+export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, boardPages(graph))), label: (target.data.text.trim() || target.data.template?.name || (isDescribe(target) ? 'Describe image' : isUpscale(target) ? 'Upscale image' : isModel3d(target) ? '3D model' : 'Generation')).slice(0, 120), ...(target.data.template?.name ? { template: target.data.template.name } : {}) });
 
 /**
  * One generated image joins a board the same way for every generator: a node beside its prompt (or below the run's
@@ -13,7 +13,7 @@ export const runSummary = (graph, target) => ({ ...pageField(nodePage(target, bo
  * `before` is the board as read from the shared document; returns the next graph to apply against it, or null when
  * the run has finished or already shows this output. `fields` are written over the stored run (Codex reports settings).
  */
-export function placeRunOutput(before, { runId, nodeId, run: current, author, fields = {}, output, asset, dimensions }) {
+export function placeRunOutput(before, { runId, nodeId, run: current, author, fields = {}, output, asset, dimensions, model }) {
   const id = runOutputId(runId, output.index);
   if (terminalRun(current?.status) || current?.outputIds?.includes(id)) return null;
   // Copies only what this step changes; untouched nodes stay shared, so the diff skips them.
@@ -23,8 +23,9 @@ export function placeRunOutput(before, { runId, nodeId, run: current, author, fi
   let node = graph.nodes.find(node => node.id === id);
   if (!node) {
     node = imageNode({ id: runId, target, by: run.by }, asset, output.index, dimensions);
+    if (model) { node.type = 'model'; node.data = { asset, name: uniqueModelName(graph.nodes, model.name), ...(model.poster ? { poster: model.poster } : {}), runId, createdAt: node.data.createdAt, ...(run.by ? { author: run.by } : {}) }; }
     node.id = id;
-    node.data.caption = uniqueImageName(graph.nodes, output.caption);
+    if (!model) node.data.caption = uniqueImageName(graph.nodes, output.caption);
     positionRunOutput(node, graph, run);
     graph.nodes.push(node);
   }

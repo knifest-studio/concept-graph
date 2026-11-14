@@ -10,7 +10,7 @@ export const privateTextSelector = [
   '.attention-card', '.codex-share', '.codex-share-panel', '.codex-requests', '.codex-teammates',
   '.board-author', '.toast', '[role="alert"]', '[role="tooltip"]', 'head title'
 ].join(',');
-export const blockedMediaSelector = 'img,video,canvas,.drawing-node,.stroke-preview';
+export const blockedMediaSelector = 'img,video,canvas,model-viewer,.drawing-node,.stroke-preview';
 
 const userSlot = /\{(?:name|label|email|owner|names|domain|prompt|text|message|error|file|filename|path|caption|page)\}/;
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -36,7 +36,7 @@ const variants = integer(`How many images one run makes, 1–${maxVariants}`, { 
 const end = object({ x: number('Canvas x of a free end'), y: number('Canvas y of a free end'), nodeId: text('Node this end holds on to: a prompt, image, sticky or shape', { minLength: 1, maxLength: 120 }) }, [], { description: 'An arrow end: a node to hold on to, or a point' });
 const templateFields = { name: text('Custom node name', { minLength: 1, maxLength: 80 }), instructions: text('Instructions added to every prompt made from it', { maxLength: 100000 }),
   assets: array('Reference image asset IDs, in order', assetId, { maxItems: 10 }), color: hex('Tag colour', templatePalette) };
-const graphNode = { ...object({ id: itemId, type: text('text, image, drawing, sticky, stamp, shape or arrow'), position, page: pageId, z: layer, data: { type: 'object', properties: {}, additionalProperties: true } }, ['id', 'type', 'position', 'data']), additionalProperties: true };
+const graphNode = { ...object({ id: itemId, type: text('text, image, model, drawing, sticky, stamp, shape or arrow'), position, page: pageId, z: layer, data: { type: 'object', properties: {}, additionalProperties: true } }, ['id', 'type', 'position', 'data']), additionalProperties: true };
 const graphEdge = { ...object({ id: itemId, source: itemId, target: itemId }, ['id', 'source', 'target']), additionalProperties: true };
 const graphGroup = { ...object({ id: itemId, name: text('Group name', { minLength: 1, maxLength: 80 }), nodeIds: ids('Member node IDs'), collapsed: boolean('Folded'), slideshow: boolean('Folded, shows one image at a time'), slide: text('Image the folded slideshow shows', { minLength: 1, maxLength: 120 }) }, ['id', 'name', 'nodeIds', 'collapsed']), additionalProperties: true };
 const graphSection = object({ id: itemId, name: text('Section name', { minLength: 1, maxLength: 80 }), x: number('Left edge'), y: number('Top edge'), width: number('Width', { minimum: sectionMinimum.width }), height: number('Height', { minimum: sectionMinimum.height }), color: hex('Background', sectionPalette), page: pageId }, ['id', 'name', 'x', 'y', 'width', 'height']);
@@ -130,9 +130,9 @@ define('create_board', 'Create an empty private board owned by this person.', { 
 define('rename_board', 'Rename a board. Only its owner can.', { boardId, name: text('New board name', { minLength: 1, maxLength: 80 }) }, ['boardId', 'name'], { account: true });
 define('delete_board', 'Delete a board for everyone. It stays in its owner’s Recently deleted for 30 days, where they can restore it, and is then erased. Only its owner can, and only by repeating its exact current name. Ask the user first.', { boardId, confirmName: text('The board’s exact current name', { minLength: 1, maxLength: 80 }) }, ['boardId', 'confirmName'], { account: true, destructive: true });
 define('upload_image', 'Upload a PNG, JPEG, WebP or GIF (at most 20 MB) and get its asset ID for add_image_node or a custom node.', { data: text('The image file, base64-encoded', { minLength: 8, maxLength: 28 * 1024 * 1024 }) }, ['data'], { account: true });
-define('get_image', 'Look at images: returns each as image content. Uses the board preview (at most 1024 px) when one exists; pass original for full size.', { assets: array('Image asset IDs from image nodes', assetId, { minItems: 1, maxItems: 6, uniqueItems: true }), original: boolean('Return the original files instead of previews') }, ['assets'], { access: 'view', account: true });
+define('get_image', 'Look at images: returns each as image content. Uses the board preview (at most 1024 px) when one exists; pass original for full size.', { boardId, nodeId: itemId, assets: array('Image asset IDs from image nodes or poster IDs from model nodes', assetId, { minItems: 1, maxItems: 6, uniqueItems: true }), original: boolean('Return the original files instead of previews') }, [], { access: 'view', account: true });
 
-define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. A section holds whatever lies inside it and stores no member list.',
+define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. Models are model nodes with a GLB asset, name and optional poster; get_image with boardId and nodeId shows their poster. A section holds whatever lies inside it and stores no member list.',
   { pageId: text('Only this page', { minLength: 1, maxLength: 120 }), runs: integer('How many recent generations to include (default 20)', { minimum: 0, maximum: 500 }) }, [], { access: 'view', run: ctx => {
     const { graph, args } = ctx, pages = boardPages(graph);
     if (args.pageId !== undefined && !pages.some(page => page.id === args.pageId)) fail(`Page not found: ${args.pageId}.`);
@@ -152,13 +152,23 @@ define('add_text_node', 'Add a prompt. Connect images or other prompts into it w
     return addNode(ctx, 'text', data, targetPage(ctx.graph, args.pageId), args.position, { author: false });
   } });
 define('add_upscale_node', 'Add an upscale node fed by images on the board, then run it with start_run: each image comes back larger, beside the node, labelled with its new size. nano-banana redraws it at 2K or 4K (about $0.05 or $0.11); when the site has them on, topaz keeps the image as it is (about $0.08 an image, as in Krea) and seedvr restores detail (about $0.02). scale is 2 or 4 (for nano-banana, 2K or 4K). It runs on the team’s keys within the person’s daily images.',
-  { imageIds: array('Images to upscale, on one page', itemId, { minItems: 1, maxItems: maxUpscaleImages, uniqueItems: true }), upscaler: choice('Who upscales', Object.values(upscalers)), scale: integer('2 or 4', { enum: [2, 4], minimum: 2, maximum: 4 }), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
+  { imageIds: array('Images to upscale, on one page', itemId, { minItems: 1, maxItems: maxUpscaleImages, maxModel3dImages, model3dTask, modelers, uniqueItems: true }), upscaler: choice('Who upscales', Object.values(upscalers)), scale: integer('2 or 4', { enum: [2, 4], minimum: 2, maximum: 4 }), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
     const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node'), upscaler = args.upscaler || (ctx.prepared.fal ? upscalers.topaz : upscalers.nanoBanana);
     if (upscaler !== upscalers.nanoBanana && !ctx.prepared.fal) fail('Topaz and SeedVR2 are off on this site for now. Use nano-banana.');
     if (args.imageIds.some(nodeId => found.get(nodeId).type !== 'image')) fail('Upscale images only.');
     const page = targetPage(graph, undefined, args.imageIds), source = found.get(args.imageIds[0]);
     const where = args.position || { x: Math.round(source.position.x + sizeOf(source).width + 90), y: Math.round(source.position.y) };
     const added = addNode(ctx, 'text', { text: '', task: upscaleTask, upscaler, scale: args.scale || 2 }, page, where, { author: false });
+    for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
+    return added;
+  } });
+define('add_model3d_node', 'Add a 3D model generator fed by 1–4 image nodes on one page. Each image becomes one separate GLB model beside it. Run with start_run. hunyuan (default) costs $0.375, trellis $0.30, rodin $0.40 per model, through fal.ai on the team key and shared daily/monthly limits. No text prompts or multi-view input.',
+  { imageIds: array('Images to turn into separate 3D models', itemId, { minItems: 1, maxItems: maxModel3dImages, uniqueItems: true }), modeler: choice('3D generator', Object.values(modelers)), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
+    const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node');
+    if (!ctx.prepared.fal) fail('3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.');
+    if (args.imageIds.some(nodeId => found.get(nodeId).type !== 'image')) fail('Connect image nodes to turn into 3D.');
+    const page = targetPage(graph, undefined, args.imageIds), source = found.get(args.imageIds[0]);
+    const added = addNode(ctx, 'text', { text: '', task: model3dTask, modeler: args.modeler || modelers.hunyuan }, page, args.position || { x: Math.round(source.position.x + sizeOf(source).width + 90), y: Math.round(source.position.y) }, { author: false });
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });
@@ -395,7 +405,7 @@ define('clear_node_template', 'Turn a prompt made from a custom node back into a
   ctx.graph.nodes = ctx.graph.nodes.map(value => value.id === item.id ? switchNodeTemplate(value, null) : value);
   return { nodeId: item.id };
 } });
-define('start_run', 'Generate from a prompt, as the person’s Generate button would. Nano Banana and GPT Image run on the team’s API keys with shared access, daily images and monthly budget. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
+define('start_run', 'Generate from a prompt, as the person’s Generate button would. 3D nodes run through fal.ai; each model counts as one daily image. Nano Banana and GPT Image run on the team’s API keys with shared access, daily images and monthly budget. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
 define('list_versions', 'List the board’s saved versions, newest first: a copy every ten minutes while it changes, one kept just before any large deletion or restore, and a daily backup. Each says when, why, how many nodes and images it held, and who edited.', { limit: integer('How many (1–500, default 50)', { minimum: 1, maximum: 500 }) }, [], { access: 'view' });
 define('restore_version', 'Put the whole board back as it was in a saved version, for everyone. The board as it is now is saved first, so this can be undone by restoring that copy. Generation history is kept. Ask the user first.', { versionId: text('Version ID from list_versions', { minLength: 1, maxLength: 64 }) }, ['versionId'], { destructive: true });
 define('cancel_run', 'Stop a generation this person started. A Codex run is stopped through their open board. Images that already arrived stay.', { runId }, ['runId'], { destructive: true });

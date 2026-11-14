@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, describeTask, upscaleTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor, uniqueImageName } from './graph.mjs';
+import { collectInputs, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, positionRunOutput, commitGraph, generationSettings, nextTemplateColor, uniqueImageName } from './graph.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
@@ -468,7 +468,7 @@ async function processQueue() {
   finally { processing = false; }
 }
 
-const mime = { '.mp4': 'video/mp4', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.json': 'application/json' };
+const mime = { '.glb': 'model/gltf-binary', '.mp4': 'video/mp4', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.json': 'application/json' };
 async function readBody(request, limit = 4 * 1024 * 1024) {
   const chunks = []; let length = 0;
   for await (const chunk of request) {
@@ -509,6 +509,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const inputs = collectInputs(graph, nodeId);
+  if (inputs.task === model3dTask) throw Object.assign(new Error('3D generation runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   if (inputs.task === upscaleTask) throw Object.assign(new Error('Upscaling runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   for (const asset of inputs.images) await stat(path.join(assetsDir, asset));
   ensureConnected();
@@ -820,7 +821,7 @@ const server = http.createServer(async (request, response) => {
     let filename;
     if (url.pathname.startsWith('/assets/')) {
       const asset = url.pathname.slice('/assets/'.length);
-      if (!/^[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(asset)) return json(response, { error: 'Not found.' }, 404);
+      if (!/^[\da-f-]{36}\.(png|jpg|webp|gif|glb)$/.test(asset)) return json(response, { error: 'Not found.' }, 404);
       filename = path.join(assetsDir, asset);
     } else {
       const relative = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);

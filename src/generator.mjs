@@ -1,8 +1,8 @@
-import { generators, isSiteGenerator, upscaleTask } from '../graph.mjs';
+import { generators, isSiteGenerator, upscaleTask, model3dTask } from '../graph.mjs';
 import { t } from './i18n.mjs';
 
 // Upscaling always runs on the site, whatever the node's generator says.
-export const usesSiteGenerator = data => isSiteGenerator(data?.generator) || data?.task === upscaleTask;
+export const usesSiteGenerator = data => isSiteGenerator(data?.generator) || [upscaleTask, model3dTask].includes(data?.task);
 const dollars = value => `$${value.toFixed(2).replace(/\.00$/, '')}`;
 
 // What a site provider can do for this person, from GET /api/nano. Until it answers, Generate is left to the server.
