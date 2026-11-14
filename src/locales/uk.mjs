@@ -1,5 +1,22 @@
 // Ukrainian interface text, keyed by the English it replaces. Plurals list the one, few, many and other forms.
 export default {
+  "Invalid model upload flag.": "Некоректна ознака моделі, доданої з файлу.",
+  "Invalid model file name.": "Некоректна назва файлу моделі.",
+  "Upload 3D model": "Додати 3D-модель із файлу",
+  "Uploading files…": "Завантаження файлів…",
+  "Only GLB files can be added. Export GLB from your 3D app.": "Можна додавати лише файли GLB. Експортуйте GLB зі своєї 3D-програми.",
+  "3D model uploads are available on cloud boards only.": "Додавання 3D-моделей із файлів доступне лише на хмарних дошках.",
+  "Choose a cloud board to upload a 3D model.": "Виберіть хмарну дошку для додавання 3D-моделі.",
+  "Clean textures · about $0.30 a model": "Чіткі текстури · близько $0.30 за модель",
+  "Uploaded": "Додано з файлу",
+  "Original file name": "Початкова назва файлу",
+  "Source": "Джерело",
+  "Invalid GLB magic.": "Файл не має коректного заголовка GLB.",
+  "Only GLB version 2 is supported.": "Підтримується лише GLB версії 2.",
+  "Invalid GLB length.": "Некоректна довжина GLB.",
+  "GLB length does not match the file.": "Довжина GLB не відповідає розміру файлу.",
+  "GLB length does not match the file or exceeds 80 MB.": "Довжина GLB не відповідає розміру файлу або перевищує 80 МБ.",
+  "The 3D model is empty.": "Файл 3D-моделі порожній.",
   "Sticky note": "Стікер",
   "Pan image (fullscreen)": "Перемістити зображення (на весь екран)",
 

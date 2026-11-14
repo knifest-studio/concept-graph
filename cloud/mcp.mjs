@@ -4,7 +4,7 @@ import { getServerByName } from 'partyserver';
 import { sessionIdentity, validateName } from './auth.mjs';
 import { imageFormat, imageTypes, readBody } from './assets.mjs';
 import { base64, nanoStatus } from './nano-banana.mjs';
-import { model3dStatus } from './model3d.mjs';
+import { model3dStatus, storeModelGlb } from './model3d.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
 import { canEdit } from './access.mjs';
 import { checkArgs, fail, listedTools, toolByName } from './mcp-tools.mjs';
@@ -68,6 +68,15 @@ const account = {
     const asset = `${crypto.randomUUID()}.${format}`;
     await env.FILES.put(`assets/${asset}`, bytes, { httpMetadata: { contentType: imageTypes[format] } });
     return { asset };
+  },
+  upload_model: async (env, user, args) => {
+    await boardAccess(env, user, args.boardId, 'edit');
+    if (args.data.length > Math.ceil(maxUpload / 3) * 4) fail('3D models uploaded through MCP can be at most 20 MB.');
+    const bytes = decode(args.data);
+    if (bytes.length > maxUpload) fail('3D models uploaded through MCP can be at most 20 MB.');
+    const asset = `${crypto.randomUUID()}.glb`;
+    try { return { asset, bytes: await storeModelGlb(new Response(bytes), env.FILES, asset) }; }
+    catch (cause) { fail(cause.message); }
   },
   // As on the board, the shared preview stands in for the original when there is one.
   get_image: async (env, user, args) => {

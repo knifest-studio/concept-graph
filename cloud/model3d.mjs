@@ -5,6 +5,7 @@ import { imageFormat, readBody } from './assets.mjs';
 import { upscaleSettings } from './upscale.mjs';
 import { NanoError, nanoSettings } from './nano-banana.mjs';
 
+// Tripo schema and pricing: https://fal.ai/models/tripo3d/h3.1/image-to-3d/llms.txt (standard textures/geometry, no quad).
 // fal model schemas and prices read 2026-11-14:
 // https://fal.ai/models/fal-ai/hunyuan-3d/v3.1/pro/image-to-3d/api (Normal, no PBR/extra views/custom face count)
 // https://fal.ai/models/fal-ai/trellis-2/api (1024) and https://fal.ai/models/fal-ai/hyper3d/rodin/v2.5/api (High, PBR GLB).
@@ -14,19 +15,20 @@ export async function model3dStatus(user, env, directory) {
   const { dailyImages, monthlyUsd } = nanoSettings(env), { usedToday, teamSpentUsd } = await directory.nanoUsage(user.email);
   return { configured, allowed, dailyImages, usedToday, monthlyUsd, teamSpentUsd: Math.round(teamSpentUsd * 100) / 100 };
 }
-export const model3dPrices = Object.freeze({ hunyuan: .375, trellis: .30, rodin: .40 });
+export const model3dPrices = Object.freeze({ hunyuan: .375, trellis: .30, rodin: .40, tripo: .30 });
 export function model3dRequest(graph, nodeId) {
   const { target, images } = runInputs(graph, nodeId);
   return { model3d: true, target, images, modeler: modelerOf(target) };
 }
 export function model3dInput(modeler, image) {
+  if (modeler === 'tripo') return { image_url: image, texture: true, pbr: true, texture_quality: 'standard', geometry_quality: 'standard', quad: false };
   if (modeler === 'trellis') return { image_url: image, resolution: 1024 };
   if (modeler === 'rodin') return { image_urls: [image], geometry_file_format: 'glb', material: 'PBR' };
   return { input_image_url: image, generate_type: 'Normal', enable_pbr: false };
 }
 export async function falModel3d({ modeler, ...options }) {
   const result = await falQueue({ ...options, model: model3dModels[modeler], name: '3D generator' }), endpoint = safeFalEndpoint(options.endpoint);
-  const url = (modeler === 'rodin' ? result?.model_mesh : result?.model_glb)?.url, thumbnail = result?.thumbnail?.url;
+  const url = (['rodin', 'tripo'].includes(modeler) ? result?.model_mesh : result?.model_glb)?.url, thumbnail = (modeler === 'tripo' ? result?.rendered_image : result?.thumbnail)?.url;
   if (!falResultUrl(url, endpoint) || (thumbnail !== undefined && !falResultUrl(thumbnail, endpoint))) throw new NanoError('upstream', 'The 3D generator returned an unreadable model or poster. Try again.');
   return { url, ...(thumbnail ? { thumbnail } : {}) };
 }

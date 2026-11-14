@@ -799,7 +799,7 @@ runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters
     }
     if (url === 'https://queue.fal.run/status/stream') return new Response('data: {"status":"COMPLETED"}\n\n');
     if (url === 'https://queue.fal.run/status') return Response.json({ status: 'COMPLETED' });
-    if (url === 'https://queue.fal.run/result') return Response.json({ [pendingModel === 'rodin' ? 'model_mesh' : 'model_glb']: { url: 'https://media.example/cube.glb' }, ...(pendingModel === 'hunyuan' ? { thumbnail: { url: 'https://media.example/poster.png' } } : {}) });
+    if (url === 'https://queue.fal.run/result') return Response.json({ [['rodin', 'tripo'].includes(pendingModel) ? 'model_mesh' : 'model_glb']: { url: 'https://media.example/cube.glb' }, ...(pendingModel === 'hunyuan' ? { thumbnail: { url: 'https://media.example/poster.png' } } : pendingModel === 'tripo' ? { rendered_image: { url: 'https://media.example/poster.png' } } : {}) });
     assert.equal(init.headers, undefined);
     if (url.endsWith('.png')) return new Response(png(640, 480));
     if (url.endsWith('.glb')) {
@@ -819,13 +819,13 @@ runtimeTest('3D runs use each fal model and its exact budget, place GLBs/posters
     assert.equal(model.data.modeler, modeler); assert.deepEqual(model.data.source, { nodeId: 'i', name: 'Front view' });
     assert.equal(model.data.bytes, cubeGlb().length); assert.equal(model.data.usd, model3dPrices[modeler]);
     assert.equal(model.data.author.name, requester.name); assert.ok(Number.isFinite(Date.parse(model.data.createdAt))); validateGraph(graph);
-    assert.equal(model.data.name, modeler === 'hunyuan' ? 'Front view 3D' : modeler === 'trellis' ? 'Front view 3D 2' : 'Front view 3D 3');
-    assert.equal(modeler === 'hunyuan' ? model.data.poster !== reference : model.data.poster === reference, true);
+    assert.equal(model.data.name, modeler === 'hunyuan' ? 'Front view 3D' : modeler === 'trellis' ? 'Front view 3D 2' : modeler === 'rodin' ? 'Front view 3D 3' : 'Front view 3D 4');
+    assert.equal(['hunyuan', 'tripo'].includes(modeler) ? model.data.poster !== reference : model.data.poster === reference, true);
     assert.equal(files.get('assets/' + model.data.asset).httpMetadata.contentType, 'model/gltf-binary');
     assert.ok(graph.edges.some(e => e.source === id && e.target === model.id)); spent += model3dPrices[modeler];
     assert.ok(Math.abs(directory.nanoUsage(requester.email).teamSpentUsd - spent) < 1e-9);
   }
-  assert.equal(maxDownloads, 1); assert.equal(calls.length, 3); assert.equal(directory.nanoUsage(requester.email).usedToday, 3);
+  assert.equal(maxDownloads, 1); assert.equal(calls.length, 4); assert.equal(directory.nanoUsage(requester.email).usedToday, 4);
   delete boardRoom.env.FAL_KEY;
   assert.equal((await boardRoom.startNano({ nodeId: '3d-hunyuan', requester })).status, 503);
 });

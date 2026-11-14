@@ -14,12 +14,12 @@ test('model facts prefer the persistent node; legacy runs supply only known fact
   const info = rows({ modeler: 'hunyuan', createdAt: '2026-11-14T10:02:40Z', author: { name: 'Lead' }, usd: .375, bytes: 12400000, source: { nodeId: 'input', name: 'Front' } }, run, { formatDate: value => value });
   assert.equal(info.model.value, 'Hunyuan 3D 3.1 Pro'); assert.equal(info.author.value, 'Lead'); assert.equal(info.duration.value, '2 min 43 s');
   assert.equal(info.created.value, '2026-11-14T10:02:40Z'); assert.equal(info.cost.value, '$0.375'); assert.equal(info.file.value, 'GLB · 12.4 MB'); assert.equal(info.source.nodeId, 'input');
-  const legacy = rows({}, run); assert.equal(legacy.model.value, 'Rodin Gen-2.5'); assert.equal(legacy.author.value, 'Old author'); assert.equal(legacy.cost.value, '$0.400');
+  const legacy = rows({}, run); assert.equal(legacy.model.value, 'Rodin Gen-2.5'); assert.equal(legacy.author.value, 'Old author'); assert.equal(legacy.cost.value, '$0.40');
   assert.equal(rows({}, { ...run, model: undefined }).model.value, 'Rodin Gen-2.5');
   const multiple = rows({}, { ...run, outputIds: ['output', 'other'] }); assert.equal(multiple.cost.value, '—'); assert.equal(multiple.duration.note, 'Whole run');
   const old = rows({}, { ...run, snapshot: [{ id: 'i', type: 'image', data: { caption: 'Original' } }] }); assert.equal(old.source.value, 'Original'); assert.equal(old.source.nodeId, 'i');
   const missing = rows(); assert.ok(Object.values(missing).every(row => row.value === (row.key === 'file' ? 'GLB · —' : '—')));
-  assert.equal(rows({ usd: 0 }).cost.value, '$0.000'); assert.equal(rows({}, { ...run, finishedAt: run.startedAt }).duration.value, 'under 1 s');
+  assert.equal(rows({ usd: 0 }).cost.value, '$0.00'); assert.equal(rows({}, { ...run, finishedAt: run.startedAt }).duration.value, 'under 1 s');
   assert.equal(rows({}, { ...run, finishedAt: 'invalid' }).duration.value, '—');
 });
 
@@ -72,4 +72,14 @@ test('partial wireframe failure restores originals and disposes already-created 
   const root = new Group(), material = new MeshStandardMaterial(), first = new Mesh(new BufferGeometry(), material), second = new Mesh(new BufferGeometry(), { clone() { throw new Error('changed API'); } });
   root.add(first, second); const originalSecond = second.material;
   assert.throws(() => wireframeView(sceneOf(root)), /changed API/); assert.equal(first.material, material); assert.equal(second.material, originalSecond);
+});
+
+test('uploaded Info shows source and original filename without generator cost or timing', () => {
+  const info = rows({ uploaded: true, fileName: 'Source name.glb', bytes: 1240, author: { name: 'Uploader' }, createdAt: '2026-11-14T10:00:00Z' }, { model: model3dModels.tripo, usd: .3 }, { stats: { triangles: 12, vertices: 8, meshes: 1, materials: 1, textures: 0 }, formatDate: () => 'today' });
+  assert.equal(info.model.label, 'Source'); assert.equal(info.model.value, 'Uploaded'); assert.equal(info.fileName.value, 'Source name.glb');
+  assert.equal(info.author.value, 'Uploader'); assert.equal(info.created.value, 'today'); assert.equal(info.file.value, 'GLB · 1.2 KB'); assert.equal(info.triangles.value, '12');
+  for (const key of ['duration', 'cost', 'source']) assert.equal(info[key], undefined);
+  assert.equal(rows({ modeler: 'tripo' }).model.value, 'Tripo H3.1');
+  setLanguage('uk');
+  try { assert.equal(rows({ uploaded: true }).model.value, 'Додано з файлу'); } finally { setLanguage('en'); }
 });

@@ -20,10 +20,10 @@ export const upscaleTask = 'upscale';
 export const isUpscale = node => node?.type === 'text' && node.data?.task === upscaleTask;
 export const model3dTask = 'model3d';
 export const isModel3d = node => node?.type === 'text' && node.data?.task === model3dTask;
-export const modelers = Object.freeze({ hunyuan: 'hunyuan', trellis: 'trellis', rodin: 'rodin' });
+export const modelers = Object.freeze({ hunyuan: 'hunyuan', trellis: 'trellis', rodin: 'rodin', tripo: 'tripo' });
 export const modelerOf = node => Object.values(modelers).includes(node?.data?.modeler) ? node.data.modeler : modelers.hunyuan;
 export const maxModel3dImages = 4;
-export const model3dModels = Object.freeze({ hunyuan: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', trellis: 'fal-ai/trellis-2', rodin: 'fal-ai/hyper3d/rodin/v2.5' });
+export const model3dModels = Object.freeze({ hunyuan: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', trellis: 'fal-ai/trellis-2', rodin: 'fal-ai/hyper3d/rodin/v2.5', tripo: 'tripo3d/h3.1/image-to-3d' });
 export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node) && !isModel3d(node);
 // A prompt switched to GPT Image keeps a connected main image, or takes the first image connected to it.
 export function mainImageFor(nodes, edges, node) {
@@ -51,7 +51,7 @@ export const gptImageModel = 'gpt-image-2.5-flare';
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5' });
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5', [model3dModels.tripo]: 'Tripo H3.1' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -115,6 +115,8 @@ export function validateGraph(value) {
     if (node.type === 'model' && node.data.poster !== undefined && !/^[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(node.data.poster)) throw new Error('Invalid model poster.');
     if (node.type === 'model' && (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120)) throw new Error('Invalid model name.');
     if (node.type === 'model' && node.data.modeler !== undefined && !Object.values(modelers).includes(node.data.modeler)) throw new Error('Invalid 3D modeler.');
+    if (node.type === 'model' && node.data.uploaded !== undefined && typeof node.data.uploaded !== 'boolean') throw new Error('Invalid model upload flag.');
+    if (node.type === 'model' && node.data.fileName !== undefined && (typeof node.data.fileName !== 'string' || !node.data.fileName.trim() || node.data.fileName.length > 1000)) throw new Error('Invalid model file name.');
     if (node.type === 'model' && node.data.bytes !== undefined && (!Number.isSafeInteger(node.data.bytes) || node.data.bytes < 20 || node.data.bytes > maxModelBytes)) throw new Error('Invalid model file size.');
     if (node.type === 'model' && node.data.usd !== undefined && (!Number.isFinite(node.data.usd) || node.data.usd < 0 || node.data.usd > 1000)) throw new Error('Invalid model cost.');
     if (node.type === 'model' && node.data.source !== undefined) {

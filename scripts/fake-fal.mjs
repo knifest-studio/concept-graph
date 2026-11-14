@@ -49,6 +49,7 @@ export function fakeFalHandler({ delay = 2000 } = {}) {
     if (!complete) return send(response, 400, { detail: 'Still running.' });
     if ([topazModel, seedvrModel].includes(job.model)) return send(response, 200, { image: { url: `${origin}/upscaled.png` } });
     const file = { url: `${origin}/cube.glb` };
+    if (job.model === model3dModels.tripo) return send(response, 200, { model_mesh: file, rendered_image: { url: `${origin}/thumbnail.png` } });
     return send(response, 200, job.model === model3dModels.rodin ? { model_mesh: file } : { model_glb: file, ...(job.model === model3dModels.hunyuan ? { thumbnail: { url: `${origin}/thumbnail.png` } } : {}) });
   };
 }

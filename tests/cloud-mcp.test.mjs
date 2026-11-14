@@ -462,3 +462,22 @@ runtimeTest('UI and MCP enforce separate 3D access and whoami reports it indepen
   directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'lead@studio.example', allowed: false } });
   assert.equal((await lead.tool('whoami')).model3d.allowed, false); assert.equal((await start()).status, 403);
 });
+
+runtimeTest('MCP GLB upload and placement work without generator access, reject invalid models and refuse viewers', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs');
+  const { request, directory, files } = setup(t), lead = await connect(request, 'lead@studio.example'), viewer = await connect(request, 'viewer@studio.example', 'Viewer');
+  const { board } = await lead.tool('create_board', { name: 'Own models' }), boardId = board.id;
+  directory.changeSharing(boardId, 'lead@studio.example', { member: { email: 'viewer@studio.example', role: 'view' } });
+  const data = Buffer.from(cubeGlb()).toString('base64'), uploaded = await lead.tool('upload_model', { boardId, data });
+  assert.match(uploaded.asset, /\.glb$/); assert.equal(uploaded.bytes, cubeGlb().length); assert.ok(files.has('assets/' + uploaded.asset));
+  const poster = (await lead.tool('upload_image', { data: Buffer.from(png(100, 100)).toString('base64') })).asset;
+  const { nodeId } = await lead.tool('add_model_node', { boardId, asset: uploaded.asset, poster, fileName: 'Own cube.glb', position: { x: 30, y: 50 } });
+  const node = (await lead.tool('get_board', { boardId })).nodes.find(node => node.id === nodeId);
+  assert.equal(node.data.uploaded, true); assert.equal(node.data.name, 'Own cube'); assert.equal(node.data.bytes, cubeGlb().length); assert.equal(node.data.poster, poster);
+  assert.match((await lead.tool('upload_model', { boardId, data: Buffer.from('not a GLB').toString('base64') })).error, /GLB/);
+  const oversized = new Uint8Array(12); oversized.set(cubeGlb().subarray(0, 12)); new DataView(oversized.buffer).setUint32(8, 80 * 1024 * 1024 + 1, true);
+  assert.match((await lead.tool('upload_model', { boardId, data: Buffer.from(oversized).toString('base64') })).error, /80 MB/);
+  assert.match((await lead.tool('upload_model', { boardId, data: 'A'.repeat(Math.ceil(20 * 1024 * 1024 / 3) * 4 + 4) })).error, /20 MB/);
+  assert.match((await viewer.tool('upload_model', { boardId, data })).error, /only view/);
+  assert.match((await viewer.tool('add_model_node', { boardId, asset: uploaded.asset })).error, /only view/);
+});

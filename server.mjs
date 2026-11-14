@@ -797,6 +797,7 @@ const server = http.createServer(async (request, response) => {
       } finally { done(); }
     }
     if (request.method === 'POST' && url.pathname === '/api/assets') {
+      if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() === 'model/gltf-binary') return json(response, { error: '3D model uploads are available on cloud boards only.' }, 400);
       const asset = await saveImage(await readBody(request, 30 * 1024 * 1024));
       return json(response, { asset });
     }

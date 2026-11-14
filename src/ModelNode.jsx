@@ -9,11 +9,8 @@ import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { lodHandleProps } from './canvas.mjs';
 import { meshStats, modelInfo, modelScene, wireframeView } from './model-info.mjs';
 import { t } from './i18n.mjs';
+import { loadViewer } from './model-upload.mjs';
 import './model-node.css';
-
-let viewerModule;
-// Only a visible full-detail model card loads Three/model-viewer; zoomed-out boards need only image posters.
-const loadViewer = () => viewerModule ||= import('@google/model-viewer').catch(cause => { viewerModule = null; throw cause; });
 
 function ModelViewer({ data, assetUrl, viewer, onReady, onError, modal = false, orbit, children }) {
   const [ready, setReady] = useState(false), area = useRef(null);
@@ -105,8 +102,8 @@ function ModelContent({ node, assetUrl, viewer, readOnly, save, open, Icon, moda
 
 function ModelPoster({ id, data, assetUrl, canvas, Icon, onContextMenu }) {
   const image = useCanvasImage(data.poster ? assetUrl(data.poster) : '', { small: true, create: !!data.poster });
-  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/>{image.src && <img src={image.src} alt={data.name} draggable="false"/>}{Icon && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
-  return <article onContextMenu={onContextMenu} data-feel-node={id} className="node-card model-node lod-node"><i {...lodHandleProps('target')}/><header>{t('3D model')}</header><div className="model-viewer-area">{image.src && <img src={image.src} alt="" draggable="false"/>}</div><div className="model-actions"/></article>;
+  if (data.collapsed) return <article onContextMenu={onContextMenu} data-feel-node={id} className="collapsed-node collapsed-node-image-card lod-node"><i {...lodHandleProps('target')}/>{image.src ? <img src={image.src} alt={data.name} draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={32}/></span>}{Icon && <button className="collapsed-node-expand nodrag" type="button" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="expand" size={15}/></button>}</article>;
+  return <article onContextMenu={onContextMenu} data-feel-node={id} className="node-card model-node lod-node"><i {...lodHandleProps('target')}/><header>{t('3D model')}</header><div className="model-viewer-area">{image.src ? <img src={image.src} alt="" draggable="false"/> : <span className="model-placeholder" aria-hidden="true"><Icon name="cube" size={48}/></span>}</div><div className="model-actions"/></article>;
 }
 
 export function ModelNode({ id, data, assetUrl, Icon }) {

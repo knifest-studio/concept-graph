@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName } from '../graph.mjs';
+import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName, uniqueModelName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -23,6 +23,7 @@ const uuid = '^[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}$';
 const boardId = text('Board ID from list_boards', { pattern: uuid });
 const itemId = text('Node, connection, group or section ID from get_board', { minLength: 1, maxLength: 120 });
 const assetId = text('Image asset ID, as in image nodes or from upload_image', { pattern: '^[\\da-f-]{36}\\.(png|jpg|webp|gif)$' });
+const modelAssetId = text('GLB asset ID from upload_model', { pattern: '^[\\da-f-]{36}\\.glb$' });
 const runId = text('Run ID from list_runs', { pattern: uuid });
 const templateId = text('Custom node ID from list_templates', { pattern: uuid });
 const position = object({ x: number('Canvas x'), y: number('Canvas y') }, ['x', 'y']);
@@ -130,9 +131,10 @@ define('create_board', 'Create an empty private board owned by this person.', { 
 define('rename_board', 'Rename a board. Only its owner can.', { boardId, name: text('New board name', { minLength: 1, maxLength: 80 }) }, ['boardId', 'name'], { account: true });
 define('delete_board', 'Delete a board for everyone. It stays in its owner’s Recently deleted for 30 days, where they can restore it, and is then erased. Only its owner can, and only by repeating its exact current name. Ask the user first.', { boardId, confirmName: text('The board’s exact current name', { minLength: 1, maxLength: 80 }) }, ['boardId', 'confirmName'], { account: true, destructive: true });
 define('upload_image', 'Upload a PNG, JPEG, WebP or GIF (at most 20 MB) and get its asset ID for add_image_node or a custom node.', { data: text('The image file, base64-encoded', { minLength: 8, maxLength: 28 * 1024 * 1024 }) }, ['data'], { account: true });
+define('upload_model', 'Upload a base64 GLB (at most 20 MB) for a cloud board you can edit. No generator access or cost. Then place it with add_model_node.', { boardId, data: text('GLB file, base64-encoded', { minLength: 8, maxLength: 28 * 1024 * 1024 }) }, ['boardId', 'data'], { account: true });
 define('get_image', 'Look at images: returns each as image content. Uses the board preview (at most 1024 px) when one exists; pass original for full size.', { boardId, nodeId: itemId, assets: array('Image asset IDs from image nodes or poster IDs from model nodes', assetId, { minItems: 1, maxItems: 6, uniqueItems: true }), original: boolean('Return the original files instead of previews') }, [], { access: 'view', account: true });
 
-define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. Models have a GLB asset, name, optional poster, modeler (hunyuan/trellis/rodin), source {nodeId, name}, bytes (GLB size), usd (per-model charged estimate), createdAt and author. Older models may lack these facts; recent runs can supply generator and timing. get_image with boardId and nodeId shows their poster. A section holds whatever lies inside it and stores no member list.',
+define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. Models have a GLB asset, name, optional poster, modeler (hunyuan/trellis/rodin/tripo), uploaded (boolean), fileName (original upload name), source {nodeId, name}, bytes (GLB size), usd (per-model charged estimate), createdAt and author. Older models may lack these facts; recent runs can supply generator and timing. get_image with boardId and nodeId shows their poster. A section holds whatever lies inside it and stores no member list.',
   { pageId: text('Only this page', { minLength: 1, maxLength: 120 }), runs: integer('How many recent generations to include (default 20)', { minimum: 0, maximum: 500 }) }, [], { access: 'view', run: ctx => {
     const { graph, args } = ctx, pages = boardPages(graph);
     if (args.pageId !== undefined && !pages.some(page => page.id === args.pageId)) fail(`Page not found: ${args.pageId}.`);
@@ -162,7 +164,7 @@ define('add_upscale_node', 'Add an upscale node fed by images on the board, then
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });
-define('add_model3d_node', 'Add a 3D model generator fed by 1–4 image nodes on one page. Each image becomes one separate GLB model beside it. Run with start_run. hunyuan (default) costs $0.375, trellis $0.30, rodin $0.40 per model, through fal.ai on the team key and shared daily/monthly limits. No text prompts or multi-view input.',
+define('add_model3d_node', 'Add a 3D model generator fed by 1–4 image nodes on one page. Each image becomes one separate GLB model beside it. Run with start_run. hunyuan (default) costs $0.375, trellis $0.30, rodin $0.40, tripo (Tripo H3.1) $0.30 per model, through fal.ai on the team key and shared daily/monthly limits. No text prompts or multi-view input.',
   { imageIds: array('Images to turn into separate 3D models', itemId, { minItems: 1, maxItems: maxModel3dImages, uniqueItems: true }), modeler: choice('3D generator', Object.values(modelers)), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
     const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node');
     if (!ctx.prepared.fal) fail('3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.');
@@ -172,6 +174,18 @@ define('add_model3d_node', 'Add a 3D model generator fed by 1–4 image nodes on
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });
+define('add_model_node', 'Place an uploaded GLB on a cloud board. No generator access or cost. Optional poster must be an image asset from upload_image.',
+  { asset: modelAssetId, poster: assetId, name: text('Visible model name; made unique', { minLength: 1, maxLength: 120 }), fileName: text('Original GLB file name', { minLength: 1, maxLength: 1000 }), position: at, pageId }, ['asset'], {
+    prepare: async (args, env) => {
+      const file = await env.FILES.head(`assets/${args.asset}`);
+      if (!file) fail('Model not found. Upload it with upload_model first.');
+      await assetsExist(env, args.poster ? [args.poster] : []);
+      return { bytes: file.size };
+    }, run: ctx => {
+      const { args } = ctx;
+      return addNode(ctx, 'model', { asset: args.asset, ...(args.poster ? { poster: args.poster } : {}), name: uniqueModelName(ctx.graph.nodes, args.name?.trim() || args.fileName?.replace(/\.glb$/i, '') || '3D model'), ...(args.fileName ? { fileName: args.fileName } : {}), bytes: ctx.prepared.bytes, uploaded: true }, targetPage(ctx.graph, args.pageId), args.position);
+    }
+  });
 define('add_image_node', 'Put an uploaded image on the board, e.g. as a reference to connect into a prompt.', { asset: assetId, caption: text('Visible image name used to refer to it in prompts', { maxLength: 120 }), label: text('Original file name. Used to derive a name when caption is omitted', { maxLength: 100000 }), position: at, pageId }, ['asset'],
   { prepare: (args, env) => imageShape(env, args.asset), run: ctx => {
     const { args } = ctx, { aspect, pixels } = ctx.prepared;

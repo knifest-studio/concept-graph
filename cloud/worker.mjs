@@ -5,7 +5,7 @@ import { assetPattern, imageFormat, imageTypes, assetTypes, readBody } from './a
 import { privacyHtml } from './privacy.mjs';
 import { nanoStatus } from './nano-banana.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
-import { model3dStatus } from './model3d.mjs';
+import { model3dStatus, storeModelGlb } from './model3d.mjs';
 import { upscaleSettings } from './upscale.mjs';
 import { canEdit } from './access.mjs';
 import { imageSize, validateTemplate } from '../graph.mjs';
@@ -281,6 +281,16 @@ async function route(request, env) {
   }
   if (path === '/api/assets') {
     if (method !== 'POST') return error('Method not allowed.', 405);
+    if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'model/gltf-binary') {
+      const boardId = url.searchParams.get('boardId');
+      if (!boardPattern.test(boardId || '')) return error('Choose a cloud board to upload a 3D model.', 400);
+      const board = await directory(env).boardFor(boardId, user.email);
+      if (!board) return error('Board not found.', 404);
+      if (!canEdit(board.role)) return error('You can only view this board.', 403);
+      const asset = `${crypto.randomUUID()}.glb`;
+      try { return json({ asset, bytes: await storeModelGlb(request, env.FILES, asset, request.signal) }); }
+      catch (cause) { return error(cause.message, 400); }
+    }
     const bytes = await readBody(request);
     let format;
     try { format = imageFormat(bytes); }

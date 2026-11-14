@@ -76,7 +76,7 @@ test('model facts are optional, bounded and survive copies without changing gene
   const g = graph(); g.nodes.push({ ...model(), data: { ...model().data, ...facts } }); validateGraph(g);
   for (const key of ['modeler', 'source', 'bytes', 'usd']) { const old = structuredClone(g); delete old.nodes.at(-1).data[key]; validateGraph(old); }
   for (const change of [
-    { modeler: 'unknown' }, { modeler: 3 }, { modeler: null }, { bytes: 19 }, { bytes: 1.5 }, { bytes: '100' }, { bytes: maxModelBytes + 1 }, { bytes: Infinity },
+    { uploaded: 'true' }, { uploaded: 1 }, { uploaded: null }, { fileName: 3 }, { fileName: '' }, { fileName: 'x'.repeat(1001) }, { modeler: 'unknown' }, { modeler: 3 }, { modeler: null }, { bytes: 19 }, { bytes: 1.5 }, { bytes: '100' }, { bytes: maxModelBytes + 1 }, { bytes: Infinity },
     { usd: -1 }, { usd: NaN }, { usd: Infinity }, { usd: '0.375' }, { usd: 1001 }, { usd: null },
     ...[null, [], {}, { nodeId: 'i0' }, { nodeId: 3, name: 'Cube' }, { nodeId: '', name: 'Cube' }, { nodeId: 'x'.repeat(121), name: 'Cube' }, { nodeId: 'i0', name: ' ' }, { nodeId: 'i0', name: 'x'.repeat(121) }, { nodeId: 'i0', name: 'Cube', extra: true }].map(source => ({ source })),
   ]) { const bad = structuredClone(g); Object.assign(bad.nodes.at(-1).data, change); assert.throws(() => validateGraph(bad), /Invalid/); }
@@ -109,20 +109,23 @@ function fakeFetch(result, { status = 200, error, onCall = () => {} } = {}) {
     throw new Error('Unexpected URL: ' + address);
   };
 }
-test('all three fal requests use exact inputs/prices and parse model outputs with or without a thumbnail', async () => {
+test('all four fal requests use exact inputs/prices and parse model outputs with or without a thumbnail', async () => {
   const uri = 'data:image/png;base64,AQID';
   assert.deepEqual(model3dInput('hunyuan', uri), { input_image_url: uri, generate_type: 'Normal', enable_pbr: false });
   assert.deepEqual(model3dInput('trellis', uri), { image_url: uri, resolution: 1024 });
   assert.deepEqual(model3dInput('rodin', uri), { image_urls: [uri], geometry_file_format: 'glb', material: 'PBR' });
-  assert.deepEqual(model3dPrices, { hunyuan: .375, trellis: .3, rodin: .4 });
+  assert.deepEqual(model3dInput('tripo', uri), { image_url: uri, texture: true, pbr: true, texture_quality: 'standard', geometry_quality: 'standard', quad: false });
+  assert.deepEqual(model3dPrices, { hunyuan: .375, trellis: .3, rodin: .4, tripo: .3 });
   for (const modeler of Object.keys(model3dModels)) {
     const calls = [], thumbnail = modeler === 'hunyuan' ? 'https://media.example/thumb.png' : undefined;
     let queued = 0;
-    const result = await falModel3d({ key: 'secret', modeler, input: model3dInput(modeler, uri), onQueued: () => queued++, fetcher: fakeFetch({ [modeler === 'rodin' ? 'model_mesh' : 'model_glb']: { url }, ...(thumbnail ? { thumbnail: { url: thumbnail } } : {}) }, { onCall: (url, init) => calls.push({ url, init }) }) });
+    const result = await falModel3d({ key: 'secret', modeler, input: model3dInput(modeler, uri), onQueued: () => queued++, fetcher: fakeFetch({ [['rodin', 'tripo'].includes(modeler) ? 'model_mesh' : 'model_glb']: { url }, ...(thumbnail ? { thumbnail: { url: thumbnail } } : {}) }, { onCall: (url, init) => calls.push({ url, init }) }) });
     assert.deepEqual(result, { url, ...(thumbnail ? { thumbnail } : {}) }); assert.equal(queued, 1);
     assert.equal(calls[0].url, 'https://queue.fal.run/' + model3dModels[modeler]); assert.ok(calls.every(call => call.init.headers.Authorization === 'Key secret' && call.init.redirect === 'manual'));
     if (thumbnail) assert.equal((await model3dPoster(thumbnail, { fetcher: fakeFetch({}) })).format, 'png');
   }
+  assert.deepEqual(await falModel3d({ modeler: 'tripo', fetcher: fakeFetch({ model_mesh: { url }, rendered_image: { url: 'https://media.example/tripo.png' } }) }), { url, thumbnail: 'https://media.example/tripo.png' });
+  await assert.rejects(falModel3d({ modeler: 'tripo', fetcher: fakeFetch({ model_mesh: { url }, rendered_image: { url: 'file:///secret' } }) }), /unreadable/);
   // Existing upscale still returns the downloaded image, with no key on the result download.
   const calls = [];
   assert.equal((await falUpscale({ key: 'secret', model: 'fal-ai/topaz/upscale/image', input: {}, fetcher: fakeFetch({ image: { url: 'https://media.example/out.png' } }, { onCall: (url, init) => calls.push({ url, init }) }) })).format, 'png');
@@ -230,8 +233,9 @@ test('fake fal queue serves every documented shape and supports pending/cancel w
     await new Promise(resolve => setTimeout(resolve, 8));
     assert.equal((await call(queued.status_url.slice(origin.length))).json().status, 'COMPLETED');
     const result = (await call(queued.response_url.slice(origin.length))).json();
-    assert.ok(result[model.includes('upscale') ? 'image' : model === model3dModels.rodin ? 'model_mesh' : 'model_glb'].url);
+    assert.ok(result[model.includes('upscale') ? 'image' : [model3dModels.rodin, model3dModels.tripo].includes(model) ? 'model_mesh' : 'model_glb'].url);
     assert.equal(!!result.thumbnail, model === model3dModels.hunyuan);
+    assert.equal(!!result.rendered_image, model === model3dModels.tripo);
     await call(queued.cancel_url.slice(origin.length), 'PUT'); assert.equal((await call(queued.status_url.slice(origin.length))).status, 422);
   }
   const cube = await call('/cube.glb'); assert.equal(cube.headers['Content-Type'], 'model/gltf-binary'); validateGlb(cube.body);
@@ -242,4 +246,30 @@ test('clipboard asset checks include models, their posters and hidden template/i
   const { imageAssets } = await import('../src/image-edits.mjs');
   const selection = { nodes: [model(), node('i', 'image', { asset: image }), node('t', 'text', { text: '', template: { name: 'Style', instructions: '', assets: [poster] } })] };
   assert.deepEqual([...new Set(selection.nodes.flatMap(imageAssets))], [asset, poster, image]);
+});
+
+test('uploaded model flag is strictly boolean and original names survive duplication', () => {
+  for (const uploaded of [true, false]) {
+    const g = { nodes: [{ ...model(), data: { ...model().data, uploaded, fileName: 'Original.glb' } }], edges: [] };
+    validateGraph(g); assert.equal(duplicateNodes(g, ['model']).nodes[0].data.uploaded, uploaded);
+    assert.equal(duplicateNodes(g, ['model']).nodes[0].data.fileName, 'Original.glb');
+  }
+});
+
+test('MCP model placement verifies GLB and poster assets and never needs fal', async () => {
+  const tool = toolByName.get('add_model_node'), args = { boardId: '11111111-1111-1111-1111-111111111111', asset, poster, fileName: 'Cube.glb', position: { x: 40, y: 60 } };
+  checkArgs(args, tool.inputSchema);
+  const env = { FILES: { head: async key => ['assets/' + asset, 'assets/' + poster].includes(key) ? { size: cubeGlb().length } : null } };
+  const prepared = await tool.prepare(args, env);
+  const before = { nodes: [], edges: [], groups: [], runs: [] };
+  const result = runBoardTool(tool, { graph: before, args, prepared, user: { name: 'Lead' } });
+  const added = result.graph.nodes[0];
+  assert.deepEqual(added.position, args.position); assert.equal(added.data.name, 'Cube'); assert.equal(added.data.uploaded, true); assert.equal(added.data.fileName, 'Cube.glb'); assert.equal(added.data.bytes, cubeGlb().length); assert.equal(added.data.poster, poster); assert.equal(added.data.author.name, 'Lead');
+  assert.equal(runBoardTool(tool, { graph: result.graph, args, prepared }).graph.nodes[1].data.name, 'Cube 2');
+  await assert.rejects(tool.prepare(args, { FILES: { head: async () => null } }), /Model not found/);
+  await assert.rejects(tool.prepare(args, { FILES: { head: async key => key.endsWith('.glb') ? { size: 100 } : null } }), /Image not found/);
+  const upload = toolByName.get('upload_model'); assert.equal(upload.account, true);
+  checkArgs({ boardId: args.boardId, data: Buffer.from(cubeGlb()).toString('base64') }, upload.inputSchema);
+  assert.throws(() => checkArgs({ data: 'AQID' }, upload.inputSchema), /boardId/);
+  checkArgs({ boardId: args.boardId, imageIds: ['image'], modeler: 'tripo' }, toolByName.get('add_model3d_node').inputSchema);
 });

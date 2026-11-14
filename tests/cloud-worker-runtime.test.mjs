@@ -736,3 +736,46 @@ runtimeTest('GLB assets are authenticated and served as model/gltf-binary for GE
   const head = await app.request('/assets/' + asset, { method: 'HEAD', cookie }); assert.equal(head.status, 200); assert.equal(head.headers.get('Content-Type'), 'model/gltf-binary'); assert.equal((await head.arrayBuffer()).byteLength, 0);
   assert.equal((await app.request('/assets/' + asset)).status, 401);
 });
+
+runtimeTest('GLB asset upload streams valid models, rejects malformed/oversize inputs and enforces board edit access without fal', async t => {
+  const { cubeGlb } = await import('./fixtures/cube-glb.mjs');
+  const { maxModelBytes } = await import('../src/model-assets.mjs');
+  const { env, directory, files } = setup(t), owner = { name: 'Owner', email: 'owner@example.com' }, editor = { name: 'Editor', email: 'editor@example.com' }, viewer = { name: 'Viewer', email: 'viewer@example.com' };
+  const board = directory.createBoard('Models', owner), path = `http://localhost:8787/api/assets?boardId=${board.id}`;
+  directory.changeSharing(board.id, owner.email, { member: { email: editor.email, role: 'edit' } });
+  directory.changeSharing(board.id, owner.email, { member: { email: viewer.email, role: 'view' } });
+  const upload = async (bytes, user = editor, headers = {}) => {
+    const request = new Request(path, { method: 'POST', headers: { Cookie: `cg_session=${await signSession(user, env.SESSION_SECRET)}`, 'Content-Type': 'model/gltf-binary', ...headers }, body: bytes });
+    request.arrayBuffer = () => { throw new Error('No whole-file buffering'); };
+    return worker.fetch(request, env);
+  };
+  const good = cubeGlb(), response = await upload(good), result = await response.json();
+  assert.equal(response.status, 200); assert.match(result.asset, /\.glb$/); assert.equal(result.bytes, good.length);
+  assert.deepEqual(files.get('assets/' + result.asset).body, good); assert.equal(files.get('assets/' + result.asset).httpMetadata.contentType, 'model/gltf-binary');
+  for (const bytes of [new Uint8Array(12), good.subarray(0, good.length - 1)]) {
+    const bad = await upload(bytes); assert.equal(bad.status, 400); assert.match((await bad.json()).error, /GLB/);
+  }
+  const declared = good.slice(0, 12); new DataView(declared.buffer).setUint32(8, maxModelBytes + 1, true);
+  assert.equal((await upload(declared)).status, 400);
+  assert.equal((await upload(good, editor, { 'Content-Length': String(maxModelBytes + 1) })).status, 400);
+  assert.equal((await upload(good, viewer)).status, 403);
+  assert.equal((await upload(good, { name: 'Stranger', email: 'stranger@example.com' })).status, 403);
+  assert.equal(files.size, 1);
+  let sent = 0, completed = false;
+  const length = 6 * 1024 * 1024, header = good.slice(0, 12), parts = [];
+  new DataView(header.buffer).setUint32(8, length, true);
+  env.FILES.createMultipartUpload = async () => ({
+    async uploadPart(partNumber, bytes) {
+      if (partNumber === 1) assert.ok(sent < length, 'The first R2 part must be uploaded before the request is fully read');
+      parts.push(bytes.byteLength); return { partNumber, etag: 'test' };
+    }, async complete() { completed = true; }, async abort() { assert.fail('valid upload aborted'); }
+  });
+  const stream = new ReadableStream({ pull(controller) {
+    if (sent === length) return controller.close();
+    const chunk = new Uint8Array(Math.min(64 * 1024, length - sent)); if (!sent) chunk.set(header);
+    sent += chunk.length; controller.enqueue(chunk);
+  } });
+  const streamed = await worker.fetch(new Request(path, { method: 'POST', duplex: 'half', headers: { Cookie: `cg_session=${await signSession(editor, env.SESSION_SECRET)}`, 'Content-Type': 'model/gltf-binary' }, body: stream }), env);
+  assert.equal(streamed.status, 200); assert.equal((await streamed.json()).bytes, length);
+  assert.equal(completed, true); assert.deepEqual(parts, [5 * 1024 * 1024, 1024 * 1024]);
+});
