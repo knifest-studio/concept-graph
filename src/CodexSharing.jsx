@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { plural, t } from './i18n.mjs';
+import React, { useState } from 'react';
+import { t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
 
 const Person = ({ user }) => <span className="cloud-person" style={{ '--person-color': user.color }} title={user.name}>{user.name}</span>;
@@ -19,33 +19,14 @@ export function TeammateCodex({ view, onRequest, onWithdraw }) {
   </section>;
 }
 
-export function CodexShareMenu({ view, onRequest, onWithdraw, onAllow, onDecline }) {
-  const [open, setOpen] = useState(false), container = useRef(null), trigger = useRef(null), panel = useRef(null);
+export function CodexSharingDetails({ view, onRequest, onWithdraw, onAllow, onDecline }) {
   const { outgoing, incoming, shared } = view, discover = !view.ready && !outgoing && view.teammates.length > 0;
-  const visible = incoming.length > 0 || shared.length > 0 || !!outgoing || discover;
-  useEffect(() => {
-    if (!open) return;
-    panel.current?.focus();
-    const outside = event => { if (!container.current?.contains(event.target)) setOpen(false); };
-    document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
-  }, [open]);
-  useEffect(() => { if (!visible) setOpen(false); }, [visible]);
-  if (!visible) return null;
-  const label = shared.length ? t('Codex shared · {who}', { who: shared.length === 1 ? shared[0].user.name : plural(shared.length, '{count} person', '{count} people') }) : incoming.length ? incoming.length > 1 ? t('Codex requests · {count}', { count: incoming.length }) : t('Codex request')
-    : outgoing ? outgoing.granted ? t('{name}’s Codex', { name: outgoing.user.name }) : t('Asked {name}', { name: outgoing.user.name }) : t('Teammate’s Codex');
-  return <div className="codex-share" ref={container} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }} onKeyDown={event => {
-    if (!open) return;
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); trigger.current?.focus(); }
-    event.stopPropagation();
-  }}>
-    <button ref={trigger} type="button" className={`connection codex-share-button ${shared.length || (outgoing?.granted && outgoing.available) ? 'connected' : ''} ${incoming.length ? 'asking' : ''}`} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? 'codex-share-panel' : undefined} onClick={() => setOpen(value => !value)} data-tooltip={t('Share or borrow Codex on this board')}><span/>{label}</button>
-    {open && <div ref={panel} id="codex-share-panel" className="helper-connection-panel codex-share-panel" role="dialog" aria-label={t('Codex sharing')} tabIndex={-1}>
+  if (!incoming.length && !shared.length && !outgoing && !discover) return null;
+  return <div className="codex-sharing-details codex-share-panel" data-analytics-private>
       {incoming.length > 0 && <section><strong>{t('Asking to use your Codex')}</strong>{incoming.map(item => <div className="codex-share-row" key={item.id}><Person user={item.user}/><span><button type="button" className="codex-link" onClick={() => onAllow(item.id)}>{t('Allow')}</button><button type="button" className="codex-link muted" onClick={() => onDecline(item.id)}>{t('Decline')}</button></span></div>)}</section>}
       {shared.length > 0 && <section><strong>{t('Your Codex is shared')}</strong><p>{t('Their generations use your Codex subscription and are credited to them. Access ends when you leave this board.')}</p>
         {shared.map(item => <div className="codex-share-row" key={item.id}><Person user={item.user}/><span>{item.active > 0 && <small>{t('{count} running', { count: item.active })}</small>}<button type="button" className="codex-link muted" onClick={() => onDecline(item.id)}>{t('Revoke')}</button></span></div>)}</section>}
       {(outgoing || discover) && <TeammateCodex view={view} onRequest={onRequest} onWithdraw={onWithdraw}/>}
-    </div>}
   </div>;
 }
 

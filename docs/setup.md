@@ -10,7 +10,7 @@ To retry Codex setup or install an app-managed copy if an existing CLI is incomp
 
 The desktop app stores boards, history, custom-node templates, and images in `~/Library/Application Support/Concept Graph` on macOS or `%LOCALAPPDATA%\Concept Graph\data` on Windows by default. To change this location, choose **Concept Graph → Storage Location…** on macOS or **Storage → Change Storage Folder…** on Windows. It copies and verifies the data before switching; the old folder is retained. Reopen the app after the change, and back up the entire data directory. Earlier browser installations are not automatically imported into the desktop preview: export and import a board or follow the guidance in [desktop-preview.md](desktop-preview.md).
 
-To let a local agent operate the desktop app, choose **Connect MCP** in the top bar, copy the message, and send it to Codex or Claude Code on the same computer. The agent may need permission to update its configuration and a new session. It can access and modify boards and images and start generation. See [mcp.md](mcp.md) for manual setup and details.
+To let a local agent operate the desktop app, open the **Codex** status menu in the top bar, choose **Connect an AI agent (MCP)…**, copy the message, and send it to Codex or Claude Code on the same computer. The agent may need permission to update its configuration and a new session. It can access and modify boards and images and start generation. See [mcp.md](mcp.md) for manual setup and details.
 
 The rest of this guide describes the separate browser app run from source or a source release ZIP.
 
@@ -70,6 +70,8 @@ If you downloaded GitHub's **Source code (zip)** instead, extract it, open its d
 Visit **http://127.0.0.1:4317**. The status in the top right should read **Codex connected**. Add a text prompt, describe an image, and click play. Run requests consume the allowance available to your signed-in Codex account.
 
 Keep the server terminal open. Stop with **Ctrl+C**. On macOS, after the initial installation/build, you can also double-click **Start Concept Graph.command**. It uses Node and Codex from your PATH. If macOS refuses an unsigned shell launcher, use `npm start` in Terminal instead.
+
+The theme follows the system by default; choose **Light**, **Dark** or **System** in **Settings**. The round **?** menu opens **Getting started** (editors only), **Keyboard shortcuts** and **What’s new**; press **?** outside text fields for shortcuts. On team boards, use the board-name menu for **Version history**, and **Create → CUSTOM NODES → Copy from another board…** to reuse custom nodes.
 
 Read the [user guide](user-guide.md) for connections, shortcuts, groups, history, and board export/import.
 

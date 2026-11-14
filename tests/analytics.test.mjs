@@ -30,6 +30,20 @@ test('shortcuts never log ordinary typing, composition or AltGr input', () => {
   assert.equal(shortcut({ key: 'p', repeat: true }), '');
   assert.equal(shortcut({ key: 'p', isComposing: true }), '');
 });
+test('discovery analytics retains only bounded UI fields, never user-authored content', () => {
+  for (const [name, fields] of [
+    ['theme_changed', { to: 'system', source: 'settings' }],
+    ['theme_changed', { to: 'dark', source: 'system' }],
+    ...['menu', 'getting_started', 'shortcuts', 'whats_new'].map(item => ['help_opened', { item, via: 'key' }]),
+    ...['sidebar', 'node_toolbar', 'context_menu', 'tip', 'invite', 'copy'].map(source => ['template_created', { source }]),
+    ...['sidebar_click', 'sidebar_drag', 'node_type'].map(source => ['template_applied', { source }]),
+    ...['duplicate_to_custom_node', 'custom_nodes_invite'].flatMap(tip => ['shown', 'accepted', 'dismissed'].map(action => ['tip_event', { tip, action }]))
+  ]) {
+    const clean = sanitizeEvent({ ...event(), kind: 'app', name, details: { ...fields, prompt: 'PRIVATE', templateName: 'PRIVATE', instructions: 'PRIVATE', boardName: 'PRIVATE', image: 'PRIVATE' } });
+    assert.deepEqual(clean.details, fields, name);
+  }
+  assert.deepEqual(details({ to: 'PRIVATE', source: 'PRIVATE', item: 'PRIVATE', tip: 'PRIVATE', action: 'PRIVATE' }), {});
+});
 test('event boundary strips identity, raw input and arbitrary nested fields and clamps numbers', () => {
   const clean = sanitizeEvent({ ...event(), user: 'forged', board: '../secret', name: 'a'.repeat(100), time: Infinity,
     details: { user: 'forged', text: 'typed text', password: 'secret', nested: { x: 1 }, x: 5, y: -2, width: 1e9, zoom: NaN, message: 'm'.repeat(2000) } }, 100000000);

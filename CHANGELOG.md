@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added on-demand help, keyboard shortcuts and What’s new in English and Ukrainian; clarified Settings, system themes and custom-node discovery, with cloud UI usage events.
+
 - Cloud team boards: persistent text chat with unread alerts, deletions, node links and MCP `list_chat` / `send_chat`; audio-only WebRTC voice for up to eight participants with optional Cloudflare TURN. Viewers can participate. Voice is not recorded; desktop boards are unchanged.
 
 ## 0.1.1 — 2026-10-16

@@ -8,7 +8,7 @@ Concept Graph can expose its local boards to MCP-capable agents through a local 
 
 The desktop package includes the required Node runtime and MCP server. You do not need to install Node.js, clone this repository, or provide an API key for the MCP connection. Image generation still uses the account signed into Concept Graph and its available Codex limits.
 
-In the desktop app, select **Connect MCP** in the top bar and copy the message into a local agent such as Codex or Claude Code. The message includes the paths for this installation and asks the agent to configure its MCP client. The agent may need permission to update its settings and a new session or restart before it can use the server. If you move the app, copy the message again and update the agent's configuration.
+In the desktop app, open the **Codex** status menu in the top bar, choose **Connect an AI agent (MCP)…** and copy the message into a local agent such as Codex or Claude Code. The message includes the paths for this installation and asks the agent to configure its MCP client. The agent may need permission to update its settings and a new session or restart before it can use the server. If you move the app, copy the message again and update the agent's configuration.
 
 An agent connected to this MCP can read and change your boards and images and start generation. Only connect an agent you trust with that access, and review its requested operations as appropriate. Board content returned to an agent is available to that agent and its provider. The MCP connection itself is local; generating an image still sends the inputs to the configured Codex service. The MCP server does not grant an agent access to Codex login credentials.
 

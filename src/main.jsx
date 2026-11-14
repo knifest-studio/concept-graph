@@ -21,6 +21,10 @@ import { arrowPalette, arrowPosition, shiftArrow, boardAuthor, stamps, drawingFr
 import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from './sections.mjs';
 import { captureHistory, cleanEdges, cleanNodes, historySignature, snapshotSignature } from './history.mjs';
 import { NodeTemplatePicker } from './NodeTemplatePicker.jsx';
+import { CustomNodesCard } from './CustomNodesCard.jsx';
+import { CustomNodeActions } from './CustomNodeActions.jsx';
+import { CopyCustomNodes } from './CopyCustomNodes.jsx';
+import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDiscovery } from './custom-node-discovery.mjs';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
 import { ImageEditor } from './ImageEditor.jsx';
@@ -37,18 +41,23 @@ import { observePendingSpawns, pendingPulseKeyframes } from './pending-animation
 import { generationFocusNodes } from './generation-tray.mjs';
 import { switchNodeTemplate, templateFromNode } from './node-template.mjs';
 import { GettingStarted, useGettingStarted } from './GettingStarted.jsx';
+import { HelpMenu } from './HelpMenu.jsx';
+import { isHelpShortcut, isMacPlatform, shortcutLabel } from './shortcuts.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx';
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
 import { BoardPages } from './BoardPages.jsx';
-import { LanguageSelect } from './LanguageSelect.jsx';
+import { useThemePreference } from './useThemePreference.jsx';
 import { Preferences } from './Preferences.jsx';
+import { BoardMenu } from './BoardMenu.jsx';
+import { generationChip, usageRemaining } from './generation-chip.mjs';
+import { popoverPosition } from './popover-position.mjs';
 import { boundingBox, revealViewport } from './node-placement.mjs';
 import { plural, t } from './i18n.mjs';
 import { rich } from './i18n-rich.jsx';
 import { arrangeLayers, layerShortcut, nextLayer, stackOnTop } from './layers.mjs';
 import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, openingViewport, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
-import { gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
+import { checklistSteps, gettingStartedKey, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
 import { CanvasContext, useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
 import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual } from './canvas-store.mjs';
 
@@ -79,7 +88,7 @@ const refolded = (node, collapsed) => { const { measured, ...rest } = node; retu
 const busy = run => ['running', 'queued'].includes(run?.status);
 // Deleting this many nodes and sections at once asks first.
 const bulkDeleteCount = 20;
-const generateShortcut = () => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘ Enter' : 'Ctrl+Enter';
+const generateShortcut = () => shortcutLabel('Mod+Enter', isMacPlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent));
 // Only an explicit selection is aligned, so drawings and stamps around other nodes never shift by accident.
 const alignIds = scoped => new Set([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).flatMap(group => group.nodeIds)]);
 const finishBoardEdit = () => { const element = document.activeElement; if (element?.matches('.sticky-node textarea,.group-name-input,.section-name-input')) flushSync(() => element.blur()); };
@@ -531,10 +540,42 @@ async function api(url, options = {}) {
 }
 const jsonOptions = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-function UsageLimit({ status, version }) {
+function GenerationControl({ status, version, readiness, helperNeeded, paired, effects, onSetup, onDownloads, onFix, onDisconnect, loginBusy, onCheck, desktopMode, sharing, siteStatus, onAgentConnect }) {
+  const [open, setOpen] = useState(false), container = useRef(null), trigger = useRef(null), panel = useRef(null);
+  const { detection, manifest, manifestError } = useHelperDownloads(cloud, helperNeeded);
+  const download = cloud ? cloudHelperDownload(detection?.packageId, manifest?.[detection?.packageId]) : null;
+  const outdated = helperNeeded && paired && helperOutdated(status.helperVersion, download);
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  useEffect(() => {
+    if (!open) return;
+    panel.current?.focus();
+    const outside = event => { if (!container.current?.contains(event.target)) setOpen(false); };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const element = panel.current, anchor = trigger.current;
+      if (!element || !anchor) return;
+      const position = popoverPosition(anchor.getBoundingClientRect(), { width: element.offsetWidth, height: element.offsetHeight }, { width: window.innerWidth, height: window.innerHeight });
+      element.style.left = `${position.left}px`; element.style.top = `${position.top}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place); observer.observe(panel.current);
+    window.addEventListener('resize', place); window.addEventListener('scroll', place, true);
+    return () => { observer.disconnect(); window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open]);
+  const wasPaired = useRef(paired), [connected, setConnected] = useState(false);
+  useEffect(() => {
+    const changed = paired && !wasPaired.current; wasPaired.current = paired;
+    if (!changed) return;
+    effects.fire('helper', { element: trigger.current }); setConnected(true);
+    const timer = setTimeout(() => setConnected(false), 650); return () => clearTimeout(timer);
+  }, [paired]);
   const [usage, setUsage] = useState(null), [loading, setLoading] = useState(false);
   const requestId = useRef(0), inFlight = useRef(false), lastRequest = useRef(0);
-  const ready = status.connected && status.signedIn;
+  const ready = (!helperNeeded || paired) && status.connected && status.signedIn;
   const refresh = useCallback(async () => {
     if (!ready) { requestId.current++; inFlight.current = false; setUsage(null); setLoading(false); return; }
     if (inFlight.current) return;
@@ -555,17 +596,30 @@ function UsageLimit({ status, version }) {
   // Codex may emit an update as a side effect of reading limits; avoid a request loop.
   useEffect(() => { if (version && !inFlight.current && Date.now() - lastRequest.current >= 5000) refresh(); }, [refresh, version]);
   const buckets = usage?.available && Array.isArray(usage.buckets) ? usage.buckets : [];
-  const remaining = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Number((100 - value).toFixed(1)) : null;
-  const first = buckets.flatMap(bucket => [bucket.primary, bucket.secondary]).find(window => remaining(window?.usedPercent) !== null);
+  const remaining = usageRemaining;
+  const percents = buckets.flatMap(bucket => [bucket.primary, bucket.secondary]).map(window => remaining(window?.usedPercent)).filter(value => value !== null);
+  const chip = generationChip({ readiness, status, helperNeeded, outdated, remaining: ready && percents.length ? Math.min(...percents) : null, desktopMode });
   const windowLabel = minutes => {
     if (!Number.isFinite(minutes) || minutes <= 0) return t('Usage window');
     if (minutes % 1440 === 0) return plural(minutes / 1440, '{count}-day limit', '{count}-day limit');
     if (minutes % 60 === 0) return plural(minutes / 60, '{count}-hour limit', '{count}-hour limit');
     return plural(minutes, '{count}-minute limit', '{count}-minute limit');
   };
-  return <details className="usage" onToggle={event => { if (event.currentTarget.open) refresh(); }} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus(); } }}>
-    <summary aria-label={t('Codex usage limits')}><Icon name="clock" size={15}/><span>{first ? t('Usage · {percent}% left', { percent: remaining(first.usedPercent) }) : t('Usage')}</span></summary>
-    <div className="usage-panel" aria-label={t('Codex usage limits')}>
+  return <div className="generation-control" ref={container} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }} onKeyDown={event => {
+    event.stopPropagation();
+    if (event.key === 'Escape' && open) { event.preventDefault(); close(); }
+  }}>
+    <button ref={trigger} type="button" className={`generation-chip ${chip.tone}`} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? 'generation-details' : undefined} aria-label={chip.label} data-tooltip={chip.label} onClick={() => { setOpen(value => !value); if (!open) refresh(); }}>
+      {connected ? <svg className="feel-check" aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : <Icon name="clock" size={15}/>}
+      <span>{chip.label}</span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    {open && <div ref={panel} id="generation-details" className="generation-panel" role="dialog" aria-label={t('Generation')} tabIndex={-1}>
+      <section className="generation-readiness">
+        {helperNeeded ? <HelperConnectionDetails readiness={readiness} status={status} paired={paired} outdated={outdated} download={download} manifestError={manifestError} manifest={manifest} detection={detection}
+          onSetup={() => { close(); onSetup(); }} onDownloads={() => { close(); onDownloads(); }} onFix={() => { close(); onFix(); }} onDisconnect={onDisconnect ? () => { close(); onDisconnect(); } : null} loginBusy={loginBusy}/>
+          : <><strong>{t('Codex')}</strong><p>{status.error || chip.label}</p><button type="button" disabled={loginBusy} onClick={() => { close(); onCheck(); }}>{desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : t('Check Codex connection')}</button></>}
+      </section>
+      <section className="usage-panel">
       <div className="usage-heading"><strong>{t('Codex usage')}</strong><button type="button" onClick={refresh} disabled={!ready || loading}>{loading ? t('Refreshing…') : t('Refresh')}</button></div>
       <div aria-live="polite">
         {!ready ? <p>{t('Connect and sign in to Codex to see usage.')}</p> : loading && !usage ? <p>{t('Loading usage…')}</p> : !usage?.available || !buckets.length ? <p>{t('Usage information is unavailable. Try refreshing later.')}</p> : buckets.map((bucket, index) => <div className="usage-bucket" key={bucket.id || index}>
@@ -583,8 +637,15 @@ function UsageLimit({ status, version }) {
         </div>)}
       </div>
       <p className="usage-note">{t('These are Codex usage limits; image generation may have a separate limit.')}</p>
-    </div>
-  </details>;
+      </section>
+      {sharing}
+      {siteStatus && <section className="generation-providers">{[[generators.nanoBanana, 'Nano Banana', siteStatus], [generators.gptImage, 'GPT Image', siteStatus.gptImage]].filter(([, , provider]) => provider).map(([id, name, provider]) => {
+        const state = nanoState(provider, id);
+        return <p key={id}><strong>{name}</strong><span>{state.note}</span>{state.budget && <small>{state.budget}</small>}</p>;
+      })}</section>}
+      {onAgentConnect && <button type="button" className="generation-agent" onClick={() => { close(); onAgentConnect(); }}><Icon name="branch" size={15}/>{t('Connect an AI agent (MCP)…')}</button>}
+    </div>}
+  </div>;
 }
 
 function TemplateEditor({ template, initial = template, templates, onClose, onSave, onDelete, onBusyChange }) {
@@ -683,7 +744,7 @@ function AgentConnect({ onClose, cloud = false }) {
   </div>;
 }
 
-function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, waitForPreferences, desktopMode, mcpEnabled, editorReadyCallback, cloudSession, helperSession }) {
+function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, waitForPreferences, desktopMode, mcpEnabled, editorReadyCallback, cloudSession, helperSession }) {
   const [nodes, setNodes] = useState([]), [edges, setEdges] = useState([]), [runs, setRuns] = useState([]);
   const dictationLanguage = useDictationLanguage();
   const effects = useInteractionFeedback(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local');
@@ -727,13 +788,31 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const [installCodex, setInstallCodex] = useState(false);
   const [dismissSignIn, setDismissSignIn] = useState(false);
   const [templates, setTemplates] = useState([]), [templatesError, setTemplatesError] = useState('');
+  const [help, setHelp] = useState(null);
+  const helpReturnFocus = useRef(null);
+  const openHelp = (item, via = 'button') => {
+    if (cloud) track('help_opened', { item, via });
+    if (item === 'shortcuts' || item === 'whats_new') helpReturnFocus.current = document.activeElement;
+    if (item === 'getting_started') { guide.reopen(); setHelp(null); } else setHelp(item);
+  };
   const [templateForm, setTemplateForm] = useState(null), [templateDetails, setTemplateDetails] = useState(null), [templateBusy, setTemplateBusy] = useState(false);
+  const [copyTemplates, setCopyTemplates] = useState(false);
+  const [discovery, setDiscovery] = useState(() => readDiscovery());
+  const [templateInvitation, setTemplateInvitation] = useState(false), [templateTip, setTemplateTip] = useState(null);
+  const discoveryRef = useRef(discovery);
+  const recordDiscovery = change => { const next = { ...discoveryRef.current, ...writeDiscovery(undefined, change), ...change }; discoveryRef.current = next; setDiscovery(next); };
+  const templateUsed = () => { recordDiscovery({ used: true, invitationSeen: true }); setTemplateInvitation(false); setTemplateTip(null); };
   const [agentConnect, setAgentConnect] = useState(false);
   const [mcpBusy, setMcpBusy] = useState(false);
   const editorId = useRef(null), editorReady = useRef(false), mcpLocked = useRef(false), mcpBarrier = useRef(null), mcpUiRequest = useRef(null), moving = useRef(false), connecting = useRef(false);
   const boardFileInput = useRef(null);
   const [boardForm, setBoardForm] = useState(null), [nameDraft, setNameDraft] = useState(''), [deleteName, setDeleteName] = useState('');
-  const originalBoardName = useRef('');
+  const originalBoardName = useRef(''), localBoardMenuButton = useRef(null), previousBoardForm = useRef(null);
+  const boardMenuButton = cloudSession?.boardMenuButton || localBoardMenuButton;
+  useEffect(() => {
+    if (previousBoardForm.current && !boardForm) restoreDialogFocus(boardMenuButton.current);
+    previousBoardForm.current = boardForm;
+  }, [boardForm]);
   const switchingRef = useRef(false), uploads = useRef(0);
   const boardPath = `/api/boards/${boardId}`;
   const currentBoard = boards.find(board => board.id === boardId);
@@ -756,7 +835,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // A viewer of a shared board sees it live and can select, copy and look around but change nothing; the room ignores their edits too.
   const readOnly = cloud && cloudSession.role === 'view', readOnlyRef = useRef(readOnly), canRename = !cloud || cloudSession.role === 'owner'; readOnlyRef.current = readOnly;
   useEffect(() => { if (readOnly) setImageEdit(null); }, [readOnly]);
-  modalOpen.current = !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
+  modalOpen.current = !!help || !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || copyTemplates || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
+  useEffect(() => {
+    const receive = event => { if (event.key === discoveryKey) { const value = readDiscovery(); discoveryRef.current = value; setDiscovery(value); if (value.used || value.invitationSeen) setTemplateInvitation(false); if (value.used) setTemplateTip(null); } };
+    window.addEventListener('storage', receive);
+    return () => window.removeEventListener('storage', receive);
+  }, []);
+  useEffect(() => {
+    if (loaded && tab === 'canvas' && !readOnly && !discovery.used && !discovery.invitationSeen) {
+      setTemplateInvitation(true); recordDiscovery({ invitationSeen: true });
+    }
+  }, [loaded, tab, readOnly, discovery.used, discovery.invitationSeen]);
   const flow = useReactFlow();
   useEffect(() => { if (cloud && loaded) { analyticsView('board', boardId, activePage); analyticsViewport(() => flow.getViewport().zoom); analyticsReady(); } }, [loaded, boardId, activePage]);
   const nodesInitialized = useNodesInitialized(), openingViewDone = useRef(false), viewerMoved = useRef(false);
@@ -783,6 +872,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const teammateCodex = cloud && cloudSession.codex?.outgoing?.granted && cloudSession.codex.outgoing.available ? cloudSession.codex.outgoing : null;
   const readiness = generationReadiness({ required: helperNeeded, paired: cloud ? cloudSession.paired : !!helperSession?.paired, online: !helperOffline, status, teammate: teammateCodex });
   const ownReady = (readiness.own || readiness).key === 'ready';
+  const showHelperStep = useRef(helperNeeded && readiness.key !== 'ready');
+  const gettingStartedSteps = checklistSteps(guide.state, helperNeeded, showHelperStep.current ? false : readiness.key === 'ready');
   const readinessRef = useRef(readiness); readinessRef.current = readiness;
   const nano = nanoState(cloudSession?.nano), nanoRef = useRef(nano); nanoRef.current = nano;
   const gpt = nanoState(cloudSession?.nano?.gptImage, generators.gptImage), gptRef = useRef(gpt); gptRef.current = gpt;
@@ -1313,6 +1404,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   }, []);
 
   const addText = (position, text = '', template = null, extra = {}, via = analyticsVia('toolbar')) => {
+    if (template) { templateUsed(); if (cloud) track('template_applied', { source: via === 'drop' ? 'sidebar_drag' : 'sidebar_click' }); }
     checkpoint();
     const node = placeOnPage({ id: id(), type: 'text', z: nextLayer(nodeRef.current), position: position || flow.screenToFlowPosition({ x: innerWidth * .52, y: innerHeight * .36 }), data: { text, createdAt: new Date().toISOString(), ...(template ? { labelOutputs: !!template.labelOutputs, template: templateSnapshot(template) } : {}), ...extra } });
     node.position = freeSpot(creationGraph(), node.position, visiblePlacementBounds(), { width: 310, height: Math.max(150, cardBox(node).height) });
@@ -1369,19 +1461,23 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (!node || node.type !== 'text') return;
     if (templateId && !template) { notify(t('Custom node no longer exists.')); return; }
     if (!template && !node.data.template) return;
+    if (template) { templateUsed(); if (cloud) track('template_applied', { source: 'node_type' }); }
     checkpoint();
     putNodes(current => current.map(item => item.id === nodeId ? switchNodeTemplate(item, template) : item));
     markDirty();
   };
-  const saveTemplateFromNode = nodeId => {
-    if (mcpLocked.current) return;
-    try { setTemplateForm({ template: null, initial: templateFromNode(nodeRef.current.find(node => node.id === nodeId), nodeRef.current, edgeRef.current) }); }
+  const saveTemplateFromNode = (nodeId, source = 'context_menu') => {
+    if (mcpLocked.current || readOnlyRef.current) return;
+    setTemplateTip(null); setTemplateInvitation(false);
+    try { setTemplateForm({ template: null, source, initial: templateFromNode(nodeRef.current.find(node => node.id === nodeId), nodeRef.current, edgeRef.current) }); }
     catch (error) { notify(error.message); }
   };
   const saveTemplate = async value => {
     const existing = templateForm?.template;
     const template = cloudSession ? cloudSession.templates.save(value, existing) : (await api(existing ? `/api/templates/${existing.id}` : '/api/templates', jsonOptions(existing ? 'PUT' : 'POST', existing ? { ...value, expected: existing } : value))).template;
     setTemplates(current => existing ? current.map(item => item.id === template.id ? template : item) : [...current.filter(item => item.id !== template.id), template]);
+    templateUsed();
+    if (cloud && !existing) track('template_created', { source: templateForm.source || 'sidebar' });
     setTemplateForm(null);
   };
   const deleteTemplate = async () => {
@@ -1401,7 +1497,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     if (value?.kind === 'text') addText(at);
     else if (value?.kind === 'describe') addText(at, '', null, { task: describeTask });
     else if (value?.kind === 'upscale' && cloud) addText(at, '', null, upscaleData());
-    else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template); }
+    else if (value?.kind === 'template') { const template = templates.find(item => item.id === value.id); if (template) addText(at, '', template, {}, 'drop'); }
     // Images still come from a file; they are placed where the item was dropped.
     else if (value?.kind === 'image') { imageDrop.current = point; fileInput.current.click(); }
   };
@@ -1465,6 +1561,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     checkpoint(); putNodes(current => current.map(node => { if (node.id !== nodeId) return node; const { mask, ...data } = node.data; return { ...node, data }; })); markDirty();
   };
   const insertSelection = (selection, position, duplicate = false) => {
+    if (readOnlyRef.current || mcpLocked.current) return;
     if (!selection.nodes.length && !selection.sections?.length) return;
     let copied;
     try { copied = cloneSelection(selection, position, duplicate ? { nodes: nodeRef.current, edges: edgeRef.current, groups: groupRef.current, pages: pagesRef.current } : selection); }
@@ -1485,8 +1582,18 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     putSections(current => [...current.map(deselected), ...copiedSections]);
     markDirty();
     const prompt = copied.nodes.find(node => node.type === 'text');
+    const seen = { ...discoveryRef.current, ...readDiscovery() };
+    if (duplicate && !seen.used && !seen.duplicateSeen) {
+      const reusable = copied.nodes.find(node => reusableDuplicate(node, [...nodeRef.current, ...copied.nodes], [...edgeRef.current, ...copied.edges]));
+      if (reusable) { recordDiscovery({ duplicateSeen: true }); setTemplateInvitation(false); setTemplateTip({ id: reusable.id }); }
+    }
     if (prompt) { focusNode(prompt.id, 'text', true, true); guide.report({ type: 'prompt' }); }
     else { const page = activePageRef.current; requestAnimationFrame(() => revealCreated({ position: spot, measured: box, page })); }
+  };
+  const duplicateNode = nodeId => {
+    if (document.activeElement?.matches('.text-node textarea')) document.activeElement.blur();
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (node) insertSelection(selectedGraph([{ ...node, selected: true }], []), undefined, true);
   };
   // Deleting a section deletes what it holds, as in FigJam; Remove section keeps it. Stamps go with their nodes.
   const removal = ids => {
@@ -1993,6 +2100,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
       if (mcpLocked.current) return;
       if (event.key === 'Escape') { pendingIntent.current = null; chooseTool('select'); setViewId(null); setBoardForm(null); return; }
       if (modalOpen.current) return;
+      if (isHelpShortcut(event)) { event.preventDefault(); openHelp('shortcuts', 'key'); return; }
       if (event.target.closest('.image-node-caption')) return;
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'c' && !event.target.closest('textarea,input,[contenteditable="true"]')) {
         const scoped = pageGraph(), ids = [...scoped.nodes, ...scoped.groups, ...scoped.sections].filter(item => item.selected).map(item => item.id);
@@ -2358,7 +2466,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
@@ -2403,26 +2511,45 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
   const connectionLineStyle = useMemo(() => ({ stroke: connectionColor(connectionType), strokeWidth: 2 }), [connectionType]);
 
   const blockWhenLocked = event => { if (mcpLocked.current) { event.preventDefault(); event.stopPropagation(); } };
-  return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} data-theme={theme} inert={mcpBusy || pairing || !!imageEdit ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
+  return <CanvasContext.Provider value={canvas}><div className="app-shell" data-cloud={cloud || undefined} data-view-only={readOnly || undefined} inert={mcpBusy || pairing || !!imageEdit || help === 'shortcuts' || help === 'whats_new' ? true : undefined} aria-busy={mcpBusy} onKeyDownCapture={blockWhenLocked} onClickCapture={blockWhenLocked} onDropCapture={blockWhenLocked} onInputCapture={blockWhenLocked} onBeforeInputCapture={blockWhenLocked} onPointerDownCapture={blockWhenLocked} onWheelCapture={blockWhenLocked} onPasteCapture={blockWhenLocked}>
     <style>{pendingPulseKeyframes}</style>
-    <header className="app-header" data-analytics-area="top-bar">{cloud ? <><button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></button><button type="button" className="header-boards" onClick={() => cloudSession.home()}><Icon name="boards" size={15}/>{t('Boards')}</button></> : <div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div>}<div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/>{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div><div className="header-right">{cloudSession?.toolbar}{(desktopMode || cloud) && <button className="mcp-connect-button" type="button" aria-label={t('Connect MCP')} onClick={() => setAgentConnect(true)} data-tooltip={t('Connect MCP')}><Icon name="branch" size={15}/><span>{t('Connect MCP')}</span></button>}{(!cloud || cloudSession.paired) && <UsageLimit status={status} version={limitsVersion}/>}<button className="theme-button" type="button" aria-label={effects.sounds ? t('Sounds on') : t('Sounds off')} aria-pressed={effects.sounds} data-tooltip={effects.sounds ? t('Sounds on') : t('Sounds off')} onClick={effects.toggleSounds}><Icon name={effects.sounds ? 'sound' : 'muted'}/></button><Preferences analytics={cloud} theme={theme} toggleTheme={toggleTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/><LanguageSelect beforeSwitch={() => cloud ? syncCloud() : saveNow()}/><button className="getting-started-help" type="button" aria-label={t('Getting started')} data-tooltip={t('Getting started and canvas tips')} onClick={guide.reopen}>?</button><button className="theme-button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} data-tooltip={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18}/></button>{helperNeeded ? <HelperConnection effects={effects} readiness={readiness} status={status} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}/> : <button className={`connection ${status.connected && status.signedIn && status.imageGeneration ? 'connected' : ''}`} disabled={loginBusy} onClick={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} data-tooltip={status.error || t('Check Codex connection')}><span/>{status.connected && status.signedIn && status.imageGeneration ? t('Codex connected') : desktopMode && status.connected && !status.signedIn ? t('Sign in with ChatGPT') : cloud && !cloudSession.paired ? t('Pair helper') : t('Check Codex')}</button>}{cloudSession?.account}</div></header>
+    <header className="app-header" data-analytics-area="top-bar">
+      {cloud ? <button type="button" className="brand brand-home" data-tooltip={t('All boards')} aria-label={t('Concept Graph: all boards')} onClick={() => cloudSession.home()}><img src="/favicon.svg" alt=""/></button> : <div className="brand"><img src="/favicon.svg" alt="Concept Graph"/></div>}
+      <BoardMenu board={currentBoard} boards={boards} disabled={switching || !!transfer || uploading || !!starting || !loaded} canManage={canRename}
+        onSelect={changeBoard} onHome={cloud ? () => cloudSession.home() : undefined}
+        onCreate={() => { setNameDraft(''); setBoardForm('create'); }}
+        onRename={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}
+        onDelete={() => { setDeleteName(''); setBoardForm('delete'); }}
+        onHistory={cloud ? cloudSession.openHistory : undefined} buttonRef={boardMenuButton}
+        onExport={!cloud ? exportBoard : undefined} onImport={!cloud ? () => boardFileInput.current.click() : undefined}/>
+      <div className="save-state"><span className={(cloud ? cloudSession.connection === 'live' : saved === 'All changes saved') ? 'saved-dot' : 'saving-dot'}/><span className="save-label">{cloud ? cloudSession.connection === 'live' ? t('Live') : cloudSession.connection === 'offline' ? t('Offline · edits kept in this tab') : t('Connecting…') : transfer === 'export' ? t('Exporting board…') : transfer === 'import' ? t('Importing board…') : switching ? t('Switching board…') : t(saved)}</span>{readOnly && <span className="view-only-badge">{t('View only')}</span>}</div>
+      <div className="header-right">{cloudSession?.toolbar}<i className="header-divider" aria-hidden="true"/>
+        <GenerationControl status={status} version={limitsVersion} readiness={readiness} helperNeeded={helperNeeded} paired={!helperOffline && (cloud ? cloudSession.paired : !!helperSession?.paired)} effects={effects}
+          onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}
+          onCheck={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} desktopMode={desktopMode}
+          sharing={cloudSession?.generationSharing} siteStatus={cloudSession?.nano} onAgentConnect={(desktopMode || cloud) ? () => setAgentConnect(true) : null}/>
+        <Preferences analytics={cloud} theme={theme} setTheme={setTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/>
+        <HelpMenu item={help} onOpen={openHelp} onClose={() => setHelp(null)} returnFocus={helpReturnFocus} readOnly={readOnly} steps={gettingStartedSteps}/>{cloudSession?.account}
+      </div>
+    </header>
     {cloudSession?.panels}
     <aside className="sidebar" data-analytics-area="sidebar" inert={!!transfer || switching ? true : undefined}>
-      <div className="board-heading"><span className="eyebrow">{t('YOUR BOARDS')}</span><div className="board-picker"><select data-tooltip={t('Switch board')} aria-label={t('Board')} value={boardId} disabled={switching || !!transfer || uploading || !!starting || !loaded} onChange={event => changeBoard(event.target.value)}>{boards.map(board => <option key={board.id} value={board.id}>{board.name}</option>)}</select>{canRename && <button data-tooltip={t('Rename board')} aria-label={t('Rename board')} className="icon-button" disabled={switching || !!transfer || !loaded} onClick={() => { originalBoardName.current = currentBoard?.name || ''; setNameDraft(originalBoardName.current); setBoardForm('rename'); }}><Icon name="edit" size={15}/></button>}{canRename && <button data-tooltip={t('Delete board')} aria-label={t('Delete board')} className="icon-button board-delete" disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setDeleteName(''); setBoardForm('delete'); }}><Icon name="trash" size={15}/></button>}</div><button className="new-board" data-tooltip={t('Create a new board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => { setNameDraft(''); setBoardForm('create'); }}><Icon name="plus" size={15}/> {t('New board')}</button>{!cloud && <div className="board-transfer"><button data-tooltip={t('Save this board with its images')} aria-label={t('Export board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={exportBoard}><Icon name="download" size={14}/> {t('Export')}</button><button data-tooltip={t('Import a .conceptgraph file as a new board')} aria-label={t('Import board')} disabled={switching || !!transfer || uploading || !!starting || !loaded} onClick={() => boardFileInput.current.click()}><Icon name="upload" size={14}/> {t('Import')}</button></div>}</div>
+
       <BoardPages pages={pages} active={activePage} peers={cloudSession?.peers || []} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} onSelect={pageId => showPage(pageId)} onAdd={addPage} onRename={renamePage} onDelete={requestPageDelete}/>
       <div className="sidebar-tabs"><button data-tooltip={t('Show creation tools')} className={tab === 'canvas' ? 'active' : ''} onClick={() => setTab('canvas')}>{t('Create')}</button><button data-tooltip={t('View generation history')} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>{t('History')} <small>{runs.length}</small></button></div>
-      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button>{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Make larger copies of connected or selected images')} aria-label={t('Add upscale image node')} {...toolDrag({ kind: 'upscale' })} onClick={() => addUpscale()}><span className="tool-icon describe upscale"><Icon name="upscale"/></span><span>{t('Upscale image')}</span></button>}</div>}<section className="custom-nodes" aria-label={t('Custom nodes')}><div className="custom-nodes-heading"><span className="eyebrow">{t('CUSTOM NODES')}</span>{!readOnly && <button type="button" className="icon-button" aria-label={t('Create custom node')} data-tooltip={t('Create custom node')} disabled={!loaded || switching || !!transfer} onClick={() => setTemplateForm({ template: null })}><Icon name="plus" size={15}/></button>}</div>{templatesError ? <button className="custom-retry" type="button" onClick={refreshTemplates}>{templatesError} {t('Retry')}</button> : templates.length ? <div className="custom-nodes-list">{templates.map(template => <div className="custom-node-row" key={template.id}><button className="custom-node-add" type="button" {...(readOnly ? {} : toolDrag({ kind: 'template', id: template.id }))} onClick={() => readOnly ? setTemplateDetails(template) : addText(undefined, '', template)} data-tooltip={readOnly ? t('View this custom node') : t('Add custom node to board')}><span className="custom-node-glyph"><Icon name="text" size={14}/></span><span>{template.name}</span></button>{!readOnly && <button className="icon-button custom-node-edit" type="button" aria-label={t('Edit {name}', { name: template.name })} data-tooltip={t('Edit custom node')} onClick={() => setTemplateForm({ template })}><Icon name="edit" size={13}/></button>}</div>)}</div> : <p className="custom-nodes-empty">{readOnly ? t('This board has no custom nodes.') : t('Save instructions and images to use again.')}</p>}</section>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
+      {tab === 'canvas' ? <>{!readOnly && <div className="tool-list"><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Add text prompt · T')} aria-label={t('Add text prompt')} className="add-prompt-tool" {...toolDrag({ kind: 'text' })} onClick={() => addText()}><span className="tool-icon text"><Icon name="text"/></span><span>{t('+ Add text prompt')}</span><kbd>T</kbd></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Upload reference images')} aria-label={t('Add reference image')} {...toolDrag({ kind: 'image' })} onClick={() => { imageDrop.current = null; fileInput.current.click(); }}><span className="tool-icon image"><Icon name="image"/></span><span>{t('Reference image')}</span></button><button disabled={!loaded || switching || !!transfer} data-tooltip={t('Describe connected or selected images as text')} aria-label={t('Add describe image node')} {...toolDrag({ kind: 'describe' })} onClick={() => addDescribe()}><span className="tool-icon describe"><Icon name="describe"/></span><span>{t('Describe image')}</span></button>{cloud && <button disabled={!loaded || switching || !!transfer} data-tooltip={t('Make larger copies of connected or selected images')} aria-label={t('Add upscale image node')} {...toolDrag({ kind: 'upscale' })} onClick={() => addUpscale()}><span className="tool-icon describe upscale"><Icon name="upscale"/></span><span>{t('Upscale image')}</span></button>}</div>}<CustomNodesCard cloud={cloud} hosted={hosted} readOnly={readOnly} disabled={!loaded || switching || !!transfer || mcpBusy} templates={templates} error={templatesError} retry={refreshTemplates} toolDrag={toolDrag} add={template => addText(undefined, '', template)} edit={template => setTemplateForm({ template })} view={setTemplateDetails} create={(source = 'sidebar') => { setTemplateInvitation(false); setTemplateForm({ template: null, source }); }} copy={() => setCopyTemplates(true)} invitation={templateInvitation && !readOnly && !modalOpen.current} dismiss={() => { if (cloud) track('tip_event', { tip: 'custom_nodes_invite', action: 'dismissed' }); recordDiscovery({ invitationSeen: true }); setTemplateInvitation(false); }} Icon={Icon}/>{readOnly ? <p className="paste-hint">{t('You can view this board. Ask its owner for edit access to change it.')}</p> : <p className="paste-hint"><kbd>⌘ V</kbd> {t('Paste text or an image.')}<br/>{t('Drag a node’s output into empty space to add a prompt.')}<br/>{t('Select nodes, then group them with the bottom toolbar.')}</p>}</> : <div className="history-list">{!runs.length && <p className="empty-history">{t('Generations on this board will appear here.')}</p>}{[...runs].reverse().map(run => <HistoryItem key={run.id} run={run} now={busy(run) ? now : 0} page={pages.length > 1 ? pageNames.get(runPage(run.page)) : ''} canCancel={!readOnly && (!cloud || run.by?.name === cloudSession.user.name)} canvas={canvas}/>)}</div>}
       <div className="sidebar-bottom"><span className="legend-text"/> {t('Text')} <span className="legend-image"/> {t('Image')}</div>
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addImages([...event.dataTransfer.files], position); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} onCancel={cancel} onFocus={showRun}/>}</div>
       <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
+        {!readOnly && !modalOpen.current && <CustomNodeActions node={selectedCount === 1 ? view.nodes.find(node => node.selected && !node.hidden && plainPrompt(node)) : null} tip={!discovery.used && templateTip && selectedCount === 1 ? view.nodes.find(node => node.id === templateTip.id && node.selected && !node.hidden) : null} actions={canvas} onDismiss={() => { if (cloud) track('tip_event', { tip: 'duplicate_to_custom_node', action: 'dismissed' }); setTemplateTip(null); }}/>}
         <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
       {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}
       {tool === 'stamp' && <StampCursor emoji={stamps[stamp]} area={canvasElement} start={mouse.current}/>}
-      {!readOnly && <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} ready={readiness.key === 'ready'} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>}
+      {!readOnly && <GettingStarted effects={effects} guide={guide} helperNeeded={helperNeeded} steps={gettingStartedSteps} onStep={gettingStartedStep} onDownloadHelper={openHelperDownloads} disabled={!loaded || switching || !!transfer}/>}
       <div className="canvas-bottom"><span className="canvas-stats">{plural(scoped.nodes.length, '{count} node', '{count} nodes')} <i/> {plural(scoped.edges.length, '{count} connection', '{count} connections')}</span>
         {!readOnly && <div className="board-toolbar" data-analytics-area="bottom-toolbar" role="toolbar" aria-label={t('Board tools')}><AnnotationTools tool={tool} onTool={chooseTool} pen={pen} setPen={setPen} stickyColor={stickyColor} setStickyColor={setStickyColor} stamp={stamp} setStamp={setStamp} shape={shape} setShape={setShape} arrowColor={arrowColor} setArrowColor={setArrowColor}/><i className="toolbar-divider"/>
           <div className="toolbar-group"><button className="tool-button" data-tooltip={t('Undo · ⌘ Z')} aria-label={t('Undo')} onClick={() => undo()}><Icon name="undo" size={19}/></button><button className="tool-button" data-tooltip={t('Redo · ⌘ Shift Z')} aria-label={t('Redo')} onClick={() => undo(true)}><Icon name="redo" size={19}/></button>
@@ -2438,6 +2565,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, toggleTheme, w
     {bulkDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setBulkDelete(null); restoreDialogFocus(bulkDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="bulk-delete-title">{plural(bulkDelete.count, 'Delete {count} item?', 'Delete {count} items?')}</h2><p>{cloud ? t('You can undo this. The board’s version history also keeps a copy from just before.') : t('You can undo this.')}</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { ids } = bulkDelete; setBulkDelete(null); removeNodes(ids, true); }}>{t('Delete')}</button><button type="button" onClick={() => { setBulkDelete(null); restoreDialogFocus(bulkDelete.returnFocus); }}>{t('Cancel')}</button></div></div>}
     {pageDelete && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="page-delete-title" onKeyDown={event => { keepDialogFocus(event); if (event.key === 'Escape') { event.stopPropagation(); setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); } }}><div className="login-card page-delete-card"><h2 id="page-delete-title">{t('Delete “{name}”?', { name: pageDelete.name })}</h2><p>{pageDelete.count ? plural(pageDelete.count, 'Its {count} node will be deleted with it.', 'Its {count} nodes will be deleted with it.') : t('This page is empty.')} {t('Generation history and image files stay. You can undo this.')}</p><button className="primary-button danger" type="button" autoFocus onClick={() => { const { id: pageId } = pageDelete; setPageDelete(null); deletePage(pageId); }}>{t('Delete page')}</button><button type="button" onClick={() => { setPageDelete(null); restoreDialogFocus(pageDelete.returnFocus); }}>{t('Cancel')}</button></div></div>}
     {diagnosticsId && runs.find(run => run.id === diagnosticsId) && <RunDiagnostics run={runs.find(run => run.id === diagnosticsId)} loadRun={loadDiagnosticRun} returnFocus={diagnosticsReturnFocus} onClose={() => setDiagnosticsId(null)}/>}
+    {copyTemplates && !readOnly && <CopyCustomNodes api={api} boardId={boardId} onClose={() => setCopyTemplates(false)} onCopied={copies => { setTemplates(current => [...current.filter(item => !copies.some(copy => copy.id === item.id)), ...copies]); templateUsed(); if (cloud) for (const copy of copies) track('template_created', { source: 'copy' }); }}/>}
     {templateForm && <TemplateEditor templates={templates} template={templateForm.template} initial={templateForm.initial || templateForm.template} onClose={() => setTemplateForm(null)} onSave={saveTemplate} onDelete={deleteTemplate} onBusyChange={setTemplateBusy}/>}
     {templateDetails && <TemplateDetails template={templateDetails} library={templates.includes(templateDetails)} onClose={() => setTemplateDetails(null)}/>}
     {agentConnect && <AgentConnect cloud={cloud} onClose={() => setAgentConnect(false)}/>}
@@ -2481,9 +2609,10 @@ const helperBuilds = [
 ];
 const formatHelperSize = bytes => Number.isSafeInteger(bytes) && bytes > 0 ? t('{size} MB', { size: (bytes / 1_000_000).toFixed(1) }) : null;
 
-function useHelperDownloads(cloudMode) {
+function useHelperDownloads(cloudMode, enabled = true) {
   const [detection, setDetection] = useState(null), [manifest, setManifest] = useState(null), [manifestError, setManifestError] = useState(false);
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     detectPlatform(navigator).then(result => {
       if (!active) return;
@@ -2494,7 +2623,7 @@ function useHelperDownloads(cloudMode) {
       return response.json();
     }).then(value => { if (active) setManifest(value); }).catch(() => { if (active) setManifestError(true); });
     return () => { active = false; };
-  }, [cloudMode]);
+  }, [cloudMode, enabled]);
   return { detection, manifest, manifestError };
 }
 
@@ -2544,45 +2673,22 @@ function InstallCodex({ onClose, onDone }) {
   </div>;
 }
 
-function HelperConnection({ effects, readiness, status, paired, onSetup, onDownloads, onFix, onDisconnect, loginBusy }) {
-  const { detection, manifest, manifestError } = useHelperDownloads(cloud);
-  const [open, setOpen] = useState(false), container = useRef(null), trigger = useRef(null), panel = useRef(null);
-  const download = cloud ? cloudHelperDownload(detection?.packageId, manifest?.[detection?.packageId]) : null;
-  const outdated = paired && helperOutdated(status.helperVersion, download);
-  const close = () => { setOpen(false); trigger.current?.focus(); };
-  useEffect(() => {
-    if (!open || !paired) return;
-    panel.current?.focus();
-    const outside = event => { if (!container.current?.contains(event.target)) setOpen(false); };
-    document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
-  }, [open, paired]);
-  useEffect(() => { if (!paired) setOpen(false); }, [paired]);
-  const wasPaired = useRef(paired), [connected, setConnected] = useState(false);
-  useEffect(() => {
-    const changed = paired && !wasPaired.current; wasPaired.current = paired;
-    if (!changed) return;
-    effects.fire('helper', { element: trigger.current }); setConnected(true);
-    const timer = setTimeout(() => setConnected(false), 650); return () => clearTimeout(timer);
-  }, [paired]);
-  return <div className="helper-connection" ref={container} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }} onKeyDown={event => {
-    if (!open) return;
-    if (event.key === 'Escape') { event.preventDefault(); close(); }
-    event.stopPropagation();
-  }}>
-    <button ref={trigger} className={`connection ${readiness.key === 'ready' ? 'connected' : ''} ${outdated ? 'helper-update' : ''}`} type="button" aria-expanded={open && paired} aria-haspopup={paired ? 'dialog' : undefined} aria-controls={open && paired ? 'helper-connection-details' : undefined} onClick={() => paired ? setOpen(value => !value) : onSetup()} data-tooltip={status.error || readiness.label}>{connected ? <svg className="feel-check" aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path pathLength="1" d="m3 8 3 3 7-7"/></svg> : <span/>}{outdated ? t('Update helper') : readiness.label}</button>
-    {open && paired && <div ref={panel} id="helper-connection-details" className="helper-connection-panel" role="dialog" aria-label={t('Helper connection')} tabIndex={-1}>
-      <strong>{t('Helper connected')}</strong>
-      <p>{t('Codex: {state}', { state: status.codexMissing ? t('not installed') : !status.connected ? t('not ready') : status.signedIn ? t('signed in') : t('sign-in needed') })}</p>
+function HelperConnectionDetails({ readiness, status, paired, outdated, download, manifestError, manifest, detection, onSetup, onDownloads, onFix, onDisconnect, loginBusy }) {
+  return <>
+    <strong>{paired ? t('Helper connected') : readiness.label}</strong>
+    <p>{t('Codex: {state}', { state: status.codexMissing ? t('not installed') : !status.connected ? t('not ready') : status.signedIn ? t('signed in') : t('sign-in needed') })}</p>
+    {readiness.delegate != null && <p>{readiness.label}</p>}
+    {status.error && <p>{status.error}</p>}
+    {paired ? <>
       <p>{t('Helper version:')} <span className="helper-version">{status.helperVersion || (status.helperVersion === null ? t('source') : t('unknown'))}</span></p>
       {outdated && <p className="helper-update-note">{t('A newer helper is available. Download it, quit the old helper, then open the new one and paste its new code.')}</p>}
-      {(readiness.own || readiness).key !== 'ready' && <button type="button" disabled={loginBusy} onClick={() => { close(); onFix(); }}>{(readiness.own || readiness).action}</button>}
-      {download ? <a href={download.url} download={download.file} onClick={close}>{t('Download helper')}</a> : <button type="button" onClick={() => { close(); onDownloads(); }}>{t('Download helper')}</button>}
+      {(readiness.own || readiness).key !== 'ready' && <button type="button" disabled={loginBusy} onClick={onFix}>{(readiness.own || readiness).action}</button>}
+      {download ? <a href={download.url} download={download.file}>{t('Download helper')}</a> : <button type="button" onClick={onDownloads}>{t('Download helper')}</button>}
       {cloud && (manifestError || (manifest && detection?.packageId && !download)) && <p>{t('Download unavailable. Check other versions or try again later.')}</p>}
-      <button type="button" onClick={() => { close(); onDownloads(); }}>{t('Other versions')}</button>
-      {onDisconnect && <button type="button" onClick={() => { close(); onDisconnect(); }}>{t('Disconnect')}</button>}
-    </div>}
-  </div>;
+      <button type="button" onClick={onDownloads}>{t('Other versions')}</button>
+      {onDisconnect && <button type="button" onClick={onDisconnect}>{t('Disconnect')}</button>}
+    </> : <button type="button" onClick={onSetup}>{t('Pair helper')}</button>}
+  </>;
 }
 
 // With onClose, the screen sits over a board: Escape, a click on the empty space around the panel, the panel's close
@@ -2708,9 +2814,8 @@ function Workspace() {
   const helperSession = useRef({});
   Object.assign(helperSession.current, { paired: !!helperToken, pairing, pairCancel, status: helperStatus, openPair: (downloads = false) => { setShowAllBuilds(downloads); setPairing(true); } });
   const closePair = () => { setPairing(false); setPairCancel(value => value + 1); };
-  const [theme, setTheme] = useState(() => localStorage.getItem('concept-graph-theme') === 'dark' ? 'dark' : 'light');
-  const themeRef = useRef(theme), desktopPreferences = useRef(null), preferenceWrites = useRef(Promise.resolve()), pendingMcpSelection = useRef(null);
-  useEffect(() => { localStorage.setItem('concept-graph-theme', theme); document.documentElement.dataset.theme = theme; }, [theme]);
+  const [theme, updateTheme] = useThemePreference();
+  const desktopPreferences = useRef(null), preferenceWrites = useRef(Promise.resolve()), pendingMcpSelection = useRef(null);
   const savePreferences = next => {
     desktopPreferences.current = next;
     const operation = preferenceWrites.current.catch(() => {}).then(() => api('/api/desktop/preferences', jsonOptions('PUT', next)));
@@ -2731,8 +2836,7 @@ function Workspace() {
       const remembered = preferences ? preferences.boardId : localStorage.getItem('concept-graph-board');
       if (preferences) {
         desktopPreferences.current = { theme: preferences.theme, boardId: workspace.boards.some(b => b.id === remembered) ? remembered : null };
-        themeRef.current = preferences.theme;
-        setTheme(preferences.theme);
+        updateTheme(preferences.theme);
       }
       setBoardId(current => workspace.boards.some(board => board.id === current) ? current : workspace.boards.some(b => b.id === remembered) ? remembered : workspace.defaultBoardId);
     } catch (failure) {
@@ -2762,15 +2866,13 @@ function Workspace() {
     }
     finally { if (pendingMcpSelection.current === pending) pendingMcpSelection.current = null; }
   };
-  const toggleTheme = () => {
-    const next = themeRef.current === 'dark' ? 'light' : 'dark';
-    themeRef.current = next;
+  const setTheme = next => {
     if (desktopPreferences.current) savePreferences({ ...desktopPreferences.current, theme: next });
-    setTheme(next);
+    updateTheme(next);
   };
   if (!boardId && hosted) return <HelperSetup code={code} setCode={setCode} connecting={connecting} error={error} connect={openWorkspace}/>;
   if (!boardId) return <div className="startup">{error || t('Opening your boards…')}</div>;
-  return <><ReactFlowProvider key={boardId}><App boardId={boardId} boards={boards} updateBoards={setBoards} selectBoard={selectBoard} theme={theme} toggleTheme={toggleTheme} waitForPreferences={() => preferenceWrites.current} desktopMode={!!desktopPreferences.current} mcpEnabled={mcpEnabled} editorReadyCallback={editorReadyCallback} helperSession={hosted ? helperSession.current : undefined}/></ReactFlowProvider>
+  return <><ReactFlowProvider key={boardId}><App boardId={boardId} boards={boards} updateBoards={setBoards} selectBoard={selectBoard} theme={theme} setTheme={setTheme} waitForPreferences={() => preferenceWrites.current} desktopMode={!!desktopPreferences.current} mcpEnabled={mcpEnabled} editorReadyCallback={editorReadyCallback} helperSession={hosted ? helperSession.current : undefined}/></ReactFlowProvider>
     {hosted && pairing && <div className="helper-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Connect local helper')} onKeyDown={keepDialogFocus}><button className="helper-pair-close" autoFocus onClick={closePair}><Icon name="back" size={16}/>{t('Back to board')}</button><HelperSetup showAllBuilds={showAllBuilds} code={code} setCode={setCode} connecting={connecting} error={error} connect={openWorkspace} onClose={closePair}/></div>}
   </>;
 }

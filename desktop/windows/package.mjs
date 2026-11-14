@@ -69,11 +69,11 @@ await new Promise((resolve, reject) => {
     zip.readEntry();
   });
 });
-for (const file of ['server.mjs', 'mcp.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'graph.mjs', 'board-archive.mjs', 'helper-auth.mjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+for (const file of ['server.mjs', 'mcp.mjs', 'mcp-coordinator.mjs', 'codex.mjs', 'workspace.mjs', 'desktop-preferences.mjs', 'graph.mjs', 'board-archive.mjs', 'helper-auth.mjs', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
   await cp(path.join(root, file), path.join(app, file));
 }
 await mkdir(path.join(app, 'src'), { recursive: true });
-for (const file of ['canvas.mjs', 'node-template.mjs', 'annotations.mjs', 'pages.mjs', 'layers.mjs', 'sections.mjs', 'node-placement.mjs', 'image-edits.mjs']) await cp(path.join(root, 'src', file), path.join(app, 'src', file));
+for (const file of ['canvas.mjs', 'node-template.mjs', 'annotations.mjs', 'pages.mjs', 'theme.mjs', 'layers.mjs', 'sections.mjs', 'node-placement.mjs', 'image-edits.mjs']) await cp(path.join(root, 'src', file), path.join(app, 'src', file));
 for (const dependency of ['yauzl', 'yazl', 'pend', 'buffer-crc32']) {
   await cp(path.join(root, 'node_modules', dependency), path.join(app, 'node_modules', dependency), { recursive: true });
 }

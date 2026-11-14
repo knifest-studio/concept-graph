@@ -28,6 +28,18 @@ export function deleteBoardTemplate(doc, id, origin) {
   doc.transact(() => templates(doc).delete(id), origin);
 }
 
+export function importBoardTemplates(doc, values, origin) {
+  const current = readBoardTemplates(doc), clean = values.map(validateTemplate);
+  if (current.length + clean.length > maxBoardTemplates) throw new Error(`A board can have at most ${maxBoardTemplates} custom nodes.`);
+  const copies = clean.map(value => {
+    const template = { ...value, id: crypto.randomUUID(), color: value.color || nextTemplateColor(current), createdAt: new Date().toISOString() };
+    current.push(template);
+    return template;
+  });
+  doc.transact(() => { for (const template of copies) templates(doc).set(template.id, template); }, origin);
+  return copies;
+}
+
 export const libraryCopied = doc => doc.getMap('meta').get('libraryCopied') === true;
 
 // A board made before custom nodes belonged to boards copies the old team library once; the mark stays in the board.

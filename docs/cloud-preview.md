@@ -6,6 +6,8 @@ The stack uses Workers static assets + API (`cloud/worker.mjs`), one Durable Obj
 
 Google authenticates the person. Codex generation continues through each person's own Codex and local helper. Signing into Google and signing into Codex are separate steps.
 
+The theme follows the system by default; **Settings** offers **Light**, **Dark** and **System**. The round **?** menu offers **Getting started** with unfinished progress (editors only), **Keyboard shortcuts** and **What's new** for everyone, including viewers. Press **?** outside text fields for shortcuts. Opening **What's new** clears this browser’s unseen-updates dot. Help opens on request; there is no automatic product tour.
+
 ## Configure Google sign-in
 
 1. Create or select a project in Google Cloud Console. Open **Google Auth Platform** and configure the OAuth consent screen under **Branding**, including the app name, support email, and developer contact information. Set the privacy-policy URL to `https://concept-graph-cloud.concept-graph.workers.dev/privacy` (or your deployment's origin followed by `/privacy`). The Worker serves this public, self-contained English page without sign-in; the sign-in screen links to it as **Privacy**.
@@ -203,6 +205,8 @@ npx wrangler secret put SITE_OWNER_EMAIL -c cloud/wrangler.jsonc
 
 Without it, those boards keep their link access and nobody can change their sharing; their Share dialog says so. For local development, add `SITE_OWNER_EMAIL="you@example.com"` to `cloud/.dev.vars`.
 
+In **Create → CUSTOM NODES**, use **+ New custom node**, or select a plain prompt and choose **Save as custom node** in its floating toolbar or right-click menu. **Copy from another board…** lets editors copy chosen custom nodes from another accessible board; destination copies can be edited independently.
+
 Custom nodes belong to boards. Each board keeps its templates in its Yjs document, so they sync live: everyone who can open the board can use them, and people who can edit it can change them (the last edit wins). A board created before this change copies the old site-wide library into its document the first time it opens; new boards start with none. The old library stays untouched in the board directory, and `/api/templates` still serves it to tabs left open from older versions. The desktop app keeps its own library.
 
 Owners, access settings, invitations and visits live in the board-directory Durable Object (the `owner`, `ownerName`, `access` and `linkRole` columns of `boards` and the `board_people` table); board documents hold only display names and colors. Limitation: images and their previews are not tied to boards. They stay behind sign-in under long random names, so anyone signed in who obtains an image's address can load it.
@@ -240,8 +244,8 @@ The board's room relays calls (custom messages; nothing is stored): it names the
 
 Anyone who can edit a board can also wipe it, by accident or on purpose, so every board keeps its history on the server:
 
-- **Versions.** While a board changes, its room copies the whole document (Yjs state, gzipped) to R2 at most every 10 minutes, under `versions/<board>/<time>-auto`. An alarm takes the last copy once edits stop. A copy is also made at once **before a large deletion** (20 or more nodes, or at least half of a board with six or more, gone in one save; `versions/<board>/<time>-before-delete`, recording who deleted) and **before every restore**. Each copy records its time, node and image counts, four cover images and the display names of the people who edited since the previous one, never emails. The room keeps every copy from the last 24 hours, then the latest of each hour for 14 days and of each day for 90 days; copies made before a deletion or restore stay 30 days.
-- **Restoring.** **Versions** in the board's top bar lists them for everyone with access; people who can edit can choose **Restore → Restore for everyone**. The board as it is now is copied first, so a restore can be undone the same way. A restore changes only what differs, in one edit that reaches everyone connected, who see who restored it and to when. Generation history only grows: runs missing from the board come back and none are removed. Routes: `GET /api/cloud/boards/<board>/versions` and `POST /api/cloud/boards/<board>/versions/<version>/restore`.
+- **Version history.** While a board changes, its room copies the whole document (Yjs state, gzipped) to R2 at most every 10 minutes, under `versions/<board>/<time>-auto`. An alarm takes the last copy once edits stop. A copy is also made at once **before a large deletion** (20 or more nodes, or at least half of a board with six or more, gone in one save; `versions/<board>/<time>-before-delete`, recording who deleted) and **before every restore**. Each copy records its time, node and image counts, four cover images and the display names of the people who edited since the previous one, never emails. The room keeps every copy from the last 24 hours, then the latest of each hour for 14 days and of each day for 90 days; copies made before a deletion or restore stay 30 days.
+- **Restoring.** **Version history** in the board-name menu lists them for everyone with access; people who can edit can choose **Restore → Restore for everyone**. The board as it is now is copied first, so a restore can be undone the same way. A restore changes only what differs, in one edit that reaches everyone connected, who see who restored it and to when. Generation history only grows: runs missing from the board come back and none are removed. Routes: `GET /api/cloud/boards/<board>/versions` and `POST /api/cloud/boards/<board>/versions/<version>/restore`.
 - **Deleted boards.** Deleting a board (owner only, typing its name) moves it to **Recently deleted** on the boards page: nobody can open it, and its owner or a site admin can restore it, with its sharing, for 30 days. A daily cron trigger (`23 3 * * *` UTC, in `cloud/wrangler.jsonc`) then erases its room storage and versions. Routes: `GET /api/cloud/trash` and `POST /api/cloud/trash/<board>/restore`.
 - **Daily backups.** The first copy each UTC day is also written to `backups/<board>/<date>`. Protect that prefix once with an R2 bucket lock, so nothing (the app, a bug, a leaked key or the dashboard) can delete or overwrite those copies for 30 days, and let a lifecycle rule remove them a day later. When a daily backup's original version has been thinned out, the backup shows in the list as **Daily backup**.
 
@@ -260,7 +264,7 @@ Storage: a copy is the board's document only (images live once in `assets/`), us
 
 ## Agents over MCP
 
-Agents such as Claude Code, Codex and Claude Desktop can work on cloud boards through the site's remote MCP server at `https://<your-worker-url>/mcp` (Streamable HTTP with plain JSON answers). **Connect MCP** on a board copies a message that asks your agent to register it; by hand:
+Agents such as Claude Code, Codex and Claude Desktop can work on cloud boards through the site's remote MCP server at `https://<your-worker-url>/mcp` (Streamable HTTP with plain JSON answers). **Connect an AI agent (MCP)…** in the **Codex** status menu of a board’s top bar copies a message that asks your agent to register it; by hand:
 
 ```sh
 claude mcp add --transport http --scope user concept-graph https://<your-worker-url>/mcp

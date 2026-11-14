@@ -6,8 +6,8 @@ import { chatLinks } from './board-chat.mjs';
 
 export function ChatButton({ session, open, onClick, button }) {
   const state = useSyncExternalStore(session.chatStore.subscribe, session.chatStore.get);
-  return <button ref={button} type="button" className="cloud-history-button chat-button" aria-expanded={open} aria-controls="board-chat" onClick={onClick}>
-    {t('Chat')}{state.unread > 0 && <b className="chat-badge" aria-label={t('{count} unread messages', { count: state.unread })}>{state.unread > 99 ? '99+' : state.unread}</b>}
+  return <button ref={button} type="button" className="cloud-history-button chat-button" aria-expanded={open} aria-controls="board-chat" aria-label={t('Chat')} data-tooltip={t('Chat')} onClick={onClick}>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5a10 10 0 0 1 20 0Z"/></svg><span className="header-control-label">{t('Chat')}</span>{state.unread > 0 && <b className="chat-badge" aria-label={t('{count} unread messages', { count: state.unread })}>{state.unread > 99 ? '99+' : state.unread}</b>}
   </button>;
 }
 const nodeTitle = node => (node.data.title || node.data.caption || node.data.text || (node.type === 'image' ? t('Image') : t('Node'))).slice(0, 64);

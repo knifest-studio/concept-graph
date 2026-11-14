@@ -1,3 +1,4 @@
+import { validPreferences, readDesktopPreferences } from './desktop-preferences.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir, rename, stat, rm, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -52,16 +53,15 @@ try {
   if (error.code !== 'ENOENT') throw new Error('Saved custom nodes could not be read; no data was overwritten. ' + error.message);
 }
 const preferencesFile = path.join(dataDir, 'desktop-preferences.json');
-const validPreferences = value => value && typeof value === 'object' && !Array.isArray(value)
-  && Object.keys(value).length === 2 && Object.keys(value).every(key => ['theme', 'boardId'].includes(key))
-  && ['light', 'dark'].includes(value.theme)
-  && (value.boardId === null || (typeof value.boardId === 'string' && /^[\da-f-]{36}$/.test(value.boardId)));
-let desktopPreferences = { theme: 'light', boardId: null };
+let desktopPreferences = { theme: 'system', boardId: null };
 if (desktop) {
   try {
     const saved = JSON.parse(await readFile(preferencesFile, 'utf8'));
-    if (!validPreferences(saved)) throw new Error('Invalid preferences.');
-    desktopPreferences = saved;
+    desktopPreferences = readDesktopPreferences(saved);
+    if (saved.version !== 2) {
+      await writeFile(preferencesFile + '.tmp', JSON.stringify({ version: 2, ...desktopPreferences }));
+      await rename(preferencesFile + '.tmp', preferencesFile);
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') throw new Error('Desktop preferences could not be read; no data was overwritten. ' + error.message);
   }
@@ -95,7 +95,7 @@ async function settledWrites() {
 async function persistPreferences(value) {
   const snapshot = structuredClone(value);
   const operation = writes.catch(() => {}).then(async () => {
-    await writeFile(preferencesFile + '.tmp', JSON.stringify(snapshot));
+    await writeFile(preferencesFile + '.tmp', JSON.stringify({ version: 2, ...snapshot }));
     await rename(preferencesFile + '.tmp', preferencesFile);
     desktopPreferences = snapshot;
   });

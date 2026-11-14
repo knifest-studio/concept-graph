@@ -10,12 +10,20 @@ export const byteLength = value => new TextEncoder().encode(value).length;
 const strings = { route: 160, page: 120, platform: 120, userAgent: 500, language: 40, uiLanguage: 40, theme: 20, pointer: 20, referrer: 500, version: 80, nodeType: 30, via: 40, generator: 80, errorKind: 80, message: 1000, target: 60, combo: 80, status: 40, task: 30, run: 120, context: 60 };
 const numbers = { x: [0, 1], y: [0, 1], zoom: [.001, 100], width: [0, 16384], height: [0, 16384], screenWidth: [0, 32768], screenHeight: [0, 32768], dpr: [.1, 16], duration: [0, 604800000], active: [0, 604800000], variants: [0, 100], references: [0, 1000], count: [0, 10000], navigation: [0, 3600000], domReady: [0, 3600000], load: [0, 3600000] };
 const booleans = ['masked', 'reducedMotion', 'touch', 'meta', 'ctrl', 'alt', 'shift', 'visible', 'checked'];
+const uiValues = {
+  to: ['light', 'dark', 'system'],
+  source: ['settings', 'system', 'sidebar', 'node_toolbar', 'context_menu', 'tip', 'invite', 'copy', 'sidebar_click', 'sidebar_drag', 'node_type'],
+  item: ['menu', 'getting_started', 'shortcuts', 'whats_new'],
+  tip: ['duplicate_to_custom_node', 'custom_nodes_invite'],
+  action: ['shown', 'accepted', 'dismissed']
+};
 export function details(value) {
   const result = {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
   for (const [key, max] of Object.entries(strings)) if (typeof value[key] === 'string') result[key] = text(key === 'message' ? errorMessage(value[key]) : key === 'referrer' ? referrerOrigin(value[key]) : stripUserContent(value[key]), max);
   for (const [key, [min, max]] of Object.entries(numbers)) if (typeof value[key] === 'number' && Number.isFinite(value[key])) result[key] = clamp(value[key], min, max);
   for (const key of booleans) if (typeof value[key] === 'boolean') result[key] = value[key];
+  for (const [key, allowed] of Object.entries(uiValues)) if (allowed.includes(value[key])) result[key] = value[key];
   if (result.page && !sessionPattern.test(result.page) && result.page !== 'page-1') delete result.page;
   if (result.run && !sessionPattern.test(result.run)) delete result.run;
   if (result.route && !['board', 'boards', 'admin'].includes(result.route)) delete result.route;

@@ -61,7 +61,7 @@
 .version-card{width:560px}.version-card>.share-note{margin-bottom:16px}.version-status{margin:18px 0}.version-list{max-height:min(56vh,520px);overflow:auto}.version-list li{justify-content:flex-start}.version-list li>span.version-text{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}.version-list li>button,.version-confirm{margin-left:auto}.version-list small{white-space:normal}
 .version-covers{display:flex;gap:3px;flex-shrink:0}.version-covers img{width:29px;height:29px;object-fit:cover;border-radius:5px;background:var(--bg)}.version-deletion{background:color-mix(in srgb,var(--error) 7%,transparent)}.version-confirm{display:flex;align-items:center;gap:10px}.version-confirm .primary-button{padding:7px 11px;font-size:11px}.version-warning{margin-top:12px}
 .cloud-trash>p{font-size:11px;color:var(--muted);margin:-8px 0 14px}.cloud-trash .share-people{max-width:720px;background:var(--panel)}
-@media(max-width:1050px){.cloud-history-button span{display:none}}
+@media(max-width:900px){.cloud-history-button .header-control-label{display:none}}
 @media(max-width:600px){.version-list li{flex-wrap:wrap}.version-covers{display:none}}
 .presence-call-all{width:30px;height:30px;margin-left:6px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);color:var(--muted);transition:color .15s,border-color .15s,background .15s}.presence-call-all:hover,.presence-call-all:focus-visible{color:var(--purple);border-color:var(--purple);background:var(--soft-purple);outline:none}.presence-call-all:hover svg,.presence-call-row:hover svg,.presence-call:hover svg,.presence-person-menu [role="menuitem"]:hover svg{animation:bell-ring .5s ease-in-out}
 .presence-person-menu{width:240px}.presence-who{display:flex;align-items:center;gap:10px;padding:8px 10px 10px;margin-bottom:4px;border-bottom:1px solid var(--border)}.presence-who>span{display:flex;flex-direction:column;gap:1px;min-width:0}.presence-panel [role="menuitem"]>svg{flex-shrink:0;color:var(--purple)}.presence-panel [role="menuitem"]>svg+span{font-size:12px}
@@ -94,7 +94,7 @@
 :is(.board-chat-panel,.board-voice) :is(button,textarea,a):focus-visible{outline:2px solid var(--purple);outline-offset:2px}
 /* Chat and Voice joined the toolbar; below this width the wordmark gives them its room (the logo still leads home). */
 @media(max-width:1500px){.app-shell[data-cloud] .app-header{gap:12px;padding-inline:14px}.app-shell[data-cloud] .brand{min-width:0}.app-shell[data-cloud] .brand strong{display:none}.app-shell[data-cloud] .header-boards{margin-left:0}}
-@media(max-width:1100px){.app-shell:has(.board-chat-panel){grid-template-columns:185px minmax(0,1fr) 300px}.app-shell[data-cloud] .app-header{gap:10px}.app-shell[data-cloud] .header-right{gap:6px}.app-shell[data-cloud] .brand{min-width:0}.app-shell[data-cloud] .brand strong,.app-shell[data-cloud] .header-boards,.app-shell[data-cloud] .save-state{display:none}}
+@media(max-width:1100px){.app-shell:has(.board-chat-panel){grid-template-columns:185px minmax(0,1fr) 300px}.app-shell[data-cloud] .app-header{gap:10px}.app-shell[data-cloud] .header-right{gap:6px}.app-shell[data-cloud] .brand{min-width:0}.app-shell[data-cloud] .brand strong{display:none}}
 @media(max-width:800px){.app-shell[data-cloud]>.sidebar{grid-area:2/1}.app-shell[data-cloud]>main{grid-area:2/2}.board-chat-panel{position:relative;grid-area:2/1/3/-1;justify-self:end;width:min(340px,calc(100vw - 48px));box-shadow:var(--shadow)}.app-shell:has(.board-chat-panel){grid-template-columns:185px minmax(0,1fr)}.app-shell[data-cloud] .app-header{padding-inline:8px}.app-shell[data-cloud] .header-right{gap:4px}.app-shell[data-cloud] .cloud-history-button{padding:6px}.app-shell[data-cloud] .cloud-share-button{padding:7px 8px}}
 @media(max-width:650px){.app-shell[data-cloud]{grid-template-rows:auto minmax(0,1fr)}.app-shell[data-cloud] .app-header{min-height:60px;padding-block:8px;align-items:flex-start}.app-shell[data-cloud] .header-right{flex:1;flex-wrap:wrap;justify-content:flex-end}.app-shell[data-cloud] .header-right>*{flex-shrink:0}.app-shell:has(.board-chat-panel){grid-template-columns:125px minmax(0,1fr)}.board-chat-panel textarea{font-size:16px}}
 
@@ -116,3 +116,5 @@
 .app-shell:has(.board-chat-panel) .board-toolbar :is(.tool-button,.tool-prop){flex-shrink:0}
 
 .preference-analytics{gap:20px}.preference-analytics span{max-width:360px}.preference-analytics input{flex-shrink:0}
+
+@media(max-width:900px){.app-shell[data-cloud] .cloud-history-button{padding:8px}.app-shell[data-cloud] .cloud-history-button svg{display:block}}

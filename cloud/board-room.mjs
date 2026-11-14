@@ -8,7 +8,7 @@ import { generators, imageSize, isSiteGenerator, isUpscale, promptVariants, upsc
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
-import { copyLibrary, deleteBoardTemplate, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
+import { copyLibrary, deleteBoardTemplate, importBoardTemplates, libraryCopied, readBoardTemplates, saveBoardTemplate } from '../src/board-templates.mjs';
 import { boardRole, canEdit } from './access.mjs';
 import { BoardChat } from './chat.mjs';
 import { voiceHasSpace, voiceSignal } from './voice.mjs';
@@ -365,6 +365,19 @@ export class BoardRoom extends YServer {
       this.ctx.waitUntil(this.runNano(job));
       return { run: { id: run.id } };
     } finally { this.nanoStarting.delete(nodeId); }
+  }
+
+  listTemplates() { return readBoardTemplates(this.document); }
+
+  async importTemplates(values, user) {
+    const board = await this.directory().boardFor(this.name, user.email);
+    if (!canEdit(board?.role)) return { error: 'You can only view this board.', status: 403 };
+    try {
+      const templates = importBoardTemplates(this.document, values, 'template-copy');
+      this.edited(user.name);
+      await this.onSave();
+      return { templates };
+    } catch (cause) { return { error: cause.message, status: 400 }; }
   }
 
   // Worker RPC for an agent connected over MCP; the Worker has checked the person's role. A tool reads and changes the

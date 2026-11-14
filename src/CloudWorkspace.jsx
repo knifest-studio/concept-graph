@@ -1,6 +1,6 @@
 import { startAnalytics, analyticsReady, analyticsView, analyticsEnabled, subscribeAnalytics, track } from './analytics.mjs';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { LanguageSelect } from './LanguageSelect.jsx';
+import { useThemePreference } from './useThemePreference.jsx';
 import { Preferences } from './Preferences.jsx';
 import { useWaitingVideos } from './PendingNode.jsx';
 import { plural, t } from './i18n.mjs';
@@ -14,7 +14,7 @@ import { encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awaren
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
-import { CodexRequests, CodexShareMenu, TeammateCodex } from './CodexSharing.jsx';
+import { CodexRequests, CodexSharingDetails, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
 import { generators, collectInputs } from '../graph.mjs';
 import { terminalRun } from './run-outputs.mjs';
@@ -62,7 +62,7 @@ function BoardAccess({ board }) {
     {board.role !== 'owner' && <span>{t(roleNames[board.role] || roleNames.view)}{board.ownerName ? ` · ${board.ownerName}` : ''}</span>}</span>;
 }
 
-function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLogout, theme, toggleTheme, error }) {
+function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLogout, theme, setTheme, error }) {
   const [teamOpen, setTeamOpen] = useState(false);
   const waiting = useWaitingVideos(`cloud:${user.name}`), soundKey = soundPreferenceKey(`cloud:${user.name}`);
   const [sounds, setSounds] = useState(() => readSoundPreference(localStorage, soundKey));
@@ -139,9 +139,7 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
   };
   return <div className="cloud-home" data-analytics-area="boards">
     <header className="app-header cloud-home-header" data-analytics-area="top-bar"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
-      <button className="theme-button" type="button" aria-label={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} title={theme === 'dark' ? t('Switch to light theme') : t('Switch to dark theme')} onClick={toggleTheme}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{theme === 'dark' ? <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></> : <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>}</svg></button>
-      <LanguageSelect/>
-      <Preferences analytics theme={theme} toggleTheme={toggleTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
+      <Preferences analytics theme={theme} setTheme={setTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
       <AccountMenu user={user} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
     </div></header>
     {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
@@ -443,10 +441,11 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
     <ChatButton session={session} open={chatOpen} button={chatButton} onClick={() => setChatOpen(value => !value)}/>
     <VoiceControl session={session}/>
-    {editable && <CodexShareMenu view={sharingView} {...sharingActions}/>}
-    <button ref={historyButton} type="button" className="cloud-history-button" aria-haspopup="dialog" aria-label={t('Version history')} data-tooltip={t('Version history')} onClick={() => setHistoryOpen(true)}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span>{t('Versions')}</span></button>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" onClick={() => setShareOpen(true)}>{t('Share')}</button>
   </>;
+  session.generationSharing = editable ? <CodexSharingDetails view={sharingView} {...sharingActions}/> : null;
+  session.boardMenuButton = historyButton;
+  session.openHistory = () => setHistoryOpen(true);
   session.account = <AccountMenu user={account} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
   session.panels = <>{chatOpen && <BoardChatPanel session={session} onClose={() => { setChatOpen(false); chatButton.current?.focus(); }}/>}<VoiceAudio session={session}/></>;
   return <>
@@ -487,9 +486,8 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
     if (location.pathname !== '/admin/analytics') return startAnalytics(user?.email || null); }, [user?.email]);
   useEffect(() => { if (user && !boardId) analyticsView(location.pathname === '/admin/analytics' ? 'admin' : 'boards'); }, [user, boardId]);
   const [showAllBuilds, setShowAllBuilds] = useState(false);
-  const [theme, setTheme] = useState(() => localStorage.getItem('concept-graph-theme') === 'dark' ? 'dark' : 'light');
+  const [theme, setTheme] = useThemePreference();
   const pendingRun = useRef(null);
-  useEffect(() => { localStorage.setItem('concept-graph-theme', theme); document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
     services.api('/api/cloud/me').then(result => { setUser(result.user); setSiteRole(result.siteRole || null); }).catch(failure => { setUser(null); if (failure.status !== 401) setError(failure.message); });
     services.api('/api/auth/config').then(result => setDevLogin(result.devLogin === true)).catch(() => {});
@@ -572,8 +570,8 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   if (location.pathname === '/admin/analytics') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AnalyticsAdmin services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can view analytics.')}</main>;
   const current = boardId && opened?.id === boardId ? opened : null;
   return <>
-    {!boardId ? <BoardsHome user={user} siteRole={siteRole} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} toggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} error={error}/>
-      : current?.role ? <CloudBoard key={`${boardId}:${current.role}`} boardId={boardId} boardName={current.board.name} role={current.role} siteRole={siteRole} sharing={current.sharing} onSharing={changeSharing} onAccess={role => { if (role !== current.role) setAccessCheck(value => value + 1); }} onDeleted={notice => { setBoards(list => list.filter(board => board.id !== boardId)); openBoard(null); if (notice) setError(t('The owner deleted this board.')); }} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => openBoard(null)} onLogout={() => signOut()} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={openBoard} theme={theme} toggleTheme={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} waitForPreferences={async () => {}}/>
+    {!boardId ? <BoardsHome user={user} siteRole={siteRole} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} setTheme={setTheme} error={error}/>
+      : current?.role ? <CloudBoard key={`${boardId}:${current.role}`} boardId={boardId} boardName={current.board.name} role={current.role} siteRole={siteRole} sharing={current.sharing} onSharing={changeSharing} onAccess={role => { if (role !== current.role) setAccessCheck(value => value + 1); }} onDeleted={notice => { setBoards(list => list.filter(board => board.id !== boardId)); openBoard(null); if (notice) setError(t('The owner deleted this board.')); }} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => openBoard(null)} onLogout={() => signOut()} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={openBoard} theme={theme} setTheme={setTheme} waitForPreferences={async () => {}}/>
       : current ? <BoardUnavailable state={current} user={user} onBack={() => openBoard(null)} onRetry={() => setAccessCheck(value => value + 1)} onSwitch={() => signOut(true)}/>
       : <div className="startup">{t('Opening board…')}</div>}
     {!boardId && pairDialog()}

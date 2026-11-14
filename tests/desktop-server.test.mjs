@@ -109,10 +109,12 @@ test('desktop preferences survive a restart on a different port and reject inval
   };
   const first = await start();
   let response = await fetch(first.url + '/api/workspace');
-  assert.deepEqual((await response.json()).desktopPreferences, { theme: 'light', boardId: null });
+  assert.deepEqual((await response.json()).desktopPreferences, { theme: 'system', boardId: null });
   response = await fetch(first.url + '/api/boards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Remember me' }) });
   const board = await response.json();
   const write = value => fetch(first.url + '/api/desktop/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  assert.equal((await write({ theme: 'system', boardId: board.id })).status, 200);
+  assert.equal((await write({ theme: 'light', boardId: board.id })).status, 200);
   assert.equal((await write({ theme: 'dark', boardId: board.id })).status, 200);
   assert.equal((await write({ theme: 'blue', boardId: board.id })).status, 400);
   assert.equal((await write({ theme: 'light', boardId: '00000000-0000-0000-0000-000000000000' })).status, 400);

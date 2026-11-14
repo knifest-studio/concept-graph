@@ -37,6 +37,24 @@ test('opt-out creates no observer, recorder, timer or network request; switching
   assert.equal(after.session, before.session); assert.ok(after.events[0].seq > before.events.at(-1).seq);
   stop();
 });
+test('discovery events use the existing cloud pipeline and stop immediately on opt-out', async t => {
+  const env = setup(t), report = () => {
+    track('theme_changed', { to: 'dark', source: 'settings' });
+    track('help_opened', { item: 'shortcuts', via: 'key' });
+    track('template_created', { source: 'copy' });
+    track('template_applied', { source: 'sidebar_drag' });
+    track('tip_event', { tip: 'custom_nodes_invite', action: 'accepted' });
+  };
+  report(); env.window.dispatchEvent(new Event('pagehide')); assert.equal(env.beacons.length, 0);
+  setAnalyticsEnabled(true); const stop = startAnalytics('discovery@example.com'); report();
+  env.window.dispatchEvent(new Event('pagehide'));
+  const payload = JSON.parse(await env.beacons[0].body.text());
+  for (const name of ['theme_changed', 'help_opened', 'template_created', 'template_applied', 'tip_event']) assert.ok(payload.events.some(event => event.name === name), name);
+  assert.equal(payload.events.find(event => event.name === 'template_created').details.source, 'copy');
+  setAnalyticsEnabled(false); report(); env.window.dispatchEvent(new Event('pagehide')); assert.equal(env.beacons.length, 1);
+  stop();
+});
+
 test('opt-out and opt-in propagate from another tab, and logout stops collection', async t => {
   const env = setup(t); setAnalyticsEnabled(true); const stop = startAnalytics('two@example.com');
   env.values.set(analyticsPreferenceKey, 'off');

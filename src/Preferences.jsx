@@ -1,4 +1,4 @@
-import { analyticsEnabled, setAnalyticsEnabled, subscribeAnalytics } from './analytics.mjs';
+import { analyticsEnabled, setAnalyticsEnabled, subscribeAnalytics, track } from './analytics.mjs';
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { LanguageSelect } from './LanguageSelect.jsx';
@@ -6,7 +6,7 @@ import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { useDictationPreference } from './usePromptDictation.jsx';
 import { t } from './i18n.mjs';
 
-function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose, analytics }) {
+function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose, analytics }) {
   const usage = useSyncExternalStore(subscribeAnalytics, analyticsEnabled);
   const first = useRef(null), [dictation, setDictation] = useDictationPreference();
   useEffect(() => { first.current?.focus(); }, []);
@@ -14,8 +14,10 @@ function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, 
     onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}
     onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
     <div className="preferences-card">
-      <h2 id="preferences-title">{t('Preferences')}</h2>
-      <label className="preference-row"><span>{t('Theme')}</span><select ref={first} value={theme} onChange={event => { if (event.target.value !== theme) toggleTheme(); }}><option value="light">{t('Light')}</option><option value="dark">{t('Dark')}</option></select></label>
+      <h2 id="preferences-title">{t('Settings')}</h2>
+      <div className="preference-row"><span id="theme-label">{t('Theme')}</span><div className="theme-segments" role="group" aria-labelledby="theme-label">
+        {['light', 'dark', 'system'].map((value, index) => <button key={value} ref={index === 0 ? first : undefined} type="button" aria-pressed={theme === value} onClick={() => { if (value !== theme) { setTheme(value); if (analytics) track('theme_changed', { to: value, source: 'settings' }); } }}>{t({ light: 'Light', dark: 'Dark', system: 'System' }[value])}</button>)}
+      </div></div>
       <div className="preference-row"><span>{t('Interface language')}</span><LanguageSelect beforeSwitch={beforeSwitch}/></div>
       <label className="preference-row"><span>{t('Sounds')}</span><input type="checkbox" checked={sounds} onChange={toggleSounds}/></label>
       <label className="preference-row"><span>{t('Dictation language')}</span><select value={dictation} onChange={event => setDictation(event.target.value)}>
@@ -33,7 +35,8 @@ function PreferencesDialog({ theme, toggleTheme, sounds, toggleSounds, waiting, 
 export function Preferences(props) {
   const [open, setOpen] = useState(false), trigger = useRef(null);
   const close = () => { setOpen(false); props.onOpenChange?.(false); restoreDialogFocus(trigger.current); };
-  return <><button ref={trigger} className="theme-button" type="button" aria-label={t('Preferences')} data-tooltip={t('Preferences')} title={t('Preferences')} onClick={() => { setOpen(true); props.onOpenChange?.(true); }}>
+  return <><button ref={trigger} className="theme-button settings-button" type="button" aria-label={t('Settings')} data-tooltip={t('Settings')} title={t('Settings')} aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(true); props.onOpenChange?.(true); }}>
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3 3-1 3 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg>
+    <span>{t('Settings')}</span>
   </button>{open && <PreferencesDialog {...props} onClose={close}/>}</>;
 }

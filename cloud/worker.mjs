@@ -15,6 +15,7 @@ import { agentScopes, authorize } from './oauth.mjs';
 import { purgeTrash } from './trash.mjs';
 import { voiceIce } from './voice.mjs';
 import { analyticsRoute, purgeAnalytics } from './analytics.mjs';
+import { templateCopy } from './template-copy.mjs';
 
 export { BoardRoom } from './board-room.mjs';
 export { Directory } from './directory.mjs';
@@ -198,6 +199,11 @@ async function route(request, env) {
   }
   const nanoMatch = path.match(/^\/api\/boards\/([^/]+)\/nano(?:\/([^/]+)\/cancel)?$/);
   if (nanoMatch) return nanoRoute(request, env, user, url, nanoMatch[1], nanoMatch[2]);
+  const copyMatch = path.match(/^\/api\/boards\/([\da-f-]{36})\/template-copy$/);
+  if (copyMatch) {
+    const result = await templateCopy(request, { boardId: copyMatch[1], user, store: directory(env), room: id => getServerByName(env.BoardRoom, id), input: () => body(request) });
+    return result.error ? error(result.error, result.status) : json(result);
+  }
   if (path === '/api/templates') {
     if (method === 'GET') return json({ templates: await directory(env).listTemplates() });
     if (method === 'POST') {

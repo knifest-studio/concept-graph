@@ -6,7 +6,7 @@
 
 Write a prompt, connect references, and run it. Generated images appear as connected nodes. Branch from any result, compare directions, and keep the path that led there.
 
-Active runs show temporary output nodes with looping muted videos (text descriptions use a shimmer), and the personal **Videos while generating** switch in **Preferences** or your system’s reduced-motion setting replaces videos with a calm shimmer.
+Active runs show temporary output nodes with looping muted videos (text descriptions use a shimmer), and the personal **Videos while generating** switch in **Settings** or your system’s reduced-motion setting replaces videos with a calm shimmer.
 
 ![A real courier robot concept branching into city and forest variations](docs/images/canvas.jpg)
 
@@ -34,13 +34,17 @@ Concept Graph is available as a desktop preview with a local server that uses Co
 - Sketch around your ideas as in FigJam: draw with the pen, add stickies, stamps and sections, place rectangles, ellipses, diamonds and triangles with text inside (R, O), and connect things with arrows (L) that stay attached when they move.
 - Delete a board you no longer need; you type its name to confirm. The canvas stops a little past the board's content, so you cannot scroll off and lose it.
 - Switch the interface between English and Ukrainian. It follows your browser's language until you choose one.
-- Switch between light and dark themes. Boards save automatically on your computer.
+- The theme follows your system by default; choose **Light**, **Dark** or **System** in **Settings**. Boards save automatically on your computer.
+
+Use the round **?** menu for **Getting started** (editors only, with unfinished progress), **Keyboard shortcuts** or **What's new**. Press **?** outside a text field to open shortcuts. A dot marks updates this browser has not seen; opening **What's new** clears it. Help opens when you ask for it; there is no product tour.
+
+Find **CUSTOM NODES** in **Create**: choose **+ New custom node**, or select a plain prompt and use **Save as custom node** in its floating toolbar or right-click menu. On team boards, **Copy from another board…** copies chosen custom nodes into this board; each copy can be edited independently. Open the board-name menu for board actions, including **Version history** on team boards.
 
 ## Desktop preview
 
 The desktop preview includes Node.js and looks for an existing Codex CLI. If it cannot find one, it offers to download a separate verified copy; boards remain available if you decline. Sign in with your own ChatGPT account when prompted. Apple Silicon macOS has been tested locally; the public Apple Silicon download is signed with Developer ID and notarized by Apple. The Windows x64 preview requires WebView2 Runtime and has been cross-compiled but not tested on Windows. Windows builds are unsigned portable ZIPs and may show an operating-system security warning. The previews do not update automatically. See [desktop preview setup and build instructions](docs/desktop-preview.md).
 
-On desktop, use **Connect MCP** in the top bar to copy setup instructions for a local Codex or Claude Code agent. Keep Concept Graph open. A connected agent can read and modify boards and images and start generation; see the [MCP guide](docs/mcp.md).
+On desktop, open the **Codex** status menu in the top bar and choose **Connect an AI agent (MCP)…** to copy setup instructions for a local Codex or Claude Code agent. Keep Concept Graph open. A connected agent can read and modify boards and images and start generation; see the [MCP guide](docs/mcp.md).
 
 ## Requirements from source
 
@@ -95,7 +99,7 @@ Open a result to inspect the original prompt and the actual images used by that 
 
 ## Data and privacy
 
-On the cloud site only, usage analytics and session recordings are on by default to improve the interface. We collect device/viewport and navigation information, UI clicks and shortcuts, board/page IDs, node types, generation outcomes and timings, errors, and session activity. Recordings show the interface layout and interactions only: board content, prompts, images, board/page names, people's names, chat and every typed value are hidden. All inputs are masked; images, video and canvases are replaced with same-size placeholders. Masked text keeps its length, so the layout stays readable. Control labels and known error messages have user values removed; unknown error details are hidden. The signed-in account email is assigned to the session by the server so admins can see which teammate struggles; it is not shown inside the interface recording. Data stays in this site's own Cloudflare D1/R2 storage and is visible only to site admins. Interaction events and session metadata are kept for 180 days; recordings for 30 days, removed by the daily cleanup. No third-party analytics service receives this data. In **Preferences**, turn off **Share usage data and session recordings to improve Concept Graph** to stop collection and sending in this browser; this does not delete data already sent. The local desktop app does not collect this analytics. See the cloud site's `/privacy` page.
+On the cloud site only, usage analytics and session recordings are on by default to improve the interface. We collect device/viewport and navigation information, UI clicks and shortcuts, theme changes, help usage and custom-node actions (without their content), board/page IDs, node types, generation outcomes and timings, errors, and session activity. Recordings show the interface layout and interactions only: board content, prompts, images, board/page names, people's names, chat and every typed value are hidden. All inputs are masked; images, video and canvases are replaced with same-size placeholders. Masked text keeps its length, so the layout stays readable. Control labels and known error messages have user values removed; unknown error details are hidden. The signed-in account email is assigned to the session by the server so admins can see which teammate struggles; it is not shown inside the interface recording. Data stays in this site's own Cloudflare D1/R2 storage and is visible only to site admins. Interaction events and session metadata are kept for 180 days; recordings for 30 days, removed by the daily cleanup. No third-party analytics service receives this data. In **Settings**, turn off **Share usage data and session recordings to improve Concept Graph** to stop collection and sending in this browser; this does not delete data already sent. The local desktop app does not collect this analytics. See the cloud site's `/privacy` page.
 
 The server listens on `127.0.0.1`. A source-run app stores boards in `data/workspace.json` and images in `data/assets/`. The desktop preview instead uses `~/Library/Application Support/Concept Graph` on macOS or `%LOCALAPPDATA%\Concept Graph\data` on Windows by default. Change the desktop location via **Concept Graph → Storage Location…** on macOS or **Storage → Change Storage Folder…** on Windows. Back up the **entire data directory**, or export a board for sharing. Exports include prompts, image originals, historical inputs, and any custom-node instructions and reference images: review them before sharing.
 

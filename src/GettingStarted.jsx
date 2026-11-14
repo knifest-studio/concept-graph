@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { checklistEvent, checklistSteps, emptyChecklist, readChecklist, writeChecklist } from './onboarding.mjs';
+import { checklistEvent, emptyChecklist, readChecklist, writeChecklist } from './onboarding.mjs';
 import { t } from './i18n.mjs';
 
 export function useGettingStarted(key) {
@@ -17,10 +17,8 @@ export function useGettingStarted(key) {
 
 const labels = { helper: 'Connect helper', prompt: 'Add a prompt', generate: 'Generate your first image', variation: 'Make a variation: + Prompt from this' };
 
-export function GettingStarted({ effects, guide, helperNeeded, ready, onStep, onDownloadHelper, disabled }) {
+export function GettingStarted({ effects, guide, helperNeeded, steps, onStep, onDownloadHelper, disabled }) {
   const card = useRef(null), wasDone = useRef(false);
-  const showHelper = useRef(helperNeeded && !ready);
-  const steps = checklistSteps(guide.state, helperNeeded, showHelper.current ? false : ready);
   const done = steps.every(step => step.done), previous = useRef(new Map(steps.map(step => [step.id, step.done])));
   const [completed, setCompleted] = useState(new Set()), [hidden, setHidden] = useState(done);
   const signature = steps.map(step => `${step.id}:${step.done}`).join(',');
