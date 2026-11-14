@@ -3,9 +3,34 @@ import { glbLength, maxModelBytes } from './model-assets.mjs';
 let viewerModule;
 // Shared with cards: importing this helper alone never loads Three/model-viewer.
 export const loadViewer = () => viewerModule ||= import('@google/model-viewer').catch(cause => { viewerModule = null; throw cause; });
-export const modelFile = file => /\.(glb|gltf|obj|fbx)$/i.test(file.name || '') || file.type === 'model/gltf-binary';
+export const modelExtension = file => /\.([^.]+)$/.exec(file.name || '')?.[1].toLowerCase() || (file.type === 'model/gltf-binary' ? 'glb' : '');
+export const modelFile = file => /^(glb|gltf|obj|fbx|stl|ply|3mf|usdz)$/.test(modelExtension(file));
+export const modelInputAccept = '.glb,.gltf,.obj,.fbx,.stl,.ply,.3mf,.usdz,.zip,.mtl,.bin,.png,.jpg,.jpeg,.webp,.gif,.tga,.bmp,.ktx2,.avif,model/gltf-binary';
+export const supportedModelFormats = 'Supported 3D formats: GLB, glTF, OBJ, FBX, STL, PLY, 3MF, USDZ, or ZIP with companion files.';
+export const maxModelInputBytes = 300 * 1024 * 1024;
+export function resourceName(path) {
+  let clean = String(path).replace(/[?#].*$/, '');
+  try { clean = decodeURIComponent(clean); } catch {}
+  return clean.replace(/\\/g, '/').split('/').pop().toLowerCase();
+}
+export function groupModelFiles(files) {
+  const models = [], images = [], unsupported = [], resources = new Map();
+  for (const file of files) {
+    const ext = modelExtension(file);
+    if (modelFile(file)) models.push(file);
+    else if (/^(mtl|bin|png|jpe?g|webp|gif|tga|bmp|ktx2|avif)$/.test(ext)) {
+      if (!resources.has(resourceName(file.name))) resources.set(resourceName(file.name), file);
+      if (/^(png|jpe?g|webp|gif)$/.test(ext)) images.push(file);
+    } else if (/^image\/(png|jpeg|webp|gif)$/.test(file.type || '')) images.push(file);
+    else unsupported.push(file);
+  }
+  return { models, images, resources, unsupported };
+}
+export function checkModelBatch(files) {
+  if (files.reduce((sum, file) => sum + file.size, 0) > maxModelInputBytes) throw new Error('3D upload batches can be at most 300 MB, including unpacked files.');
+}
 export async function checkModelFile(file) {
-  if (/\.(gltf|obj|fbx)$/i.test(file.name || '')) throw new Error('Only GLB files can be added. Export GLB from your 3D app.');
+  if (modelExtension(file) && modelExtension(file) !== 'glb') throw new Error(supportedModelFormats);
   if (file.size > maxModelBytes) throw new Error('3D models can be at most 80 MB.');
   if (glbLength(new Uint8Array(await file.slice(0, 12).arrayBuffer())) !== file.size) throw new Error('GLB length does not match the file.');
 }

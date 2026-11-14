@@ -28,7 +28,7 @@ import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDisco
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
 import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
-import { modelFile, checkModelFile, modelPoster } from './model-upload.mjs';
+import { modelFile, modelExtension, modelInputAccept, groupModelFiles, checkModelBatch, checkModelFile, modelPoster, supportedModelFormats } from './model-upload.mjs';
 import { ImageEditor } from './ImageEditor.jsx';
 import { hasGenerationPrompt, imageAssets } from './image-edits.mjs';
 import { nanoState, usesSiteGenerator } from './generator.mjs';
@@ -1550,40 +1550,65 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const addFiles = async (files, position) => {
     if (readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
     checkpoint(); uploads.current++; setUploading(true);
-    const page = activePageRef.current, added = [], via = analyticsVia('toolbar');
-    try { for (const [index, file] of [...files].entries()) {
-      try {
-        const isModel = modelFile(file);
-        if (isModel) {
-          await checkModelFile(file);
-          if (!cloud) throw new Error('3D model uploads are available on cloud boards only.');
+    const page = activePageRef.current, added = [], via = analyticsVia('toolbar'), used = new Set(), missing = new Set();
+    try {
+      let converter, batch, queue = [...files];
+      if (files.some(file => modelFile(file) || /^(zip|mtl|bin|tga|bmp|ktx2|avif)$/.test(modelExtension(file)))) {
+        if (!cloud) throw new Error('3D model uploads are available on cloud boards only.');
+        checkModelBatch(files);
+        if (files.some(file => modelExtension(file) === 'zip' || (modelFile(file) && modelExtension(file) !== 'glb'))) {
+          converter = await import('./model-convert.mjs');
+          queue = await converter.expandModelFiles(files);
         }
-        const result = await api(isModel ? `/api/assets?boardId=${encodeURIComponent(boardId)}` : '/api/assets', { method: 'POST', headers: { 'Content-Type': isModel ? 'model/gltf-binary' : file.type || 'application/octet-stream' }, body: file });
-        const { asset } = result;
-        let poster;
-        if (isModel) {
-          try {
-            const blob = await modelPoster(file);
-            if (blob && !readOnlyRef.current) poster = (await api('/api/assets', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob })).asset;
-          } catch { /* A missing preview must never discard an uploaded model. */ }
-        }
-        if (!alive.current || readOnlyRef.current) return;
-        const start = position || flow.screenToFlowPosition({ x: innerWidth * .5, y: innerHeight * .3 });
-        // Only images need dimensions; GLBs stay streamed to storage and are never read into a JS buffer here.
-        let size;
-        if (!isModel) try { size = imageSize(new Uint8Array(await file.arrayBuffer())); } catch {}
-        const shape = size?.width > 0 && size?.height > 0 ? { pixels: { width: size.width, height: size.height }, ...(size.height / size.width >= .1 && size.height / size.width <= 10 ? { aspect: size.height / size.width } : {}) } : {};
-        const author = boardAuthor(cloudSession?.user);
-        const data = isModel ? { asset, ...(poster ? { poster } : {}), name: uniqueModelName(nodeRef.current, file.name?.replace(/\.glb$/i, '').trim() || '3D model'), ...(file.name ? { fileName: file.name.slice(0, 1000) } : {}), bytes: result.bytes, uploaded: true }
-          : { asset, caption: uniqueImageName(nodeRef.current, imageName({ data: { label: file.name } })), label: file.name || 'Pasted image', ...shape };
-        const node = assignPage({ id: id(), type: isModel ? 'model' : 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { ...data, createdAt: new Date().toISOString(), ...(author ? { author } : {}) } }, page);
-        const caption = captionHeight(node), renderedSize = nodeSize(node);
-        const spot = freeSpot(creationGraph(page), { x: node.position.x, y: node.position.y - caption }, page === activePageRef.current ? visiblePlacementBounds() : undefined, { width: renderedSize.width, height: renderedSize.height + caption });
-        node.position = { x: spot.x, y: spot.y + caption }; added.push(node);
-        if (cloud) track('node_created', { nodeType: node.type, via });
-        effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
-      } catch (error) { notify(t(error.message)); }
-    } } finally { uploads.current--; setUploading(uploads.current > 0); if (added.length) requestAnimationFrame(() => revealCreated(added.at(-1))); }
+        batch = groupModelFiles(queue); queue = [...batch.models, ...batch.images];
+        if (batch.unsupported.length) notify(t(supportedModelFormats));
+      }
+      for (const [index, original] of queue.entries()) {
+        if (used.has(original)) continue;
+        let file = original;
+        const modelUsed = new Set();
+        try {
+          const isModel = modelFile(file);
+          if (isModel) {
+            if (modelExtension(file) !== 'glb') {
+              notify(t('Converting {name} to GLB…', { name: original.name }));
+              try { file = await converter.convertModel(file, batch.resources, { used: modelUsed, missing }); }
+              catch (error) { throw new Error(t('Could not convert {name} to GLB: {error}', { name: original.name, error: t(error.message) })); }
+            }
+            await checkModelFile(file);
+          }
+          if (!alive.current || readOnlyRef.current || switchingRef.current || mcpLocked.current) return;
+          const result = await api(isModel ? `/api/assets?boardId=${encodeURIComponent(boardId)}` : '/api/assets', { method: 'POST', headers: { 'Content-Type': isModel ? 'model/gltf-binary' : file.type || 'application/octet-stream' }, body: file });
+          const { asset } = result;
+          let poster;
+          if (isModel) {
+            try {
+              const blob = await modelPoster(file);
+              if (blob && !readOnlyRef.current) poster = (await api('/api/assets', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob })).asset;
+            } catch { /* A missing preview must never discard an uploaded model. */ }
+          }
+          if (!alive.current || readOnlyRef.current) return;
+          const start = position || flow.screenToFlowPosition({ x: innerWidth * .5, y: innerHeight * .3 });
+          // Original GLBs stay streamed; converted files use the same upload and poster path.
+          let size;
+          if (!isModel) try { size = imageSize(new Uint8Array(await file.arrayBuffer())); } catch {}
+          const shape = size?.width > 0 && size?.height > 0 ? { pixels: { width: size.width, height: size.height }, ...(size.height / size.width >= .1 && size.height / size.width <= 10 ? { aspect: size.height / size.width } : {}) } : {};
+          const author = boardAuthor(cloudSession?.user);
+          const data = isModel ? { asset, ...(poster ? { poster } : {}), name: uniqueModelName(nodeRef.current, original.name?.replace(/\.[^.]+$/, '').trim() || '3D model'), ...(original.name ? { fileName: original.name.slice(0, 1000) } : {}), bytes: result.bytes, uploaded: true }
+            : { asset, caption: uniqueImageName(nodeRef.current, imageName({ data: { label: file.name } })), label: file.name || 'Pasted image', ...shape };
+          const node = assignPage({ id: id(), type: isModel ? 'model' : 'image', z: nextLayer(nodeRef.current), position: { x: start.x + index * 35, y: start.y + index * 35 }, data: { ...data, createdAt: new Date().toISOString(), ...(author ? { author } : {}) } }, page);
+          const caption = captionHeight(node), renderedSize = nodeSize(node);
+          const spot = freeSpot(creationGraph(page), { x: node.position.x, y: node.position.y - caption }, page === activePageRef.current ? visiblePlacementBounds() : undefined, { width: renderedSize.width, height: renderedSize.height + caption });
+          node.position = { x: spot.x, y: spot.y + caption }; added.push(node);
+          if (cloud) track('node_created', { nodeType: node.type, via });
+          effects.createNodes([node.id]); putNodes(current => [...current, node]); markDirty();
+          for (const resource of modelUsed) used.add(resource);
+        } catch (error) { notify(t(error.message)); }
+      }
+    } catch (error) { notify(t(error.message)); }
+    finally {
+      if (missing.size) notify(t('Missing model files: {files}. Pick companion files together with the model, or use a ZIP.', { files: [...missing].map(name => t(name)).join(', ') }));
+      uploads.current--; setUploading(uploads.current > 0); if (added.length) requestAnimationFrame(() => revealCreated(added.at(-1))); }
   };
   const editImage = (nodeId, mode) => {
     if (!cloud || readOnlyRef.current || mcpLocked.current || !loaded || switchingRef.current) return;
@@ -2655,7 +2680,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
           <div className="toolbar-group"><button className="tool-button" data-tooltip={t('Undo · ⌘ Z')} aria-label={t('Undo')} onClick={() => undo()}><Icon name="undo" size={19}/></button><button className="tool-button" data-tooltip={t('Redo · ⌘ Shift Z')} aria-label={t('Redo')} onClick={() => undo(true)}><Icon name="redo" size={19}/></button>
             <button className="tool-button" data-tooltip={canAlign ? t('Align selected nodes left to right') : t('Select nodes to align them')} aria-label={t('Auto-align selected nodes')} disabled={!canAlign} onClick={autoAlign}><Icon name="align" size={20}/></button><button className="tool-button" data-tooltip={canGroup ? t('Group selected nodes') : t('Select 2+ ungrouped nodes')} aria-label={t('Group selected nodes')} disabled={!canGroup} onClick={groupSelected}><Icon name="group" size={20}/></button>{selectedCount > 0 && <button className="tool-button" data-tooltip={t('Delete selected')} aria-label={t('Delete selected')} onClick={removeSelected}><Icon name="trash" size={18}/></button>}</div></div>}
         <div className="zoom-controls" role="group" aria-label={t('Zoom')}><button data-tooltip={t('Zoom out')} aria-label={t('Zoom out')} onClick={() => flow.zoomOut({ duration: 150 })}><Icon name="minus" size={18}/></button><i/><button data-tooltip={fitNodes.length ? t('Fit selected nodes in view') : t('Fit all nodes in view')} aria-label={t('Fit canvas')} onClick={() => flow.fitView({ nodes: fitNodes.length ? fitNodes : undefined, duration: 300, padding: .2, maxZoom: 1 })}><Icon name="expand" size={17}/></button><i/><button data-tooltip={t('Zoom in')} aria-label={t('Zoom in')} onClick={() => flow.zoomIn({ duration: 150 })}><Icon name="plus" size={18}/></button></div></div>
-    </main>{cloud && <input ref={modelInput} type="file" accept=".glb,model/gltf-binary" multiple hidden onChange={event => { addFiles([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>}<input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addFiles([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>
+    </main>{cloud && <input ref={modelInput} type="file" accept={modelInputAccept} multiple hidden onChange={event => { addFiles([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>}<input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => { addFiles([...event.target.files], imageDrop.current || undefined); imageDrop.current = null; event.target.value = ''; }}/>
     {!cloud && <input ref={boardFileInput} type="file" accept=".conceptgraph,.zip" aria-label={t('Board archive file')} hidden onChange={event => { const file = event.target.files[0]; event.target.value = ''; importBoard(file); }}/>}
     {boardForm === 'delete' && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-delete-title"><form onSubmit={deleteBoard}><h2 id="board-delete-title">{t('Delete “{name}”?', { name: currentBoard?.name ?? '' })}</h2>
       <p className="board-delete-warning">{cloud ? t('Nobody can open the board after this. It waits in Recently deleted on your boards page for 30 days, where you can restore it, and is then erased for good.') : t('The board, its pages and its history are removed from this computer. This can’t be undone; export it first to keep a copy.')}</p>

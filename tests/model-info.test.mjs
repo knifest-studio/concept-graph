@@ -76,10 +76,12 @@ test('partial wireframe failure restores originals and disposes already-created 
 
 test('uploaded Info shows source and original filename without generator cost or timing', () => {
   const info = rows({ uploaded: true, fileName: 'Source name.glb', bytes: 1240, author: { name: 'Uploader' }, createdAt: '2026-11-14T10:00:00Z' }, { model: model3dModels.tripo, usd: .3 }, { stats: { triangles: 12, vertices: 8, meshes: 1, materials: 1, textures: 0 }, formatDate: () => 'today' });
+  assert.equal(rows({ uploaded: true, fileName: 'robot.FBX' }).model.value, 'Uploaded · converted from FBX');
+  assert.equal(rows({ uploaded: true, fileName: 'robot.GLB' }).model.value, 'Uploaded');
   assert.equal(info.model.label, 'Source'); assert.equal(info.model.value, 'Uploaded'); assert.equal(info.fileName.value, 'Source name.glb');
   assert.equal(info.author.value, 'Uploader'); assert.equal(info.created.value, 'today'); assert.equal(info.file.value, 'GLB · 1.2 KB'); assert.equal(info.triangles.value, '12');
   for (const key of ['duration', 'cost', 'source']) assert.equal(info[key], undefined);
   assert.equal(rows({ modeler: 'tripo' }).model.value, 'Tripo H3.1');
   setLanguage('uk');
-  try { assert.equal(rows({ uploaded: true }).model.value, 'Додано з файлу'); } finally { setLanguage('en'); }
+  try { assert.equal(rows({ uploaded: true }).model.value, 'Додано з файлу'); assert.equal(rows({ uploaded: true, fileName: 'robot.obj' }).model.value, 'Додано з файлу · перетворено з OBJ'); } finally { setLanguage('en'); }
 });

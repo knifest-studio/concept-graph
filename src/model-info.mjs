@@ -20,8 +20,9 @@ export function modelInfo(node, run, { stats, formatDate = value => new Date(val
   const source = data.source || (oldSource ? { nodeId: oldSource.id, name: imageName(oldSource) } : undefined);
   const usd = data.usd ?? (run?.outputIds?.length === 1 ? run?.usd : undefined);
   const textures = stats ? plural(stats.textures, '{count} texture', '{count} textures') + (stats.textureSize ? t(', up to {size} px', { size: formatCount(stats.textureSize) }) : '') : '—';
+  const extension = /\.([^.]+)$/.exec(data.fileName || '')?.[1].toUpperCase();
   return [
-    ...(data.uploaded ? [{ key: 'model', label: t('Source'), value: t('Uploaded') }, { key: 'fileName', label: t('Original file name'), value: data.fileName || `${data.name}.glb` }] : [{ key: 'model', label: t('Generator'), value: Object.hasOwn(modelNames, model) ? modelNames[model] : model || '—' }]),
+    ...(data.uploaded ? [{ key: 'model', label: t('Source'), value: extension && extension !== 'GLB' ? t('Uploaded · converted from {format}', { format: extension }) : t('Uploaded') }, { key: 'fileName', label: t('Original file name'), value: data.fileName || `${data.name}.glb` }] : [{ key: 'model', label: t('Generator'), value: Object.hasOwn(modelNames, model) ? modelNames[model] : model || '—' }]),
     { key: 'created', label: t('Created'), value: created && Number.isFinite(Date.parse(created)) ? formatDate(created) : '—' },
     { key: 'author', label: t('By'), value: author?.name || '—' },
     ...(!data.uploaded ? [{ key: 'duration', label: t('Generation time'), value: duration || '—', note: duration && run?.outputIds?.length > 1 ? t('Whole run') : undefined },

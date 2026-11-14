@@ -14,7 +14,7 @@ test('browser checks only the GLB header and reports unsupported formats and siz
   await checkModelFile(file);
   for (const name of ['thing.gltf', 'thing.obj', 'thing.FBX']) {
     assert.equal(modelFile({ name }), true);
-    await assert.rejects(checkModelFile(new File(['bad'], name)), /Only GLB files/);
+    await assert.rejects(checkModelFile(new File(['bad'], name)), /Supported 3D formats:/);
   }
   await assert.rejects(checkModelFile(new File(['bad'], 'bad.glb')), /magic/);
   await assert.rejects(checkModelFile(new File([cubeGlb().subarray(0, 12)], 'short.glb')), /length/);
@@ -51,7 +51,7 @@ test('hidden poster capture cleans up URLs/elements on success, WebGL error, tim
 
 test('picker/drop/paste share uploads, with cloud-only entry, edit guards and preview fallback', async () => {
   const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  assert.match(source, /cloud && <input ref=\{modelInput\}[^>]*accept="\.glb,model\/gltf-binary" multiple/);
+  assert.match(source, /cloud && <input ref=\{modelInput\}[^>]*accept=\{modelInputAccept\} multiple/);
   assert.match(source, /const files = \[\.\.\.event.clipboardData.files\]/);
   assert.match(source, /else addFiles\(\[\.\.\.event.dataTransfer.files\], position\)/);
   assert.match(source, /if \(readOnlyRef.current \|\| mcpLocked.current \|\| switchingRef.current\) return/);
