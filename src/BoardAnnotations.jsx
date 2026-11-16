@@ -6,6 +6,8 @@ import { useCanvasValue } from './canvas-context.jsx';
 import './annotations.css';
 import { arrowTargetAt } from './canvas.mjs';
 import { t } from './i18n.mjs';
+import { shortcutHint, withShortcut } from './shortcuts.mjs';
+import { useShortcutOverrides } from './useShortcutOverrides.jsx';
 import { annotationSize, arrowPalette, authorInitials, boardAuthor, contrastColor, penPalette, penWidths, shapeKinds, shapePalette, stamps, stickyPalette, strokePath } from './annotations.mjs';
 
 export function ColorPicker({ color, colors, label, onChange, allowDefault = false, custom = false }) {
@@ -190,8 +192,10 @@ export function LightAnnotation({ id, type, data }) {
 
 // Laid out like FigJam's toolbar: Select; the marker, sticky and shapes "props" that peek up from the bar; then line
 // icons. Shapes and arrows share one prop, as FigJam's shapes and connectors do, and a tray above picks the kind and colour.
-const toolNames = { select: ['Select', 'V'], pen: ['Pen', 'P'], shape: ['Shape', 'R / O'], arrow: ['Arrow', 'L'], sticky: ['Sticky', 'S'], stamp: ['Stamp', 'E'], section: ['Section', 'Shift S'] };
-const toolHint = value => value === 'select' ? '' : value === 'section' ? ` · ${t('drag on the canvas to draw; with a selection, Shift S wraps it')}`
+const toolNames = { select: ['Select', ['tool.select']], pen: ['Pen', ['tool.pen']], shape: ['Shape', ['tool.rectangle', 'tool.ellipse']], arrow: ['Arrow', ['tool.arrow']], sticky: ['Sticky', ['tool.sticky']], stamp: ['Stamp', ['tool.stamp']], section: ['Section', ['section.wrap']] };
+const toolKeys = (value, shortcuts) => toolNames[value][1].map(id => shortcutHint(id, shortcuts)).filter(Boolean).join(' / ');
+const sectionHint = shortcuts => { const key = shortcutHint('section.wrap', shortcuts); return key ? t('drag on the canvas to draw; with a selection, {key} wraps it', { key }) : t('drag on the canvas to draw'); };
+const toolHint = (value, shortcuts) => value === 'select' ? '' : value === 'section' ? ` · ${sectionHint(shortcuts)}`
   : value === 'shape' ? ` · ${t('click to place or drag to size')}` : value === 'arrow' ? ` · ${t('drag between things to connect them')}` : ` · ${t('click canvas to place')}`;
 const stampNames = { like: 'like stamp', heart: 'heart stamp', star: 'star stamp', check: 'check stamp', question: 'question stamp', fire: 'fire stamp' };
 const stampName = kind => Object.hasOwn(stampNames, kind) ? t(stampNames[kind]) : `${kind} stamp`;
@@ -206,15 +210,16 @@ const ShapesArt = () => <svg width="54" height="54" viewBox="0 0 54 54" fill="no
 const swatches = (colors, value, choose, label) => colors.map(color => <button type="button" key={color} className="tray-swatch" style={{ background: color }} aria-label={`${label} ${color}`} aria-pressed={value === color} onClick={() => choose(color)}/>);
 
 export function AnnotationTools({ tool, onTool, pen, setPen, stickyColor, setStickyColor, stamp, setStamp, shape, setShape, arrowColor, setArrowColor }) {
-  const button = (value, content, className = 'tool-button') => <button type="button" key={value} className={className} aria-label={t(toolNames[value][0])} aria-pressed={tool === value || (value === 'shape' && tool === 'arrow')}
-    data-tooltip={`${t(toolNames[value][0])} · ${toolNames[value][1]}${toolHint(value)}`} onClick={() => onTool(value)}>{content}</button>;
+  const shortcuts = useShortcutOverrides();
+  const button = (value, content, className = 'tool-button') => { const keys = toolKeys(value, shortcuts); return <button type="button" key={value} className={className} aria-label={t(toolNames[value][0])} aria-pressed={tool === value || (value === 'shape' && tool === 'arrow')}
+    data-tooltip={`${t(toolNames[value][0])}${keys ? ` · ${keys}` : ''}${toolHint(value, shortcuts)}`} onClick={() => onTool(value)}>{content}</button>; };
   return <>
     <div className="toolbar-group" role="group" aria-label={t('Board tools')}>{button('select', lineIcon(toolIcons.select))}</div><i className="toolbar-divider"/>
     <div className="toolbar-group toolbar-props">{button('pen', <Marker color={pen.color}/>, 'tool-prop')}{button('sticky', <StickyStack color={stickyColor}/>, 'tool-prop')}{button('shape', <ShapesArt/>, 'tool-prop')}</div><i className="toolbar-divider"/>
     <div className="toolbar-group">{button('section', lineIcon(toolIcons.section))}{button('stamp', lineIcon(toolIcons.stamp))}</div>
     {!['select', 'section'].includes(tool) && <div className="annotation-options" role="group" aria-label={Object.hasOwn(toolOptions, tool) ? t(toolOptions[tool]) : `${tool} options`}>{['shape', 'arrow'].includes(tool) ? <>
-        {shapeKinds.map(kind => <button type="button" key={kind} aria-label={shapeName(kind)} aria-pressed={tool === 'shape' && shape.kind === kind} data-tooltip={`${shapeName(kind)}${kind === 'rectangle' ? ' · R' : kind === 'ellipse' ? ' · O' : ''}`} onClick={() => { setShape(current => ({ ...current, kind })); onTool('shape'); }}>{shapeIcon(kind)}</button>)}
-        <button type="button" aria-label={t('Arrow')} aria-pressed={tool === 'arrow'} data-tooltip={`${t('Arrow')} · L${toolHint('arrow')}`} onClick={() => onTool('arrow')}>{lineIcon(<path d="M5 19 19 5m-8 0h8v8"/>, 16)}</button><i className="tray-divider"/>
+        {shapeKinds.map(kind => <button type="button" key={kind} aria-label={shapeName(kind)} aria-pressed={tool === 'shape' && shape.kind === kind} data-tooltip={withShortcut(shapeName(kind), kind === 'rectangle' ? 'tool.rectangle' : kind === 'ellipse' ? 'tool.ellipse' : null, shortcuts)} onClick={() => { setShape(current => ({ ...current, kind })); onTool('shape'); }}>{shapeIcon(kind)}</button>)}
+        <button type="button" aria-label={t('Arrow')} aria-pressed={tool === 'arrow'} data-tooltip={`${withShortcut(t('Arrow'), 'tool.arrow', shortcuts)}${toolHint('arrow', shortcuts)}`} onClick={() => onTool('arrow')}>{lineIcon(<path d="M5 19 19 5m-8 0h8v8"/>, 16)}</button><i className="tray-divider"/>
         {tool === 'arrow' ? swatches(arrowPalette, arrowColor, setArrowColor, t('New arrow color')) : swatches(shapePalette, shape.color, color => setShape(current => ({ ...current, color })), t('New shape color'))}</>
       : tool === 'pen' ? <>{swatches(penPalette, pen.color, color => setPen(current => ({ ...current, color })), t('Pen color'))}<i className="tray-divider"/>{penWidths.map(width => <button type="button" key={width} aria-label={t('Pen width {width}', { width })} aria-pressed={pen.width === width} onClick={() => setPen(current => ({ ...current, width }))}><span className="pen-width" style={{ height: width }}/></button>)}</>
       : tool === 'sticky' ? swatches(stickyPalette, stickyColor, setStickyColor, t('New sticky color'))

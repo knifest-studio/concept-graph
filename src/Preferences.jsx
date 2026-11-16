@@ -2,6 +2,7 @@ import { analyticsEnabled, setAnalyticsEnabled, subscribeAnalytics, track } from
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { LanguageSelect } from './LanguageSelect.jsx';
+import { ShortcutSettings } from './ShortcutSettings.jsx';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { useDictationPreference } from './usePromptDictation.jsx';
 import { t } from './i18n.mjs';
@@ -13,7 +14,7 @@ function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, bef
   return createPortal(<div className="board-modal" data-analytics-area="dialog:Preferences" role="dialog" aria-modal="true" aria-labelledby="preferences-title"
     onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}
     onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
-    <div className="preferences-card">
+    <div className="preferences-card with-shortcuts">
       <h2 id="preferences-title">{t('Settings')}</h2>
       <div className="preference-row"><span id="theme-label">{t('Theme')}</span><div className="theme-segments" role="group" aria-labelledby="theme-label">
         {['light', 'dark', 'system'].map((value, index) => <button key={value} ref={index === 0 ? first : undefined} type="button" aria-pressed={theme === value} onClick={() => { if (value !== theme) { setTheme(value); if (analytics) track('theme_changed', { to: value, source: 'settings' }); } }}>{t({ light: 'Light', dark: 'Dark', system: 'System' }[value])}</button>)}
@@ -27,6 +28,7 @@ function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, bef
       {waiting.reducedMotion && <p id="preferences-motion" className="preference-hint">{t('Your system’s reduced-motion setting turns videos off.')}</p>}
       {analytics && <label className="preference-row preference-analytics"><span>{t('Share usage data and session recordings to improve Concept Graph')}</span><input type="checkbox" checked={usage} onChange={event => setAnalyticsEnabled(event.target.checked)}/></label>}
       {analytics && <p className="preference-hint"><a href="/privacy" target="_blank" rel="noreferrer">{t('Privacy Policy')}</a></p>}
+      <ShortcutSettings/>
       <div className="preferences-actions"><button className="primary-button" type="button" onClick={onClose}>{t('Done')}</button></div>
     </div>
   </div>, document.body);

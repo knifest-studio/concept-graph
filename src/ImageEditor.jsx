@@ -4,6 +4,7 @@ import { dragCrop, fullRect } from './image-edits.mjs';
 import { loadEditImage, loadSelection, saveCrop, saveMask } from './image-edit-canvas.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { t } from './i18n.mjs';
+import { matchShortcut } from './shortcuts.mjs';
 import './image-editor.css';
 
 const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -68,8 +69,10 @@ export function ImageEditor({ node, mode, assetUrl, upload, onApply, onClose, re
   };
   const keyDown = event => {
     keepDialogFocus(event); event.stopPropagation();
+    // The person's undo and redo keys, on any keyboard layout, step through the mask strokes.
+    const undoKey = !crop && matchShortcut(event, { scopes: ['canvas'], ids: ['edit.undo', 'edit.redo'], editing: false });
     if (event.key === 'Escape') { event.preventDefault(); if (!busy) onClose(); }
-    else if (!crop && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); replay(event.shiftKey ? Math.min(history.current.length, historyAt.current + 1) : Math.max(0, historyAt.current - 1)); }
+    else if (undoKey) { event.preventDefault(); replay(undoKey === 'edit.redo' ? Math.min(history.current.length, historyAt.current + 1) : Math.max(0, historyAt.current - 1)); }
     else if (event.key === 'Enter' && !event.nativeEvent.isComposing && (event.target.matches('.crop-handle') || !event.target.closest('button,input'))) { event.preventDefault(); apply(); }
   };
   const scale = image ? Math.min(Math.max(1, room.width - 24) / image.naturalWidth, Math.max(1, room.height - 24) / image.naturalHeight) : 1;

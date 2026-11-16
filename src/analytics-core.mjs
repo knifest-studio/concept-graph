@@ -1,6 +1,7 @@
 import { stripUserContent, privateControlLabel, errorMessage, referrerOrigin } from './analytics-privacy.mjs';
+import { isTextEntry, matchShortcut } from './shortcuts.mjs';
 
-// Shared, dependency-free rules for the browser and Worker. No client identity is accepted.
+// Shared rules for the browser and Worker, with no package dependencies. No client identity is accepted.
 export const eventBytes = 64 * 1024, replayBytes = 2 * 1024 * 1024, sessionReplayBytes = 50 * 1024 * 1024;
 export const sessionPattern = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/;
 export const kinds = new Set(['session', 'view', 'click', 'change', 'shortcut', 'context', 'rage', 'app', 'error']);
@@ -52,21 +53,14 @@ export function controlName({ ariaLabel, tooltip, text: label, tag = 'control', 
   const labelName = hidden ? privateControlLabel : stripUserContent;
   return text(labelName(ariaLabel), 60) || text(labelName(tooltip), 60) || (!hidden && text(stripUserContent(label), 60)) || text(`${tag}${role ? `[role=${role}]` : type ? `[type=${type}]` : !hidden && id ? `#${id}` : ''}`, 60);
 }
-export function shortcut(event, editing = false) {
-  const key = String(event.key || '');
-  if (event.repeat || event.isComposing || ['Meta', 'Control', 'Alt', 'Shift', 'Dead', 'Unidentified'].includes(key)) return '';
-  // Do not collect even modified characters typed into text fields (AltGr and macOS Option produce text).
-  if (editing && (event.altKey || !(event.metaKey || event.ctrlKey) || !/^(?:[acvxzy]|Enter|Escape|ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Backspace|Delete)$/i.test(key))) return '';
-  if (!editing && !event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && event.code === 'KeyS') return 'Shift+S';
-  if (!event.metaKey && !event.ctrlKey && !event.altKey && (editing || !/^[vtpserolx]$/i.test(key))) return '';
-  return [event.metaKey && 'Cmd', event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', key.length === 1 ? key.toUpperCase() : key].filter(Boolean).join('+');
+// Only presses that trigger one of the app's actions are logged, by the action's ID: never the typed characters, so text
+// typed with AltGr or macOS Option is not collected either. In a text field only the actions that work there count.
+export function shortcut(event, { editing = isTextEntry(event.target), ...ctx } = {}) {
+  if (event.repeat) return '';
+  return matchShortcut(event, { scopes: editing ? ['canvas', 'prompt', 'global'] : ['canvas', 'global'], editing, ...ctx }) || '';
 }
-export function shortcutControl(combo) {
-  if (/^(Cmd|Ctrl)\+Shift\+Z$/.test(combo) || /^(Cmd|Ctrl)\+Y$/.test(combo)) return 'Redo';
-  if (/^(Cmd|Ctrl)\+Z$/.test(combo)) return 'Undo';
-  if (/^(Cmd|Ctrl)\+Enter$/.test(combo)) return 'Generate';
-  return combo;
-}
+// Undo, Redo and Generate are counted with their buttons of the same name.
+export const shortcutControl = action => ({ 'edit.undo': 'Undo', 'edit.redo': 'Redo', 'prompt.generate': 'Generate' })[action] || action;
 export function rageDetector() {
   let recent = [], last = -Infinity;
   return ({ x, y, time }) => {

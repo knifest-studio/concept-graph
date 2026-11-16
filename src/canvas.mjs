@@ -100,6 +100,11 @@ export function pruneGroups(groups, nodes) {
   const ids = new Set(nodes.map(node => node.id));
   return groups.map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => ids.has(id)) })).filter(group => group.nodeIds.length);
 }
+// Ungroup acts on the selected groups and on the groups of selected members, as in FigJam.
+export function ungroupTargets(groups, nodes) {
+  const selected = new Set(nodes.filter(node => node.selected).map(node => node.id));
+  return groups.filter(group => group.selected || group.nodeIds.some(id => selected.has(id)));
+}
 
 const size = nodeSize;
 // `byId` (id → node) makes this proportional to the group instead of the board.

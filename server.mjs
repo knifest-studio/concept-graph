@@ -685,7 +685,7 @@ const server = http.createServer(async (request, response) => {
       return json(response, request.method === 'DELETE' ? { ok: true } : { template });
     }
     if (desktop && request.method === 'PUT' && url.pathname === '/api/desktop/preferences') {
-      const preferences = JSON.parse((await readBody(request, 4096)).toString());
+      const preferences = JSON.parse((await readBody(request, 16384)).toString());
       if (!validPreferences(preferences) || (preferences.boardId && !workspace.boards.some(board => board.id === preferences.boardId))) return json(response, { error: 'Invalid desktop preferences.' }, 400);
       await persistPreferences(preferences);
       return json(response, { ok: true });

@@ -1,23 +1,26 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
-import { keyboardShortcuts, isHelpShortcut, isMacPlatform, shortcutLabel } from './shortcuts.mjs';
+import { isHelpShortcut, platformIsMac, shortcutHint, shortcutRows } from './shortcuts.mjs';
+import { useShortcutOverrides } from './useShortcutOverrides.jsx';
+import './shortcut-settings.css';
 import { hasUnseenWhatsNew, markWhatsNewSeen, readWhatsNewSeen, whatsNewEntries, whatsNewSeenKey } from './whats-new.mjs';
 import { t } from './i18n.mjs';
 
 function HelpDialog({ item, onClose, returnFocus }) {
   const title = item === 'shortcuts' ? 'Keyboard shortcuts' : "What's new", heading = useRef(null), id = useId();
-  const mac = isMacPlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+  const rows = shortcutRows(useShortcutOverrides(), platformIsMac());
   useEffect(() => { const previous = returnFocus.current; heading.current?.focus(); return () => restoreDialogFocus(previous); }, []);
   return createPortal(<div className="board-modal" role="dialog" aria-modal="true" aria-labelledby={id} onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }} onCopy={event => event.stopPropagation()} onPaste={event => event.stopPropagation()}>
     <div className="help-card"><header><h2 id={id} ref={heading} tabIndex={-1}>{t(title)}</h2><button type="button" aria-label={t('Close')} onClick={onClose}>×</button></header>
-      {item === 'shortcuts' ? <><p>{t('Canvas shortcuts work outside text fields. Editing requires edit access.')}</p>{[...new Set(keyboardShortcuts.map(row => row.group))].map(group => <section key={group}><h3>{t(group)}</h3><dl>{keyboardShortcuts.filter(row => row.group === group).map(row => <div key={row.keys}><dt>{t(row.label)}</dt><dd><kbd>{shortcutLabel(row.keys, mac)}</kbd></dd></div>)}</dl></section>)}</> : <ul className="whats-new-list">{whatsNewEntries.map(entry => <li key={entry.id}><h3>{t(entry.title)}</h3><p>{t(entry.benefit)}</p></li>)}</ul>}
+      {item === 'shortcuts' ? <><p>{t('Canvas shortcuts work outside text fields and on any keyboard layout. Editing requires edit access. Change them in Settings.')}</p>{[...new Set(rows.map(row => row.group))].map(group => <section key={group}><h3>{t(group)}</h3><dl>{rows.filter(row => row.group === group).map(row => <div key={row.id}><dt>{t(row.label)}</dt><dd>{row.keys ? <kbd>{row.display ? t(row.keys) : row.keys}</kbd> : <span className="shortcut-off">{t('Off')}</span>}</dd></div>)}</dl></section>)}</> :<ul className="whats-new-list">{whatsNewEntries.map(entry => <li key={entry.id}><h3>{t(entry.title)}</h3><p>{t(entry.benefit)}</p></li>)}</ul>}
       <div className="preferences-actions"><button type="button" className="primary-button" onClick={onClose}>{t('Done')}</button></div>
     </div>
   </div>, document.body);
 }
 
 export function HelpMenu({ item, onOpen, onClose, returnFocus, readOnly, steps }) {
+  const helpKey = shortcutHint('help', useShortcutOverrides(), platformIsMac());
   const root = useRef(null), trigger = useRef(null), panel = useRef(null), id = useId();
   const [seen, setSeen] = useState(() => readWhatsNewSeen(localStorage));
   const open = item === 'menu', unseen = hasUnseenWhatsNew(seen), done = steps.filter(step => step.done).length;
@@ -47,7 +50,7 @@ export function HelpMenu({ item, onOpen, onClose, returnFocus, readOnly, steps }
     <button ref={trigger} className="getting-started-help" type="button" aria-label={unseen ? t('Help · new updates') : t('Help')} data-tooltip={t('Help')} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => open ? close() : onOpen('menu')}>?{unseen && <span className="help-unread-dot" aria-hidden="true"/>}</button>
     {open && <div ref={panel} id={id} className="board-menu-panel help-menu-panel" role="menu" aria-label={t('Help')}>
       <button type="button" role="menuitem" disabled={readOnly} onClick={() => choose('getting_started')} data-tooltip={readOnly ? t('Getting started requires edit access') : undefined}>{t('Getting started')}{!readOnly && done < steps.length && <small>{t('{done} of {total}', { done, total: steps.length })}</small>}</button>
-      <button type="button" role="menuitem" onClick={() => choose('shortcuts')}>{t('Keyboard shortcuts')}<kbd>?</kbd></button>
+      <button type="button" role="menuitem" onClick={() => choose('shortcuts')}>{t('Keyboard shortcuts')}{helpKey && <kbd>{helpKey}</kbd>}</button>
       <button type="button" role="menuitem" onClick={() => choose('whats_new')}>{t("What's new")}{unseen && <span className="help-unread-dot" aria-hidden="true"/>}</button>
     </div>}
   </div>{item && item !== 'menu' && <HelpDialog item={item} onClose={onClose} returnFocus={returnFocus}/>}</>;

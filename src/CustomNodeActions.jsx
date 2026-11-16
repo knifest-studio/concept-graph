@@ -3,18 +3,18 @@ import { NodeToolbar, Position, useStore } from '@xyflow/react';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
 import { t } from './i18n.mjs';
 import { track } from './analytics.mjs';
-import { isMacPlatform, shortcutLabel } from './shortcuts.mjs';
-
-const duplicateShortcut = shortcutLabel('Mod+D', isMacPlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent));
+import { shortcutHint } from './shortcuts.mjs';
+import { useShortcutOverrides } from './useShortcutOverrides.jsx';
 
 export function CustomNodeActions({ node, tip, actions, onDismiss }) {
+  const duplicateShortcut = shortcutHint('edit.duplicate', useShortcutOverrides());
   const hidden = useStore(state => state.transform[2] < .38 || state.connection.inProgress || !!state.nodeLookup.get(node?.id || tip?.id)?.dragging);
   const shown = useRef(null);
   useEffect(() => { if (!hidden && tip && shown.current !== tip.id) { shown.current = tip.id; track('tip_event', { tip: 'duplicate_to_custom_node', action: 'shown' }); } }, [hidden, tip?.id]);
   if (hidden) return null;
   return <>
     {node && <NodeContextMenu id={node.id} type="text" actions={actions}>{open => <NodeToolbar nodeId={node.id} isVisible position={Position.Top} offset={12} role="toolbar" aria-label={t('Prompt options')} className="prompt-actions nodrag nopan" onPointerDown={event => event.stopPropagation()}>
-      <button type="button" onClick={() => actions.duplicateNode(node.id)} data-tooltip={t('Duplicate')}><span>{t('Duplicate')}</span> <kbd>{duplicateShortcut}</kbd></button>
+      <button type="button" onClick={() => actions.duplicateNode(node.id)} data-tooltip={t('Duplicate')}><span>{t('Duplicate')}</span>{duplicateShortcut && <> <kbd>{duplicateShortcut}</kbd></>}</button>
       <button type="button" onClick={() => actions.saveTemplateFromNode(node.id, 'node_toolbar')}>{t('Save as custom node')}</button>
       <button type="button" aria-label={t('Prompt options')} data-tooltip={t('Prompt options')} onClick={open}>⋯</button>
     </NodeToolbar>}</NodeContextMenu>}

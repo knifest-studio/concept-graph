@@ -1,0 +1,28 @@
+/* The shortcut list scrolls inside the Settings card, so the other settings and Done stay in view. */
+.preferences-card.with-shortcuts{display:flex;flex-direction:column;width:560px}
+.preferences-card.with-shortcuts>*{flex-shrink:0}
+.preferences-card.with-shortcuts>.shortcut-settings{flex:1 1 auto;min-height:180px;display:flex;flex-direction:column}
+.shortcut-settings h3{margin:22px 0 0;font-size:13px}
+.shortcut-settings>.preference-hint{margin:4px 0 8px}
+.shortcut-list{flex:1 1 auto;min-height:0;overflow:auto;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:0 2px}
+.shortcut-list h4{margin:12px 0 2px;font-size:11px;color:var(--muted);font-weight:600}
+.shortcut-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px 12px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px}
+.shortcut-row:last-child{border-bottom:0}
+.shortcut-name{min-width:0;color:var(--text);line-height:1.4}
+.shortcut-keys{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px}
+.shortcut-keys kbd,.help-card .shortcut-off{margin:0;padding:2px 6px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);font-size:11px;white-space:nowrap}
+.shortcut-off{color:var(--muted);font-size:11px;font-style:italic}
+.help-card .shortcut-off{color:var(--muted);border-style:dashed}
+.shortcut-actions{display:flex;gap:2px;justify-content:flex-end}
+.shortcut-actions button,.shortcut-conflict button:not(.primary-button),.shortcut-reset-all button{padding:4px 7px;border-radius:5px;font-size:11px;color:var(--purple)}
+.shortcut-actions button:hover,.shortcut-conflict button:not(.primary-button):hover,.shortcut-reset-all button:hover:not(:disabled){background:var(--soft-purple)}
+.shortcut-reset-all button:disabled{color:var(--muted);opacity:.6;cursor:default}
+.shortcut-recorder{padding:3px 8px;border:1px dashed var(--purple)!important;border-radius:5px;background:var(--soft-purple)!important;color:var(--purple);font-size:11px;white-space:nowrap}
+.shortcut-recorder:focus-visible{outline:2px solid var(--purple);outline-offset:1px}
+.shortcut-notice,.shortcut-conflict{grid-column:1/-1;margin:0;font-size:11px;line-height:1.5}
+.shortcut-notice{color:var(--error)}
+.shortcut-conflict{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:7px;background:var(--soft-purple);color:var(--text)}
+.shortcut-conflict p{flex:1 1 200px;margin:0}
+.shortcut-conflict .primary-button{padding:6px 12px;margin:0}
+.shortcut-reset-all{display:flex;justify-content:flex-end;padding-top:8px}
+@media(max-width:480px){.shortcut-row{grid-template-columns:minmax(0,1fr) auto}.shortcut-actions{grid-column:1/-1;justify-content:flex-start}}

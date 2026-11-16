@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { controlName, rageDetector, shortcut, sanitizeEvent, validateBatch, replayKey, replaySequence, retentionCutoffs, splitEvents, eventBytes, byteLength, details } from '../src/analytics-core.mjs';
+import { controlName, rageDetector, shortcut, shortcutControl, sanitizeEvent, validateBatch, replayKey, replaySequence, retentionCutoffs, splitEvents, eventBytes, byteLength, details } from '../src/analytics-core.mjs';
 
 const session = '12345678-1234-1234-1234-123456789abc';
 const event = (seq = 0) => ({ seq, kind: 'click', name: 'Generate', time: Date.now(), area: 'top-bar', details: { x: .5, y: .6 } });
@@ -18,17 +18,25 @@ test('rage clicks require three nearby clicks within a second and do not count d
   assert.equal(rage({ x: 20, y: 0, time: 900 }), false);
   assert.equal(rage({ x: 80, y: 0, time: 1000 }), false);
 });
-test('shortcuts never log ordinary typing, composition or AltGr input', () => {
-  assert.equal(shortcut({ key: 'a' }, true), '');
-  assert.equal(shortcut({ key: 'é', altKey: true }, true), '');
-  assert.equal(shortcut({ key: '@', altKey: true, ctrlKey: true }, true), '');
-  assert.equal(shortcut({ key: 'z', metaKey: true, shiftKey: true }, true), 'Cmd+Shift+Z');
-  assert.equal(shortcut({ key: 'Enter', ctrlKey: true }, true), 'Ctrl+Enter');
-  assert.equal(shortcut({ key: 'p' }), 'P');
-  assert.equal(shortcut({ key: 'e' }), 'E');
-  assert.equal(shortcut({ key: 'І', code: 'KeyS', shiftKey: true }), 'Shift+S');
-  assert.equal(shortcut({ key: 'p', repeat: true }), '');
-  assert.equal(shortcut({ key: 'p', isComposing: true }), '');
+test('shortcuts log only the action IDs the app handles, never ordinary typing, composition or AltGr input', () => {
+  const typing = { editing: true, mac: true }, canvas = { mac: true };
+  assert.equal(shortcut({ key: 'a' }, typing), '');
+  assert.equal(shortcut({ key: 'p' }, typing), '');
+  assert.equal(shortcut({ key: 'é', altKey: true }, typing), '');
+  assert.equal(shortcut({ key: '@', altKey: true, ctrlKey: true }, typing), '');
+  // Undo inside a text field is the field's own, not the board's.
+  assert.equal(shortcut({ key: 'z', metaKey: true, shiftKey: true }, typing), '');
+  assert.equal(shortcut({ key: 'z', metaKey: true, shiftKey: true }, canvas), 'edit.redo');
+  assert.equal(shortcut({ key: 'Enter', ctrlKey: true }, typing), 'prompt.generate');
+  assert.equal(shortcut({ key: 'Enter', ctrlKey: true }, canvas), '');
+  assert.equal(shortcut({ key: 'p' }, canvas), 'tool.pen');
+  assert.equal(shortcut({ key: 'e' }, canvas), 'tool.stamp');
+  assert.equal(shortcut({ key: 'І', code: 'KeyS', shiftKey: true }, canvas), 'section.wrap');
+  assert.equal(shortcut({ key: 'я', code: 'KeyZ', metaKey: true }, canvas), 'edit.undo');
+  assert.equal(shortcut({ key: 'q' }, canvas), '');
+  assert.equal(shortcut({ key: 'z', metaKey: true, repeat: true }, canvas), '');
+  assert.equal(shortcut({ key: 'p', isComposing: true }, canvas), '');
+  assert.equal(shortcutControl('edit.undo'), 'Undo'); assert.equal(shortcutControl('prompt.generate'), 'Generate'); assert.equal(shortcutControl('group.create'), 'group.create');
 });
 test('discovery analytics retains only bounded UI fields, never user-authored content', () => {
   for (const [name, fields] of [
