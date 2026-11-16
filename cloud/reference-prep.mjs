@@ -6,13 +6,19 @@ import { imageSize } from '../graph.mjs';
 // Cloudflare Images takes at most 20 MB through the binding's .input()
 // (https://developers.cloudflare.com/images/get-started/limits/, read 2026-11-16).
 export const transformInputBytes = 20 * 1024 * 1024;
-// Inline images count towards one request: the same 20 MB the board has always allowed in total.
+// GPT Image and upscales keep the 20 MB in total the board has always allowed (Gemini's budget is below).
 export const referenceTotalBytes = 20 * 1024 * 1024;
 // Each GPT Image data URL is at most 20,971,520 characters (OpenAI Images API reference): about 15 MB of raw bytes.
 const gptDataUrl = 20971520, gptImageBytes = Math.floor((gptDataUrl - 32) / 4) * 3;
+// Gemini counts the whole request, images as base64 text, against 20 MB: "Inline image data limits your total request
+// size (text prompts, system instructions, and inline bytes) to 20MB" (https://aistudio.google.com/docs/image-understanding,
+// read 2026-11-16; https://aistudio.google.com/docs/file-input-methods says 100 MB, so the stricter page is followed).
+// Images get three quarters of it, less room for the prompt: about 14.8 MB of files.
+const geminiRequestBytes = 20 * 1024 * 1024, promptRoom = 256 * 1024;
+export const geminiReferenceBytes = Math.floor((geminiRequestBytes - promptRoom) / 4) * 3;
 // Gemini bills a fixed number of tokens per image whatever its size, so pixels past 3K buy nothing; GPT Image takes
 // edits up to 16,777,216 px. 3D keeps its rule: over 6 MB or 4096 px, a 2048 px JPEG (Hunyuan takes up to 5000 px, 8 MB).
-const nano = Object.freeze({ side: 3072, totalBytes: referenceTotalBytes });
+const nano = Object.freeze({ side: 3072, totalBytes: geminiReferenceBytes });
 export const referenceLimits = Object.freeze({
   nanoBanana: nano, describe: nano,
   gptImage: Object.freeze({ side: 4096, pixels: 16777216, totalBytes: referenceTotalBytes, maxBytes: gptImageBytes }),
@@ -118,13 +124,17 @@ export function planReferences(infos, limits, { side, pair = [] } = {}) {
 // Whether a set of byte sizes can be sent: the total and, for GPT Image, each data URL.
 export const fitsLimits = (sizes, limits) => !limits || (sizes.reduce((total, size) => total + size, 0) <= (limits.totalBytes ?? Infinity) && sizes.every(size => size <= (limits.maxBytes ?? Infinity)));
 
+// Whether the provider takes an image as it is when no copy can be made. The 3072 and 4096 px sides only save tokens;
+// a GIF is not a format either provider reads, and 3D needs its JPEG rule.
+export const sendsAsIs = (info, limits) => !!info && !limits?.format && ['png', 'jpg', 'webp'].includes(info.format) && info.bytes <= (limits?.maxBytes ?? Infinity);
+
 export const megabytes = bytes => {
   const value = bytes / (1024 * 1024);
   return value >= 10 ? String(Math.round(value)) : String(Math.round(value * 10) / 10);
 };
 
 // The first reason a set cannot be sent, found before anything is reserved, or null. Without Cloudflare Images nothing
-// can be reduced, so the originals must fit as they are.
+// can be reduced, so the originals go as they are and must fit.
 export function referenceProblem(infos, images, limits, { binding = false, name = 'Nano Banana', upscale = false, model3d = false } = {}) {
   if (infos.some(info => !info)) return upscale || model3d ? 'An image is missing from storage. Reconnect it and try again.' : 'A reference image is missing from storage. Reconnect it and try again.';
   if (upscale) return fitsLimits(infos.map(info => info.bytes), limits) ? null : 'Images to upscale can be at most 20 MB in total. Connect fewer.';
@@ -136,9 +146,16 @@ export function referenceProblem(infos, images, limits, { binding = false, name 
   }
   if (model3d) return plan.some(step => step.prep) ? 'This image needs resizing. Ask the site owner to enable Cloudflare Images, or connect a smaller PNG, JPEG or WebP.' : null;
   if (limits?.maxBytes && infos.some(info => info.bytes > limits.maxBytes)) return `A reference image is too large for ${name}. Use a smaller image.`;
-  return fitsLimits(infos.map(info => info.bytes), limits) ? null : `Reference images are too large for ${name} (20 MB in total). Use fewer or smaller images.`;
+  return fitsLimits(infos.map(info => info.bytes), limits) ? null : `Reference images are too large for ${name} (${inTotal(limits)}). Use fewer or smaller images.`;
 }
 
-export const tooLargeToReduce = (image, bytes) => `“${image?.label || 'Image'}” is too large to reduce automatically (${megabytes(bytes)} MB; the limit is 20 MB). Right-click it, choose Resize…, then try again.`;
-export const couldNotReduce = image => `Could not reduce “${image?.label || 'Image'}” to send it. Right-click it, choose Resize…, then try again.`;
-export const stillTooLarge = name => `Reference images are still too large for ${name} after reducing them (20 MB in total). Use fewer images.`;
+// Rounded down, so the limit shown is never more than the real one (14.8 MB for Gemini, 20 MB otherwise).
+const inTotal = limits => `${Math.floor((limits?.totalBytes ?? referenceTotalBytes) / (1024 * 1024) * 10) / 10} MB in total`;
+// Inputs a mask made (GPT Image's base and mask, Nano Banana's marked copy) carry `maskOf`, the masked image's label.
+// Resize refuses a masked image, so their messages name that image and say to take the mask off first.
+const masked = image => typeof image?.maskOf === 'string';
+const imageName = image => (masked(image) ? image.maskOf : image?.label) || 'Image';
+const resizeHint = image => masked(image) ? 'Remove its mask, choose Resize…, then paint the mask again.' : 'Right-click it, choose Resize…, then try again.';
+export const tooLargeToReduce = (image, bytes) => `“${imageName(image)}” is too large to reduce automatically (${megabytes(bytes)} MB; the limit is 20 MB). ${resizeHint(image)}`;
+export const couldNotReduce = image => `Could not reduce “${imageName(image)}” to send it. ${resizeHint(image)}`;
+export const stillTooLarge = (name, limits) => `Reference images are still too large for ${name} after reducing them (${inTotal(limits)}). Use fewer images.`;

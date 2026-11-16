@@ -14,7 +14,7 @@ import { BoardChat } from './chat.mjs';
 import { voiceHasSpace, voiceSignal } from './voice.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 import { reframePng } from './png-frame.mjs';
-import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, inspectImage, planReferences, referenceLimits, referenceProblem, sniffFormat, stillTooLarge } from './reference-prep.mjs';
+import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, inspectImage, planReferences, referenceLimits, referenceProblem, sendsAsIs, sniffFormat, stillTooLarge } from './reference-prep.mjs';
 import { falModel3d, model3dFile, model3dInput, model3dPoster, model3dPrices, model3dRequest, storeModelGlb } from './model3d.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
@@ -29,7 +29,14 @@ const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', time
 const active = run => ['running', 'queued'].includes(run?.status);
 // Which size rules a run's references follow (cloud/reference-prep.mjs).
 const referencePurpose = (request, gpt) => request.model3d ? 'model3d' : request.upscale ? 'upscale' : request.describe ? 'describe' : gpt ? 'gptImage' : 'nanoBanana';
-const referenceInputs = request => request.model3d ? request.images : [...request.images, ...(request.mask ? [{ asset: request.mask }] : [])];
+// Inputs a mask made (GPT Image's base and mask, Nano Banana's marked copy) and the masked image itself carry `maskOf`,
+// so a size message names that image and says to remove the mask before Resize.
+const referenceInputs = request => {
+  if (request.model3d) return request.images;
+  const masked = request.images.find(image => image.mask), maskOf = masked && (masked.label || '');
+  const tagged = request.images.map(image => masked && (image.mask || (masked.nodeId && image.nodeId === masked.nodeId)) ? { ...image, maskOf } : image);
+  return [...tagged, ...(request.mask ? [{ asset: request.mask, ...(masked ? { maskOf } : {}) }] : [])];
+};
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
@@ -603,21 +610,32 @@ export class BoardRoom extends YServer {
   // a smaller copy that Cloudflare Images makes once and R2 keeps under derived/. A set still too large is reduced
   // further before it fails. `pair` holds the GPT Image mask and the image it edits, which must stay the same size.
   async prepareReferences(images, purpose, { name = 'Nano Banana', pair = [], keepBytes = false, infos } = {}) {
-    const limits = referenceLimits[purpose], upscale = purpose === 'upscale', model3d = purpose === 'model3d';
+    const limits = referenceLimits[purpose], upscale = purpose === 'upscale', model3d = purpose === 'model3d', binding = !!this.env.IMAGES;
     infos ||= await this.inspectReferences(images);
-    const problem = referenceProblem(infos, images, limits, { binding: !!this.env.IMAGES, name, upscale, model3d });
+    const problem = referenceProblem(infos, images, limits, { binding, name, upscale, model3d });
     if (problem) throw new NanoError('bad_request', problem);
-    let sources = null;
-    for (const side of this.env.IMAGES && !limits.untouched ? [undefined, ...fallbackSides] : [undefined]) {
-      const plan = planReferences(infos, limits, { side, pair }), found = new Array(plan.length);
+    // Without Cloudflare Images every original goes as it is, as before copies existed; referenceProblem found that they
+    // fit. A copy that cannot be made falls back to its original where the provider takes that (sendsAsIs), and a mask
+    // and its image fall back together so they stay the same size.
+    const original = index => ({ key: `assets/${images[index].asset}`, bytes: infos[index].bytes }), asIs = new Set();
+    let sources = null, refusal = null;
+    for (const side of binding && !limits.untouched ? [undefined, ...fallbackSides] : [undefined]) {
+      const plan = binding ? planReferences(infos, limits, { side, pair }) : infos.map(() => ({ prep: false })), found = new Array(plan.length);
       // A few copies at a time, so the room never holds many large images at once.
       for (let start = 0; start < plan.length; start += 3) await Promise.all(plan.slice(start, start + 3).map(async (step, offset) => {
         const index = start + offset;
-        found[index] = step.prep ? await this.reducedCopy(images[index], step) : { key: `assets/${images[index].asset}`, bytes: infos[index].bytes };
+        if (!step.prep || asIs.has(index)) { found[index] = original(index); return; }
+        try { found[index] = await this.reducedCopy(images[index], step); }
+        catch (error) { if (!sendsAsIs(infos[index], limits)) throw error; refusal ||= error; asIs.add(index); found[index] = original(index); }
       }));
+      if (pair.some(index => asIs.has(index))) for (const index of pair) {
+        if (!sendsAsIs(infos[index], limits)) throw refusal;
+        asIs.add(index); found[index] = original(index);
+      }
       if (fitsLimits(found.map(source => source.bytes), limits)) { sources = found; break; }
     }
-    if (!sources) throw new NanoError('bad_request', stillTooLarge(name));
+    // When an original that could not be reduced is what keeps the set too large, that image is named.
+    if (!sources) throw refusal || new NanoError('bad_request', stillTooLarge(name, limits));
     // One image in memory at a time; only its base64 text is kept.
     const prepared = [];
     for (const [index, source] of sources.entries()) {

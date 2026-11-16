@@ -71,8 +71,8 @@ runtimeTest('Nano Banana loads the marked copy from R2, includes its bytes in li
   let result = await start(); assert.ok(result.run); await app.settle();
   assert.match(app.boardRoom.document.getMap('runs').get(result.run.id).error, /reference image is missing/); assert.equal(calls.length, 0);
   app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 20 * 1024 * 1024 });
-  // Without Cloudflare Images nothing can be reduced, so a set over 20 MB is refused before anything is reserved.
-  result = await start(); assert.equal(result.status, 400); assert.match(result.error, /too large for Nano Banana \(20 MB in total\)/); assert.equal(calls.length, 0);
+  // Without Cloudflare Images nothing can be reduced, so a set over Gemini's budget is refused before anything is reserved.
+  result = await start(); assert.equal(result.status, 400); assert.match(result.error, /too large for Nano Banana \(14\.8 MB in total\)/); assert.equal(calls.length, 0);
   assert.equal(app.directory.nanoUsage('lead@studio.example').usedToday, 0);
   app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 33 });
   result = await start(); await app.settle(); assert.equal(calls.length, 1); assert.equal(calls[0].input.filter(part => part.type === 'image').length, 2);

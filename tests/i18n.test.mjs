@@ -49,3 +49,19 @@ test('every interface string passed to t(), rich() or plural() has a Ukrainian t
   }
   assert.deepEqual([...missing], []);
 });
+
+test('reference size errors and image sizes are localized, the masked-image messages included', async () => {
+  const { sizeText } = await import('../src/image-resize.mjs');
+  setLanguage('uk');
+  try {
+    assert.equal(t('Reference images are too large for Nano Banana (14.8 MB in total). Use fewer or smaller images.'), 'Референси завеликі для Nano Banana (разом до 14.8 МБ). Використайте менше або менші зображення.');
+    assert.equal(t('Reference images are still too large for GPT Image after reducing them (20 MB in total). Use fewer images.'), 'Референси завеликі для GPT Image навіть після зменшення (разом до 20 МБ). Використайте менше зображень.');
+    assert.equal(t('“Hero “1”” is too large to reduce automatically (25 MB; the limit is 20 MB). Remove its mask, choose Resize…, then paint the mask again.'),
+      'Зображення «Hero “1”» завелике для автоматичного зменшення (25 МБ; максимум 20 МБ). Приберіть із нього маску, виберіть «Змінити розмір…», а потім намалюйте маску знову.');
+    assert.equal(t('Could not reduce “Hero” to send it. Remove its mask, choose Resize…, then paint the mask again.'), 'Не вдалося зменшити зображення «Hero» для надсилання. Приберіть із нього маску, виберіть «Змінити розмір…», а потім намалюйте маску знову.');
+    assert.equal(t('Could not reduce “Hero” to send it. Right-click it, choose Resize…, then try again.'), 'Не вдалося зменшити зображення «Hero» для надсилання. Клацніть його правою кнопкою, виберіть «Змінити розмір…» і повторіть спробу.');
+    assert.equal(sizeText({ width: 7680, height: 4320 }, 45 * 1024 * 1024), '7680 × 4320, 45 МБ');
+    assert.equal(sizeText({ width: 3072, height: 1728 }), '3072 × 1728');
+  } finally { setLanguage('en'); }
+  assert.equal(sizeText({ width: 7680, height: 4320 }, 45 * 1024 * 1024), '7680 × 4320, 45 MB');
+});

@@ -20,7 +20,7 @@ export function resizeTarget(pixels, side) {
 export const halfSide = pixels => Math.max(1, Math.round(longerSide(pixels) / 2));
 // A rough guess from the current file: bytes shrink about with the pixel count.
 export const estimatedBytes = (bytes, from, to) => Math.max(1, Math.round(bytes * (to.width * to.height) / (from.width * from.height)));
-export const sizeText = (pixels, bytes) => `${pixels.width} × ${pixels.height}${bytes ? `, ${megabytes(bytes)} MB` : ''}`;
+export const sizeText = (pixels, bytes) => bytes ? t('{width} × {height}, {size} MB', { width: pixels.width, height: pixels.height, size: megabytes(bytes) }) : `${pixels.width} × ${pixels.height}`;
 // The format a resized copy keeps: JPEG and WebP stay themselves, others (GIF too) become PNG, as a crop does.
 export const resizedType = asset => asset.endsWith('.jpg') ? 'image/jpeg' : asset.endsWith('.webp') ? 'image/webp' : 'image/png';
 

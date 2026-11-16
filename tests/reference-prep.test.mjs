@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeModule from 'node:module';
-import { fitsLimits, hasAlpha, inspectImage, needsPrep, planReferences, referenceLimits, referenceProblem, targetSize } from '../cloud/reference-prep.mjs';
+import { couldNotReduce, fitsLimits, geminiReferenceBytes, hasAlpha, inspectImage, needsPrep, planReferences, referenceLimits, referenceProblem, sendsAsIs, targetSize } from '../cloud/reference-prep.mjs';
 import { imageSize } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
@@ -82,7 +82,17 @@ test('only images past their provider limits are reduced, with the right format 
   assert.equal(planReferences([info(png(3000, 3000), 7 * MB)], referenceLimits.model3d)[0].format, 'image/jpeg');
   // Upscales go in at full size.
   assert.equal(planReferences([info(jpeg(7680, 4320), 15 * MB)], referenceLimits.upscale)[0].prep, false);
-  assert.equal(fitsLimits([10 * MB, 10 * MB], nano), true); assert.equal(fitsLimits([10 * MB, 10 * MB + 1], nano), false); assert.equal(fitsLimits([16 * MB], gpt), false);
+  assert.equal(fitsLimits([10 * MB, 10 * MB], gpt), true); assert.equal(fitsLimits([10 * MB, 10 * MB + 1], gpt), false); assert.equal(fitsLimits([16 * MB], gpt), false);
+  // Gemini counts base64 text against one 20 MB request: images get three quarters of it, less room for the prompt.
+  assert.ok(Math.ceil(geminiReferenceBytes / 3) * 4 + 256 * 1024 <= 20 * MB && geminiReferenceBytes > 14.5 * MB);
+  assert.equal(fitsLimits([7 * MB, 7 * MB], nano), true); assert.equal(fitsLimits([10 * MB, 5 * MB], nano), false); assert.equal(fitsLimits([15 * MB], nano), false);
+  // A 16 MB opaque PNG under 3K would be 21 MB of base64: it goes as a JPEG of the same size.
+  assert.equal(needsPrep(info(png(3000, 2000, 2), 16 * MB), nano, nano.totalBytes), true); assert.equal(needsPrep(info(png(3000, 2000, 2), 14 * MB), nano, nano.totalBytes), false);
+  assert.deepEqual([planReferences([info(png(3000, 2000, 2), 16 * MB)], nano)[0].format, planReferences([info(png(3000, 2000, 2), 16 * MB)], nano)[0].target], ['image/jpeg', { width: 3000, height: 2000 }]);
+  // Without a copy, an original goes only in a format the provider reads and within GPT Image's data URL limit; 3D keeps its JPEG rule.
+  assert.equal(sendsAsIs(info(jpeg(7680, 4320), 5 * MB), nano), true); assert.equal(sendsAsIs(info(gif(400, 300)), nano), false);
+  assert.equal(sendsAsIs(info(png(6000, 4000), 16 * MB), gpt), false); assert.equal(sendsAsIs(info(png(6000, 4000), 9 * MB), gpt), true);
+  assert.equal(sendsAsIs(info(png(5000, 4500)), referenceLimits.model3d), false); assert.equal(sendsAsIs(null, nano), false);
 });
 
 test('images that cannot be prepared are named before a run starts', () => {
@@ -92,7 +102,14 @@ test('images that cannot be prepared are named before a run starts', () => {
   assert.equal(referenceProblem([info(jpeg(7680, 4320), 19 * MB)], [image], nano, { binding: true }), null);
   // Even an image small enough in pixels cannot fill the whole budget by itself.
   assert.match(referenceProblem([info(png(3000, 2000, 6), 21 * MB)], [image], nano, { binding: true }), /too large to reduce automatically \(21 MB/);
-  assert.equal(referenceProblem([info(jpeg(7680, 4320), 12 * MB), info(jpeg(10, 10), 9 * MB)], [image, image], nano), 'Reference images are too large for Nano Banana (20 MB in total). Use fewer or smaller images.');
+  assert.equal(referenceProblem([info(jpeg(7680, 4320), 12 * MB), info(jpeg(10, 10), 3 * MB)], [image, image], nano), 'Reference images are too large for Nano Banana (14.8 MB in total). Use fewer or smaller images.');
+  assert.equal(referenceProblem([info(jpeg(7680, 4320), 12 * MB), info(jpeg(10, 10), 9 * MB)], [image, image], referenceLimits.gptImage, { name: 'GPT Image' }), 'Reference images are too large for GPT Image (20 MB in total). Use fewer or smaller images.');
+  // Resize refuses a masked image, so the copies its mask made name that image and say to remove the mask first.
+  const marked = { asset: 'b.png', label: 'Hero shot (highlighted edit area)', maskOf: 'Hero shot' };
+  assert.equal(referenceProblem([info(jpeg(10, 10), MB), info(png(7680, 4320), 25 * MB)], [image, marked], nano, { binding: true }),
+    '“Hero shot” is too large to reduce automatically (25 MB; the limit is 20 MB). Remove its mask, choose Resize…, then paint the mask again.');
+  assert.equal(couldNotReduce({ asset: 'm.png', maskOf: 'Hero shot' }), 'Could not reduce “Hero shot” to send it. Remove its mask, choose Resize…, then paint the mask again.');
+  assert.equal(couldNotReduce({ asset: 'm.png', maskOf: '' }), 'Could not reduce “Image” to send it. Remove its mask, choose Resize…, then paint the mask again.');
   assert.equal(referenceProblem([info(jpeg(7680, 4320), 12 * MB)], [image], nano), null, 'without Cloudflare Images an image that fits is sent as it is');
   assert.equal(referenceProblem([info(png(10, 10), 16 * MB)], [image], referenceLimits.gptImage, { name: 'GPT Image' }), 'A reference image is too large for GPT Image. Use a smaller image.');
   assert.match(referenceProblem([info(png(5000, 4500))], [image], referenceLimits.model3d, { model3d: true }), /needs resizing/);
@@ -173,6 +190,56 @@ runtimeTest('images over 20 MB that need reducing fail clearly; mask pairs stay 
   await assert.rejects(stubborn.prepareReferences(more.map(asset => ({ asset })), 'nanoBanana'), /still too large for Nano Banana after reducing them/);
 });
 
+runtimeTest('without Cloudflare Images, or when a copy cannot be made, an original the provider takes is sent as it is', async t => {
+  const r2 = storage(), photo = jpeg(4000, 3000, 50), loop = gif(400, 300), gifAsset = hero.replace('.jpg', '.gif');
+  r2.files.set(`assets/${hero}`, { bytes: photo, size: 5 * MB }); r2.files.set(`assets/${gifAsset}`, { bytes: loop, size: MB });
+  // No binding (local development, self-hosting): the originals go as they did before copies existed.
+  const plain = roomWith(t, { FILES: r2.binding });
+  assert.equal(await plain.referencesProblem({ images: [{ asset: hero, label: 'Photo' }, { asset: gifAsset, label: 'Loop' }] }, false, 'Nano Banana'), null);
+  const sent = await plain.prepareReferences([{ asset: hero, label: 'Photo' }, { asset: gifAsset, label: 'Loop' }], 'nanoBanana');
+  assert.deepEqual(sent.map(item => [item.mimeType, item.size]), [['image/jpeg', { width: 4000, height: 3000 }], ['image/gif', { width: 400, height: 300 }]]);
+  assert.deepEqual(Buffer.from(sent[0].data, 'base64'), Buffer.from(photo));
+  assert.ok(![...r2.files.keys()].some(key => key.startsWith('derived/')));
+  // A binding that fails (Images not enabled on the account): the photo still goes as it is; a GIF, which no provider reads, cannot.
+  const broken = fakeImages(() => { throw new Error('Images is not enabled'); });
+  const failing = roomWith(t, { FILES: r2.binding, IMAGES: broken.binding });
+  const [original] = await failing.prepareReferences([{ asset: hero, label: 'Photo' }], 'nanoBanana');
+  assert.deepEqual([original.mimeType, original.size, original.byteLength], ['image/jpeg', { width: 4000, height: 3000 }, photo.length]);
+  await assert.rejects(failing.prepareReferences([{ asset: gifAsset, label: 'Loop' }], 'nanoBanana'), /Could not reduce “Loop” to send it\. Right-click it/);
+  // An original that cannot be reduced and keeps the set over Gemini's budget is named, not the set.
+  const big = '44444444-1111-1111-1111-111111111111.png';
+  r2.files.set(`assets/${big}`, { bytes: png(3000, 2000, 2), size: 16 * MB });
+  await assert.rejects(failing.prepareReferences([{ asset: big, label: 'Poster' }], 'nanoBanana'), /Could not reduce “Poster” to send it/);
+  // A mask and the image it edits fall back together, so GPT Image still gets two PNGs of one size.
+  r2.files.set(`assets/${base}`, { bytes: png(6000, 4000, 2), size: 9 * MB }); r2.files.set(`assets/${mask}`, { bytes: png(6000, 4000, 6), size: MB });
+  const half = fakeImages(({ bytes, transforms }) => { if (bytes[25] === 2) throw new Error('decode failed'); return png(transforms[0].width, transforms[0].height); });
+  const pair = await roomWith(t, { FILES: r2.binding, IMAGES: half.binding }).prepareReferences([{ asset: base, label: 'Hero' }, { asset: mask }], 'gptImage', { pair: [0, 1] });
+  assert.deepEqual(pair.map(item => [item.mimeType, item.size]), [['image/png', { width: 6000, height: 4000 }], ['image/png', { width: 6000, height: 4000 }]]);
+});
+
+runtimeTest('a set within 3K but over Gemini\'s base64 budget is reduced further; mask copies name the masked image', async t => {
+  const r2 = storage(), images = fakeImages(({ transforms }) => jpeg(transforms[0].width, Math.round(transforms[0].width * .75), 3 * MB));
+  const room = roomWith(t, { FILES: r2.binding, IMAGES: images.binding });
+  // Three 2400 px JPEGs of 6 MB: under 3K, but 18 MB would be 24 MB of base64 in one request.
+  const photos = ['a', 'b', 'c'].map(letter => `${letter.repeat(8)}-1111-1111-1111-111111111111.jpg`);
+  for (const asset of photos) r2.files.set(`assets/${asset}`, { bytes: jpeg(2400, 1800), size: 6 * MB });
+  const sent = await room.prepareReferences(photos.map(asset => ({ asset, label: asset })), 'nanoBanana');
+  assert.deepEqual(images.calls.map(call => call.transforms[0].width), [2048, 2048, 2048]);
+  assert.ok(sent.every(item => item.size.width === 2048));
+  // Nano Banana: the marked copy a mask made is too large to reduce; the message names the image and the way out.
+  const marked = '55555555-1111-1111-1111-111111111111.png';
+  r2.files.set(`assets/${hero}`, { bytes: jpeg(4000, 3000), size: 5 * MB }); r2.files.set(`assets/${marked}`, { bytes: png(4000, 3000, 6), size: 25 * MB });
+  const nanoRequest = { images: [{ asset: hero, label: 'Hero', nodeId: 'i', mask: { marked } }, { asset: marked, label: 'Hero (highlighted edit area)', nodeId: 'i' }, { asset: photos[0], label: 'Other', nodeId: 'o' }] };
+  assert.equal(await room.referencesProblem(nanoRequest, false, 'Nano Banana'),
+    '“Hero” is too large to reduce automatically (25 MB; the limit is 20 MB). Remove its mask, choose Resize…, then paint the mask again.');
+  // GPT Image: the same for the mask itself, which has no label of its own.
+  r2.files.set(`assets/${base}`, { bytes: png(4000, 3000, 2), size: 5 * MB }); r2.files.set(`assets/${mask}`, { bytes: png(4000, 3000, 6), size: 25 * MB });
+  assert.match(await room.referencesProblem({ images: [{ asset: base, label: 'Hero', nodeId: 'i', mask: { asset: mask } }], mask }, true, 'GPT Image'), /^“Hero” is too large to reduce automatically \(25 MB.*Remove its mask/);
+  // Other images keep the Resize message.
+  r2.files.set(`assets/${photos[1]}`, { bytes: jpeg(7680, 4320), size: 25 * MB });
+  assert.match(await room.referencesProblem({ images: [{ asset: photos[1], label: 'Plain', nodeId: 'p' }] }, false, 'Nano Banana'), /^“Plain”.*Right-click it, choose Resize…/);
+});
+
 runtimeTest('Generate refuses an image that cannot be reduced before reserving anything, and sends a 3K copy otherwise', async t => {
   const database = new DatabaseSync(':memory:'); t.after(() => database.close());
   const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
@@ -198,6 +265,11 @@ runtimeTest('Generate refuses an image that cannot be reduced before reserving a
   assert.match(calls[0].input.find(part => part.type === 'text' && part.text.includes('Attachment')).text, /Hero/);
   assert.equal(readCloudGraph(room.document).runs[0].status, 'completed');
   assert.equal(readCloudGraph(room.document).nodes.find(node => node.id === 'i').data.asset, hero, 'the board keeps the original');
+  // Without Cloudflare Images a 4K photo is sent as it is, as before reduced copies existed.
+  delete env.IMAGES; r2.files.set(`assets/${hero}`, { bytes: jpeg(4000, 3000), size: 5 * MB }); waits.length = 0;
+  assert.ok((await room.startNano({ nodeId: 'p', requester })).run); await Promise.all(waits);
+  assert.deepEqual(imageSize(Buffer.from(calls[1].input.find(part => part.type === 'image').data, 'base64')), { width: 4000, height: 3000 });
+  assert.equal(readCloudGraph(room.document).runs.at(-1).status, 'completed'); assert.equal(images.calls.length, 1);
 });
 
 test('images for Codex go through the browser copy one at a time, and the original is sent when no copy is made', async () => {
