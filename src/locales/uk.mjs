@@ -320,6 +320,7 @@ export default {
   'Cancelled': 'Скасовано',
   'Done · description': 'Готово · опис',
   'Done · {count} image': ['Готово · {count} зображення', 'Готово · {count} зображення', 'Готово · {count} зображень', 'Готово · {count} зображення'],
+  'Done · {done} of {count} image · {failed} failed': ['Готово · {done} із {count} зображення · не вдалося: {failed}', 'Готово · {done} із {count} зображень · не вдалося: {failed}', 'Готово · {done} із {count} зображень · не вдалося: {failed}', 'Готово · {done} із {count} зображення · не вдалося: {failed}'],
   'Generation': 'Генерація',
   'A little room to think bigger': 'Трохи простору, щоб мислити ширше',
   'Board generations': 'Генерації на дошці',
@@ -332,6 +333,13 @@ export default {
   'Cancel': 'Скасувати',
   'Dismiss error for {label}': 'Закрити помилку для «{label}»',
   'Dismiss': 'Закрити',
+  'Dismiss all': 'Закрити всі',
+  'Open History': 'Відкрити історію',
+  'Collapse generations': 'Згорнути генерації',
+  'Show generations': 'Показати генерації',
+  '{count} generating': 'Генерується: {count}',
+  '{count} done': 'Готово: {count}',
+  '{count} failed': 'Не вдалося: {count}',
 
   // Cloud image generators
   'Uses the site’s OpenAI key': 'Використовує ключ OpenAI цього сайту',

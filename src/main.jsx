@@ -35,7 +35,7 @@ import { hasGenerationPrompt, imageAssets } from './image-edits.mjs';
 import { dollars, nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
-import { GenerationTray } from './GenerationTray.jsx';
+import { GenerationTray, trayCollapsedFor } from './GenerationTray.jsx';
 import { PendingNode, useWaitingVideos } from './PendingNode.jsx';
 import { ImageReveal, ImageRevealContext } from './ImageReveal.jsx';
 import { runPlaceholders } from './run-placeholders.mjs';
@@ -810,8 +810,10 @@ function AgentConnect({ onClose, cloud = false }) {
 function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, waitForPreferences, desktopMode, mcpEnabled, editorReadyCallback, cloudSession, helperSession }) {
   const [nodes, setNodes] = useState([]), [edges, setEdges] = useState([]), [runs, setRuns] = useState([]);
   const dictationLanguage = useDictationLanguage();
-  const effects = useInteractionFeedback(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local');
-  const waiting = useWaitingVideos(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local');
+  // Who is looking, for this device's own preferences: the signed-in person on cloud boards, else this install.
+  const viewer = cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local';
+  const effects = useInteractionFeedback(viewer);
+  const waiting = useWaitingVideos(viewer);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const userGeneration = useRef(null), runsToReveal = useRef(new Set());
   const feedbackSeeded = useRef(false);
@@ -827,11 +829,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const chooseTool = value => { if (stroke.current || sectionDraft.current || arrowDraft.current) moving.current = false; toolRef.current = value; setTool(value); stroke.current = null; sectionDraft.current = null; arrowDraft.current = null; strokePreview.current?.show([]); sectionPreview.current?.show(null); };
   const [focusControl, setFocusControl] = useState('text'), [highlight, setHighlight] = useState(null), [helperOffline, setHelperOffline] = useState(false);
   const viewOnlyNoticed = useRef(0), imageDrop = useRef(null), canvasElement = useRef(null), highlightTimer = useRef(null), pendingIntent = useRef(null), alive = useRef(true), runAction = useRef(null), generationStarting = useRef(false);
-  const guide = useGettingStarted(gettingStartedKey(cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local'));
+  const guide = useGettingStarted(gettingStartedKey(viewer));
   const groupRef = useRef([]), sectionRef = useRef(noSections);
   // Pages are part of the board; the open page and its viewport are this person's preference.
   const [pages, setPages] = useState(defaultPages), pagesRef = useRef(pages);
-  const pagePreferenceKey = `concept-graph-pages:${cloud ? `cloud:${cloudSession.user.name}` : hosted ? 'hosted' : 'local'}:${boardId}`;
+  const pagePreferenceKey = `concept-graph-pages:${viewer}:${boardId}`;
   const pagePreference = useRef(null);
   pagePreference.current ||= readPagePreference(localStorage, pagePreferenceKey);
   const [pageChoice, setPageChoice] = useState(() => pagePreference.current.page);
@@ -1062,8 +1064,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     viewerMoved.current = true;
     const bounds = canvasElement.current.getBoundingClientRect(), tray = canvasElement.current.querySelector('.generation-tray')?.getBoundingClientRect(),
       target = revealViewport(cardBox(node), flow.getViewport(), bounds, source && cardBox(source), source && (tray ? { x: tray.x - bounds.x, y: tray.y - bounds.y, width: tray.width, height: tray.height }
-        // A run's tray may render a frame after its placeholder: reserve its usual corner.
-        : { x: bounds.width - 367, y: 24, width: 340, height: 122 }));
+        // A run's tray may render a frame after its placeholder: reserve its usual corner, or the folded pill's.
+        : trayCollapsedFor(viewer) ? { x: bounds.width - 207, y: 24, width: 180, height: 34 } : { x: bounds.width - 367, y: 24, width: 340, height: 122 }));
     if (target) flow.setViewport(target, { duration: 220 });
   };
   const focusNode = (nodeId, control = 'text', preserveSelection = false, preserveZoom = false) => {
@@ -2723,7 +2725,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       <div className="sidebar-bottom"><span className="legend-text"/> {t('Text')} <span className="legend-image"/> {t('Image')}</div>
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addFiles([...event.dataTransfer.files], position); }}>
-      <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} onCancel={cancel} onFocus={showRun}/>}</div>
+      <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} viewer={viewer} onCancel={cancel} onFocus={showRun} onHistory={() => setTab('history')}/>}</div>
       <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
         {!readOnly && !modalOpen.current && <CustomNodeActions node={selectedCount === 1 ? view.nodes.find(node => node.selected && !node.hidden && plainPrompt(node)) : null} tip={!discovery.used && templateTip && selectedCount === 1 ? view.nodes.find(node => node.id === templateTip.id && node.selected && !node.hidden) : null} actions={canvas} onDismiss={() => { if (cloud) track('tip_event', { tip: 'duplicate_to_custom_node', action: 'dismissed' }); setTemplateTip(null); }}/>}
         <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
