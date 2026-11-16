@@ -31,7 +31,9 @@ import { ZoomableImage } from './ImageZoom.jsx';
 import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
 import { modelFile, modelExtension, modelInputAccept, groupModelFiles, checkModelBatch, checkModelFile, modelPoster, supportedModelFormats } from './model-upload.mjs';
 import { ImageEditor } from './ImageEditor.jsx';
-import { hasGenerationPrompt, imageAssets } from './image-edits.mjs';
+import { ResizeDialog } from './ResizeDialog.jsx';
+import { hasGenerationPrompt, imageAssets, originalAsset, restoreSizeData } from './image-edits.mjs';
+import { shrinkUpload, sizeText } from './image-resize.mjs';
 import { dollars, nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
@@ -277,7 +279,7 @@ function ExpandedImageNode({ id, data, selected }) {
     return () => clearTimeout(timer);
   }, [view.variation, id]);
   const aspectRatio = image.aspectRatio || (data.aspect ? `1 / ${data.aspect}` : undefined);
-  return <NodeContextMenu id={id} type="image" actions={canvas} masked={!!data.mask}><div className="image-node-wrapper">
+  return <NodeContextMenu id={id} type="image" actions={canvas} masked={!!data.mask} resized={!!data.unresized}><div className="image-node-wrapper">
     <input ref={captionInput} className={`image-node-caption nodrag${data.caption?.trim() ? '' : ' unnamed'}`} aria-label={t('Image name')} title={view.readOnly ? undefined : t('Edit image name')} readOnly={view.readOnly} maxLength={120} value={captionFocused ? caption : imageName({ data })} onFocus={() => { setCaption(imageName({ data })); captionEdited.current = false; captionBeforeEdit.current = data.caption; setCaptionFocused(true); captionCheckpoint.current = canvas.checkpoint(); }} onBlur={() => { if (!view.readOnly && !captionEdited.current && !data.caption?.trim()) canvas.editCaption(id, imageName({ data })); setCaptionFocused(false); }} onChange={event => { captionEdited.current = true; setCaption(event.target.value); canvas.editCaption(id, event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { event.stopPropagation(); captionEdited.current = true; setCaption(canvas.cancelCaption(id, captionBeforeEdit.current, captionCheckpoint.current) || ''); event.currentTarget.blur(); } }}/><article className="node-card image-node" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} onDoubleClick={() => canvas.view(id)}>
     {(data.runId || fromModel) && <Handle type="target" position={Position.Left} isConnectable={false}/>}
     {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName({ data })} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
@@ -316,7 +318,7 @@ function CollapsedNode({ id, data, kind }) {
   const canvas = useCanvas(), isImage = kind === 'image', fromModel = useCanvasValue(state => state.modelViewIds.has(id)), updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => { updateNodeInternals(id); }, [fromModel]);
   const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
-  return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask}>
+  return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask} resized={!!data.unresized}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
       {isImage ? (data.runId || fromModel) && <Handle type="target" position={Position.Left} isConnectable={false} aria-label={t('Image input')}/> : <PromptInputs data={data}/>}
       {isImage ? <><CollapsedImage asset={data.asset} id={id}/>{data.mask && <ImageMask data={data}/>}</> : <Icon name="text" size={26}/>}
@@ -1633,9 +1635,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
             }
             await checkModelFile(file);
           }
+          // An image past the upload limits goes up as a smaller copy instead of failing.
+          const smaller = isModel ? null : await shrinkUpload(file);
+          if (smaller) file = new File([smaller.blob], original.name || 'image', { type: smaller.blob.type });
           if (!alive.current || readOnlyRef.current || switchingRef.current || mcpLocked.current) return;
           const result = await api(isModel ? `/api/assets?boardId=${encodeURIComponent(boardId)}` : '/api/assets', { method: 'POST', headers: { 'Content-Type': isModel ? 'model/gltf-binary' : file.type || 'application/octet-stream' }, body: file });
           const { asset } = result;
+          if (smaller) notify(t('Uploaded a smaller copy of {name} ({from} → {to}).', { name: original.name || t('Pasted image'), from: sizeText(smaller.from, smaller.fromBytes), to: sizeText(smaller.to, smaller.blob.size) }));
           let poster;
           if (isModel) {
             try {
@@ -1669,7 +1675,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const editImage = (nodeId, mode) => {
     if (!cloud || readOnlyRef.current || mcpLocked.current || !loaded || switchingRef.current) return;
     const node = nodeRef.current.find(node => node.id === nodeId && node.type === 'image');
+    // A mask is painted on the image at its current size; resizing it would leave the mask behind.
+    if (node && mode === 'resize' && node.data.mask) { notify(t('Remove the mask before resizing this image.')); return; }
     if (node) setImageEdit({ node: { id: node.id, data: structuredClone(node.data) }, mode, returnFocus: document.activeElement });
+  };
+  const restoreImageSize = nodeId => {
+    if (!cloud || readOnlyRef.current || mcpLocked.current || !loaded || switchingRef.current) return;
+    const node = nodeRef.current.find(node => node.id === nodeId && node.type === 'image' && node.data.unresized);
+    if (!node) return;
+    if (node.data.mask) { notify(t('Remove the mask before restoring the original size.')); return; }
+    checkpoint(); putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: restoreSizeData(item.data) } : item)); markDirty();
+    track('resize_restored', {});
   };
   const uploadEdit = async blob => {
     if (!alive.current || readOnlyRef.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
@@ -1709,15 +1725,15 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (!alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current) throw new Error(t('You can only view this board. Ask its owner for edit access.'));
     syncCloud();
     const node = nodeRef.current.find(node => node.id === imageEdit.node.id);
-    const signature = data => JSON.stringify([data.asset, data.pixels, data.uncropped, data.mask]);
+    const signature = data => JSON.stringify([data.asset, data.pixels, data.uncropped, data.mask, data.unresized]);
     if (!node || signature(node.data) !== signature(imageEdit.node.data)) throw new Error(t('This image changed while you were editing. Reopen the editor and try again.'));
     const fields = { ...node.data };
-    for (const key of ['asset', 'pixels', 'aspect', 'uncropped', 'mask']) { if (data[key] === undefined) delete fields[key]; else fields[key] = data[key]; }
+    for (const key of ['asset', 'pixels', 'aspect', 'uncropped', 'mask', 'unresized']) { if (data[key] === undefined) delete fields[key]; else fields[key] = data[key]; }
     const graph = { nodes: nodeRef.current, edges: edgeRef.current }, create = makePrompt && !hasGenerationPrompt(graph, node.id);
     const prompt = create ? assignPage({ id: id(), type: 'text', z: nextLayer(graph.nodes), position: promptSpot(node.id), data: { text: '', createdAt: new Date().toISOString() } }, nodePage(node, pagesRef.current)) : null;
     checkpoint();
     putNodes(current => [...current.map(item => item.id === node.id ? { ...item, data: fields } : prompt ? deselected(item) : item), ...(prompt ? [{ ...prompt, selected: true }] : [])]);
-    track(imageEdit.mode === 'crop' ? 'crop_applied' : 'mask_applied', { masked: !!fields.mask });
+    track(imageEdit.mode === 'crop' ? 'crop_applied' : imageEdit.mode === 'resize' ? 'resize_applied' : 'mask_applied', { masked: !!fields.mask });
     if (prompt) {
       track('node_created', { nodeType: 'text', via: 'prompt-from-this' });
       const edge = { id: id(), source: node.id, target: prompt.id };
@@ -2650,7 +2666,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode, focusNode, copyNodeLink,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
@@ -2781,10 +2797,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
             {node.data.template.instructions && <p>{node.data.template.instructions}</p>}
             {node.data.template.assets?.length > 0 && <div className="run-inputs">{node.data.template.assets.map((asset, index) => <img key={`${asset}-${index}`} src={assetUrl(asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('{name} reference {number}', { name: node.data.template.name, number: index + 1 })} loading="lazy"/>)}</div>}
           </div>)}</>}
-        <div className="lightbox-actions">{cloud && !readOnly && <><button type="button" onClick={() => editImage(viewNode.id, 'crop')}>{t('Crop')}</button><button type="button" onClick={() => editImage(viewNode.id, 'mask')}>{viewNode.data.mask ? t('Edit mask') : t('Mask')}</button></>}<button data-tooltip={t('Download original image')} onClick={() => downloadImage(viewNode.data.uncropped?.asset || viewNode.data.asset)}><Icon name="download" size={17}/> {t('Download original')}</button></div>
+        <div className="lightbox-actions">{cloud && !readOnly && <><button type="button" onClick={() => editImage(viewNode.id, 'crop')}>{t('Crop')}</button><button type="button" onClick={() => editImage(viewNode.id, 'mask')}>{viewNode.data.mask ? t('Edit mask') : t('Mask')}</button><button type="button" onClick={() => editImage(viewNode.id, 'resize')}>{t('Resize…')}</button></>}<button data-tooltip={t('Download original image')} onClick={() => downloadImage(originalAsset(viewNode.data))}><Icon name="download" size={17}/> {t('Download original')}</button></div>
       </div>
     </div></div>}
-  </div>{uploading && !toast && <div className="toast" role="status">{t('Uploading files…')}</div>}{imageEdit && !readOnly && <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>} {mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
+  </div>{uploading && !toast && <div className="toast" role="status">{t('Uploading files…')}</div>}{imageEdit && !readOnly && (imageEdit.mode === 'resize' ? <ResizeDialog key={`${imageEdit.node.id}:resize`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>
+    : <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>)} {mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [

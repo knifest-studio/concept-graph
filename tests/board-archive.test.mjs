@@ -62,6 +62,20 @@ test('crop originals, masks, marked copies and historical edits survive archive 
   await assert.rejects(importBoardArchive(await pack(files), destination), /image crops or masks/);
 });
 
+test('the image before a resize, and its crop, survive archive export and asset remapping', async t => {
+  const { source, destination } = await fixture(t), saved = structuredClone(board), data = saved.graph.nodes[0].data;
+  data.pixels = { width: 1, height: 1 };
+  data.unresized = { asset: historical, pixels: { width: 6, height: 6 }, uncropped: { asset: unused, pixels: { width: 10, height: 10 }, rect: { x: 2, y: 2, width: 6, height: 6 } } };
+  const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive);
+  const manifest = JSON.parse(files.get('board.json')); assert.equal(manifest.version, 8);
+  for (const asset of [current, historical, unused]) assert.ok(files.has(`assets/${asset}`));
+  const result = (await importBoardArchive(archive, destination)).graph.nodes[0].data;
+  for (const asset of [result.asset, result.unresized.asset, result.unresized.uncropped.asset]) assert.ok(![current, historical, unused].includes(asset));
+  assert.deepEqual(await readFile(path.join(destination, result.unresized.asset)), await readFile(path.join(source, historical)));
+  assert.deepEqual(await readFile(path.join(destination, result.unresized.uncropped.asset)), png);
+  assert.deepEqual(result.unresized.pixels, data.unresized.pixels); assert.deepEqual(result.unresized.uncropped.rect, data.unresized.uncropped.rect);
+});
+
 test('format 4 round trips annotations, group fills and author metadata; older versions cannot silently carry them', async t => {
   const { source, destination } = await fixture(t), saved = structuredClone(board);
   saved.graph.groups[0].color = '#e9e2ff';

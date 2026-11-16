@@ -114,9 +114,10 @@ runtimeTest('the room loads the PNG base and mask from R2, budgets their bytes, 
   assert.equal(calls.length, 1); assert.equal(calls[0].body.images.length, 1);
   assert.equal(calls[0].body.images[0].image_url, `data:image/png;base64,${b64(png(640, 480))}`);
   assert.deepEqual(calls[0].body.mask, { image_url: `data:image/png;base64,${b64(png(640, 480))}` });
+  // Without Cloudflare Images nothing can be reduced: an image over GPT Image's data URL limit is refused before anything is reserved.
   app.files.set(`assets/${maskId}`, new Uint8Array(20 * 1024 * 1024));
-  const { run: { id } } = await (await app.start()).json(); await app.settle();
-  assert.match(app.room.document.getMap('runs').get(id).error, /20 MB in total/); assert.equal(calls.length, 1);
+  const refused = await app.start(); assert.equal(refused.status, 400); assert.match((await refused.json()).error, /too large for GPT Image/); assert.equal(calls.length, 1);
+  assert.equal(app.directory.nanoUsage(user.email).usedToday, 1);
   app.files.set(`assets/${maskId}`, png(12, 12));
   const { run: { id: mismatch } } = await (await app.start()).json(); await app.settle();
   assert.match(app.room.document.getMap('runs').get(mismatch).error, /same dimensions/); assert.equal(calls.length, 1);

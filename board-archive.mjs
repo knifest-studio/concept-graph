@@ -96,7 +96,7 @@ function hasShapes(graph) {
 
 function hasImageEdits(graph) {
   let found = false;
-  visitNodes(graph, node => { if (node?.type === 'image' && (node.data.uncropped || node.data.mask)) found = true; });
+  visitNodes(graph, node => { if (node?.type === 'image' && (node.data.uncropped || node.data.mask || node.data.unresized)) found = true; });
   return found;
 }
 
@@ -217,6 +217,7 @@ export async function importBoardArchive(bytes, assetsDir) {
         node.data.asset = remap.get(node.data.asset);
         if (node.data.uncropped) node.data.uncropped.asset = remap.get(node.data.uncropped.asset);
         if (node.data.mask) for (const key of ['asset', 'marked', 'base', 'source']) node.data.mask[key] = remap.get(node.data.mask[key]);
+        if (node.data.unresized) { node.data.unresized.asset = remap.get(node.data.unresized.asset); if (node.data.unresized.uncropped) node.data.unresized.uncropped.asset = remap.get(node.data.unresized.uncropped.asset); }
       }
       if (node?.type === 'model') { node.data.asset = remap.get(node.data.asset); if (node.data.poster) node.data.poster = remap.get(node.data.poster); }
       if (node?.type === 'text' && node.data.template) node.data.template.assets = node.data.template.assets.map(asset => remap.get(asset));
