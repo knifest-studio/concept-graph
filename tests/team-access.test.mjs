@@ -128,3 +128,11 @@ runtimeTest('3D access stays bounded and existing grants remain idempotent at th
   const status = await (await request('/api/nano', { email: 'owner@studio.example' })).json();
   assert.deepEqual(status.model3d, { configured: false, allowed: true });
 });
+
+runtimeTest('when the sign-in list cannot be read, Team access says so instead of listing nobody as signed in', async t => {
+  const { env, request } = setup(t);
+  env.DB = { prepare: () => ({ bind() { return this; }, async run() {}, async all() { throw new Error('D1_ERROR: daily row read limit'); } }) };
+  const errors = t.mock.method(console, 'error', () => {});
+  const seen = (await (await request('/api/cloud/team', { email: 'owner@studio.example' })).json()).access;
+  assert.equal(seen.people, null); assert.equal(seen.role, 'owner'); assert.equal(errors.mock.callCount(), 1);
+});

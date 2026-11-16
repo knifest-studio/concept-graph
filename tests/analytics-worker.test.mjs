@@ -95,3 +95,20 @@ test('daily cleanup removes expired recordings, orphaned R2 objects, events and 
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM analytics_events').get().n, 0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM analytics_sessions').get().n, 0);
 });
+test('ingestion keeps session counters exact without reading the whole session', async t => {
+  const { call, send, sqlite, env } = setup(t), queries = [], prepare = env.DB.prepare;
+  env.DB.prepare = query => { const statement = prepare(query), bind = statement.bind; statement.bind = (...values) => { queries.push([query, values]); return bind.apply(statement, values); }; return statement; };
+  const data = send(); data.events = Array.from({ length: 30 }, (_, seq) => ({ seq, time: now, kind: 'click', name: 'Generate', area: 'sidebar', details: {} }));
+  await call('/events', { data });
+  // A retry with a duplicate inside the batch and one new event adds only the new one.
+  await call('/events', { data: { ...data, events: [...data.events.slice(25), data.events[29], { ...data.events[0], seq: 30 }] } });
+  for (let seq = 0; seq < 3; seq++) await call(`/replay/${id}/${seq}`, { bytes: 'x'.repeat(10 + seq) });
+  await call(`/replay/${id}/1`, { bytes: 'x'.repeat(11) });
+  const session = sqlite.prepare('SELECT event_count, replay_chunks, replay_bytes FROM analytics_sessions').get();
+  assert.deepEqual({ ...session }, { event_count: 31, replay_chunks: 3, replay_bytes: 33 });
+  // Every lookup into a session's events or replay chunks finds single rows by session and sequence.
+  for (const [query, values] of queries) for (const { detail } of sqlite.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...values)) {
+    if (!/analytics_(events|replays)\b/.test(detail) || /^(SCAN|SEARCH) (json_each|CONSTANT)/.test(detail)) continue;
+    assert.match(detail, /SEARCH analytics_(events|replays) USING (PRIMARY KEY|(COVERING )?INDEX sqlite_autoindex_\w+) \(session=\? AND seq=\?\)/, query);
+  }
+});

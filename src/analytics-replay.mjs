@@ -52,7 +52,8 @@ export async function recordSession(session, enabled, state) {
   };
   let stopRecord;
   const stop = () => { stopped = true; stopRecord?.(); abort.abort(); clearInterval(timer); buffer = []; queued = []; };
-  const timer = setInterval(() => { prepare(); void send(); }, 15000);
+  // Once a minute, like the events: each chunk costs D1 row writes. A busy page still sends at 192 KB.
+  const timer = setInterval(() => { prepare(); void send(); }, 60000);
   stopRecord = record({
     emit(event) { if (stopped || !enabled()) return; const line = JSON.stringify(privateReplayEvent(event)) + '\n'; buffer.push(line); size += line.length; if (size >= 192 * 1024) prepare(); },
     maskAllInputs: true, maskInputOptions: { password: true }, blockSelector: blockedMediaSelector, maskTextSelector: privateTextSelector, recordCanvas: false, inlineImages: false,

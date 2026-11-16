@@ -145,7 +145,9 @@ function createSession() {
     void flush(document.hidden); recorder?.flush(document.hidden);
   });
   on(window, 'pagehide', () => { event('session', 'session_end', elapsed()); void flush(true); recorder?.flush(true); });
-  const timer = setInterval(() => { event('session', 'heartbeat', elapsed()); void flush(); }, 10000);
+  // Once a minute: every upload costs D1 row writes (the free plan allows 100,000 a day), and leaving the page, hiding the
+  // tab and 200 queued events send at once anyway.
+  const timer = setInterval(() => { event('session', 'heartbeat', elapsed()); void flush(); }, 60000);
   const nav = performance.getEntriesByType('navigation')[0];
   event('session', 'session_start', { width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height, dpr: devicePixelRatio,
     platform: navigator.userAgentData?.platform || navigator.platform, userAgent: navigator.userAgent, language: navigator.language, uiLanguage: document.documentElement.lang, theme: document.documentElement.dataset.theme || 'light',

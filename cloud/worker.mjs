@@ -66,10 +66,11 @@ async function refreshRoom(env, id) {
   catch (cause) { console.error('Could not update access on the open board:', cause); }
 }
 
-// Everyone who has signed in, most recent first, so admins can grant access without typing addresses.
+// Everyone who has signed in, most recent first, so admins can grant access without typing addresses. Null when the
+// list cannot be read (D1 refuses queries once the day's allowance is used up), so nobody is shown as never signed in.
 async function signedIn(env) {
   try { return ((await env.DB.prepare('SELECT email, name, last_login_at AS lastLoginAt FROM users ORDER BY last_login_at DESC LIMIT 1000').all()).results || []).map(({ email, name, lastLoginAt }) => ({ email, name, lastLoginAt })); }
-  catch { return []; }
+  catch (cause) { console.error('Could not read who has signed in:', cause); return null; }
 }
 
 // Site admins choose image and per-person 3D access; the site owner also chooses the admins.

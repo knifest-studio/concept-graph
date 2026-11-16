@@ -28,8 +28,9 @@ export function TeamAccessDialog({ services, onClose }) {
   // moves to the top, so a row never jumps away under the pointer when it is toggled.
   const { domains, people } = useMemo(() => {
     if (!access) return { domains: [], people: [] };
-    const entries = new Set(access.nano.map(item => item.entry)), models = new Set(access.model3d.map(item => item.email)), admins = new Set(access.admins.map(item => item.email)), byEmail = new Map(access.people.map(person => [person.email, person]));
-    for (const address of [access.owner, ...admins, ...models, ...access.nano.map(item => item.entry).filter(item => !item.startsWith('@'))]) if (address && !byEmail.has(address)) byEmail.set(address, { email: address, waiting: true });
+    const entries = new Set(access.nano.map(item => item.entry)), models = new Set(access.model3d.map(item => item.email)), admins = new Set(access.admins.map(item => item.email)), byEmail = new Map((access.people || []).map(person => [person.email, person]));
+    // Without the sign-in list nobody is known to be waiting.
+    for (const address of [access.owner, ...admins, ...models, ...access.nano.map(item => item.entry).filter(item => !item.startsWith('@'))]) if (address && !byEmail.has(address)) byEmail.set(address, { email: address, waiting: !!access.people });
     return { domains: access.nano.filter(item => item.entry.startsWith('@')).map(item => item.entry),
       people: [...byEmail.values()].map(person => ({ ...person, direct: entries.has(person.email), domain: entries.has(domainOf(person.email)) ? domainOf(person.email) : null,
         model3d: models.has(person.email), admin: admins.has(person.email), owner: person.email === access.owner, used: access.usedToday[person.email] || 0 })).sort((a, b) => b.owner - a.owner) };
@@ -57,6 +58,7 @@ export function TeamAccessDialog({ services, onClose }) {
       {!access && !error && <p className="share-note" role="status">{t('Loading…')}</p>}
       {domains.length > 0 && <><h3>{t('Domains')}</h3><ul className="share-people">{domains.map(domain => <li key={domain}><span><b>{t('Everyone at {domain}', { domain })}</b></span>
         <span><button type="button" className="share-remove" aria-label={t('Remove {email}', { email: domain })} disabled={busy} onClick={() => change({ nano: { entry: domain, allowed: false } })}>{t('Remove')}</button></span></li>)}</ul></>}
+      {access && !access.people && <p className="share-note" role="status">{t('Couldn’t load who has signed in, so only people given access or admin rights are listed. Try again later.')}</p>}
       {access && <><div className="team-people-heading"><h3>{t('People')}</h3>{people.length > 8 && <input type="search" aria-label={t('Find a person')} placeholder={t('Find a person')} value={filter} onChange={event => setFilter(event.target.value)}/>}</div>
         <div className={`team-people-wrap${more ? ' has-more' : ''}`}><ul ref={list} className="share-people team-people" onScroll={checkMore}>
           {shown.map(person => <li key={person.email}>
@@ -69,7 +71,7 @@ export function TeamAccessDialog({ services, onClose }) {
               {person.owner ? <span className="share-role">{t('Owner')}</span> : owner ? <label className="team-toggle"><input type="checkbox" aria-label={t('Admin rights for {name}', { name: person.name || person.email })} checked={person.admin} disabled={busy}
                 onChange={event => change({ admin: { email: person.email, admin: event.target.checked } })}/>{t('Admin')}</label> : person.admin && <span className="share-role">{t('Admin')}</span>}
             </span></li>)}
-          {!shown.length && <li className="share-muted">{query ? t('Nobody matches.') : t('Nobody has signed in yet.')}</li>}
+          {!shown.length && <li className="share-muted">{query ? t('Nobody matches.') : access.people ? t('Nobody has signed in yet.') : t('Nobody is listed.')}</li>}
         </ul></div></>}
       {owner && access.imported?.entries > 0 && <p className="share-note team-imported">{t('This list started as a copy of NANO_BANANA_ALLOWED. The site no longer reads that variable, so you can delete it in Cloudflare.')}</p>}
       <div className="share-actions"><span/><button className="primary-button" type="button" onClick={onClose}>{t('Done')}</button></div>

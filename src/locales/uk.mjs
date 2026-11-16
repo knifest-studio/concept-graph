@@ -934,6 +934,8 @@ export default {
   'Admin rights for {name}': 'Права адміна для {name}',
   'Nobody matches.': 'Нікого не знайдено.',
   'Nobody has signed in yet.': 'Ще ніхто не входив.',
+  'Nobody is listed.': 'Тут нікого немає.',
+  'Couldn’t load who has signed in, so only people given access or admin rights are listed. Try again later.': 'Не вдалося завантажити, хто входив, тож показано лише людей із доступом або правами адміністратора. Спробуйте пізніше.',
   'This list started as a copy of NANO_BANANA_ALLOWED. The site no longer reads that variable, so you can delete it in Cloudflare.': 'Цей список спочатку скопійовано з NANO_BANANA_ALLOWED. Сайт більше не читає цю змінну, тож її можна видалити в Cloudflare.',
   'Your agent started a generation': 'Ваш агент запустив генерацію',
   'Copy this message and send it to Claude Code, Codex or another agent. It connects with your Google sign-in, and you approve access in the browser.': 'Скопіюйте це повідомлення й надішліть його Claude Code, Codex чи іншому агенту. Він підключиться через ваш вхід Google, а доступ ви підтвердите в браузері.',

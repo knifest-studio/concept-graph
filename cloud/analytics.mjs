@@ -37,16 +37,19 @@ async function events(request, env, user, now) {
   catch (cause) { if (cause.status) throw cause; fail('Invalid analytics batch.'); }
   const batch = validateBatch(input, now), db = env.DB;
   await session(db, batch.session, user, now);
-  const writes = [];
+  const start = batch.events.find(event => event.name === 'session_start'), progress = batch.events.filter(event => ['session_end', 'visibility', 'heartbeat'].includes(event.name)).at(-1)?.details || {};
+  // The session's event count grows by the batch's events not stored yet, counted before they are inserted in the same
+  // transaction. Recounting the whole session on every batch read every row it had, and long sessions used up D1's
+  // daily read allowance.
+  const seqs = [...new Set(batch.events.map(event => event.seq))];
+  const writes = [db.prepare(`UPDATE analytics_sessions SET last_seen = ?, event_count = event_count + ? - (SELECT COUNT(*) FROM analytics_events WHERE session = ? AND seq IN (SELECT value FROM json_each(?))), duration = MAX(duration, ?), active = MAX(active, ?) WHERE id = ? AND user = ?`)
+    .bind(now, seqs.length, batch.session, JSON.stringify(seqs), progress.duration || 0, progress.active || 0, batch.session, user)];
   // Stay below D1's 100 bound parameters per statement and free-tier query limit per invocation.
   for (let offset = 0; offset < batch.events.length; offset += 10) {
     const rows = batch.events.slice(offset, offset + 10);
     writes.push(db.prepare(`INSERT OR IGNORE INTO analytics_events(session, seq, time, user, kind, name, area, board, details) VALUES ${rows.map(() => '(?,?,?,?,?,?,?,?,?)').join(',')}`)
       .bind(...rows.flatMap(event => [batch.session, event.seq, event.time, user, event.kind, event.name, event.area, event.board, JSON.stringify(event.details)])));
   }
-  const start = batch.events.find(event => event.name === 'session_start'), progress = batch.events.filter(event => ['session_end', 'visibility', 'heartbeat'].includes(event.name)).at(-1)?.details || {};
-  writes.push(db.prepare(`UPDATE analytics_sessions SET last_seen = ?, event_count = (SELECT COUNT(*) FROM analytics_events WHERE session = ?), duration = MAX(duration, ?), active = MAX(active, ?) WHERE id = ? AND user = ?`)
-    .bind(now, batch.session, progress.duration || 0, progress.active || 0, batch.session, user));
   if (start) writes.push(db.prepare('UPDATE analytics_sessions SET width = ?, height = ?, platform = ?, metadata = ? WHERE id = ? AND user = ?')
     .bind(start.details.width || 0, start.details.height || 0, start.details.platform || '', JSON.stringify(start.details), batch.session, user));
   await db.batch(writes);
@@ -64,19 +67,24 @@ async function replay(request, env, user, id, seq, now) {
     catch (cause) { if (cause.status) throw cause; fail('Invalid replay compression.'); }
   }
   const db = env.DB, current = await session(db, id, user, now), key = replayKey(current.day, id, seq);
+  // A new chunk's bytes are added to the session first; the chunk is stored only if the total stays within the quota, and
+  // a refused chunk's bytes are taken off again. All in one transaction, reading one row each, never the whole session.
+  const missing = 'NOT EXISTS (SELECT 1 FROM analytics_replays WHERE session = ? AND seq = ?)';
   await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO analytics_replays(session, seq, key, bytes, created, encoding) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM analytics_sessions WHERE id = ? AND user = ? AND replay_bytes + ? <= ?)`)
-      .bind(id, seq, key, bytes.length, now, encoding, id, user, bytes.length, sessionReplayBytes),
-    db.prepare(`UPDATE analytics_sessions SET replay_bytes = (SELECT COALESCE(SUM(bytes), 0) FROM analytics_replays WHERE session = ?) WHERE id = ? AND user = ?`).bind(id, id, user)
+    db.prepare(`UPDATE analytics_sessions SET replay_bytes = replay_bytes + ? WHERE id = ? AND user = ? AND ${missing}`).bind(bytes.length, id, user, id, seq),
+    db.prepare(`INSERT OR IGNORE INTO analytics_replays(session, seq, key, bytes, created, encoding) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM analytics_sessions WHERE id = ? AND user = ? AND replay_bytes <= ?)`)
+      .bind(id, seq, key, bytes.length, now, encoding, id, user, sessionReplayBytes),
+    db.prepare(`UPDATE analytics_sessions SET replay_bytes = replay_bytes - ? WHERE id = ? AND user = ? AND ${missing}`).bind(bytes.length, id, user, id, seq)
   ]);
   const chunk = await db.prepare('SELECT * FROM analytics_replays WHERE session = ? AND seq = ?').bind(id, seq).first();
   if (!chunk) fail('Session replay limit reached.', 413);
   if (chunk.bytes !== bytes.length || chunk.encoding !== encoding) fail('Replay sequence already reserved.', 409);
   if (!chunk.ready) {
     await env.FILES.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' }, onlyIf: { etagDoesNotMatch: '*' } });
+    // Counted once, by whichever upload marks it ready first.
     await db.batch([
-      db.prepare('UPDATE analytics_replays SET ready = 1 WHERE session = ? AND seq = ?').bind(id, seq),
-      db.prepare('UPDATE analytics_sessions SET last_seen = ?, replay_chunks = (SELECT COUNT(*) FROM analytics_replays WHERE session = ? AND ready = 1) WHERE id = ? AND user = ?').bind(now, id, id, user)
+      db.prepare('UPDATE analytics_sessions SET last_seen = ?, replay_chunks = replay_chunks + 1 WHERE id = ? AND user = ? AND EXISTS (SELECT 1 FROM analytics_replays WHERE session = ? AND seq = ? AND ready = 0)').bind(now, id, user, id, seq),
+      db.prepare('UPDATE analytics_replays SET ready = 1 WHERE session = ? AND seq = ?').bind(id, seq)
     ]);
   }
   return empty();
