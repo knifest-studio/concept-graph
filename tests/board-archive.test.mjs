@@ -174,7 +174,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 10;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 11;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));
@@ -299,4 +299,21 @@ test('format 9 round trips model GLBs and posters, including historical snapshot
   const bad = Buffer.from(cubeGlb()); bad[0] = 0;
   const { createHash } = await import('node:crypto'); manifest.assets[glb].sha256 = createHash('sha256').update(bad).digest('hex'); files.set('assets/' + glb, bad); files.set('board.json', Buffer.from(JSON.stringify(manifest)));
   await assert.rejects(importBoardArchive(await pack(files), destination), /GLB magic/);
+});
+
+test('format 10 round trips the images a run lists, remapped with the board, and refuses malformed or older-format lists', async t => {
+  const { source, destination } = await fixture(t), saved = structuredClone(board), run = saved.graph.runs[0];
+  run.inputs = [{ nodeId: 'reference', asset: current, label: 'Current reference', mask: true }, { asset: unused, template: 'Style' }];
+  const archive = await collect(await exportBoardArchive(saved, source)), files = await unpack(archive), manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 10); assert.ok(files.has(`assets/${unused}`));
+  const imported = await importBoardArchive(archive, destination), inputs = imported.graph.runs[0].inputs;
+  assert.equal(inputs[0].asset, imported.graph.nodes[0].data.asset); assert.notEqual(inputs[1].asset, unused);
+  assert.deepEqual(inputs.map(({ asset, ...input }) => input), [{ nodeId: 'reference', label: 'Current reference', mask: true }, { template: 'Style' }]);
+  assert.deepEqual(await readFile(path.join(destination, inputs[1].asset)), png);
+  manifest.version = 9; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /lists the images its generations used/);
+  manifest.version = 10; manifest.board.graph.runs[0].inputs[0].asset = '../outside.png'; files.set('board.json', Buffer.from(JSON.stringify(manifest)));
+  await assert.rejects(importBoardArchive(await pack(files), destination), /Invalid generation inputs/);
+  // A run without a list (every local run, and cloud runs from before) keeps the older format.
+  assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(board, source)))).get('board.json')).version, 1);
 });

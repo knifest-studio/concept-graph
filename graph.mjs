@@ -316,6 +316,34 @@ export function runInputs(graph, nodeId) {
   return { target, ordered, images, context, ...(mainImage ? { mainImage } : {}) };
 }
 
+// A cloud run keeps a short list of the images it was given (a local run keeps a full snapshot instead), so its results
+// can show them later: each image node with its ID, so the details can open it while it exists, its file and its name,
+// and whether its mask went along; a custom node's references name that custom node. Runs send at most 10 images; the
+// cap only bounds what a run stored in the shared document can hold.
+export const maxRunInputs = 16;
+const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template']);
+const validRunInput = input => !!input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).every(key => runInputKeys.has(key))
+  && typeof input.asset === 'string' && assetPattern.test(input.asset)
+  && (input.nodeId === undefined || (typeof input.nodeId === 'string' && input.nodeId.length > 0 && input.nodeId.length <= 120))
+  && (input.label === undefined || (typeof input.label === 'string' && input.label.length <= 120))
+  && (input.mask === undefined || input.mask === true)
+  && (input.template === undefined || (typeof input.template === 'string' && !!input.template.trim() && input.template.length <= 80));
+export function runInputRecord(graph, nodeId) {
+  const { target, ordered, mainImage } = runInputs(graph, nodeId), picturesOnly = isUpscale(target) || isModel3d(target), masks = !picturesOnly && !isDescribe(target);
+  // Mirrors runInputs: connected image nodes and, except for an upscale or 3D model, the references of custom nodes.
+  const record = ordered.flatMap(node => node.type === 'image'
+    ? [{ nodeId: node.id, asset: node.data.asset, label: imageName(node).slice(0, 120), ...(masks && node.data.mask ? { mask: true } : {}) }]
+    : !picturesOnly && node.type === 'text' && node.data.template ? node.data.template.assets.map(asset => ({ asset, template: node.data.template.name.trim().slice(0, 80) })) : []);
+  // GPT Image edits its main image, which it receives first.
+  if (mainImage) record.sort((a, b) => (b.nodeId === mainImage.nodeId) - (a.nodeId === mainImage.nodeId));
+  return record.slice(0, maxRunInputs);
+}
+export function validateRunInputs(value) {
+  if (value !== undefined && (!Array.isArray(value) || value.length > maxRunInputs || !value.every(validRunInput))) throw new Error('Invalid generation inputs.');
+}
+// Any editor can write a cloud run, so the details show only well-formed entries and never fail on the rest.
+export const runInputList = run => Array.isArray(run?.inputs) ? run.inputs.slice(0, maxRunInputs).filter(validRunInput) : undefined;
+
 export const promptText = node => [node.data.template?.instructions.trim() ? `Custom node instructions:\n${node.data.template.instructions}` : '', node.data.text.trim() ? node.data.text : ''].filter(Boolean).join('\n\n');
 
 export function collectInputs(graph, nodeId, { maskInput = false } = {}) {

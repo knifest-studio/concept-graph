@@ -1103,6 +1103,9 @@ export default {
   'No connected inputs': 'Немає під’єднаних входів',
   'Custom node: {name}': 'Власна нода: {name}',
   '{name} reference {number}': '{name}, референс {number}',
+  'No reference images': 'Без референсів',
+  'Open {name}': 'Відкрити «{name}»',
+  'Image no longer available': 'Зображення більше недоступне',
   'Download original image': 'Завантажити оригінал зображення',
   'Download original': 'Завантажити оригінал',
   'Synchronizing the board with the agent…': 'Синхронізуємо дошку з агентом…',
@@ -1311,6 +1314,8 @@ export default {
   '3D models can be at most 80 MB.': '3D-моделі можуть займати не більше 80 МБ.',
   'An asset exceeds its file size limit (images 30 MB, models 80 MB).': 'Файл перевищує обмеження розміру: 30 МБ для зображень, 80 МБ для моделей.',
   'This board uses 3D models and requires a newer board format.': 'Ця дошка містить 3D-моделі й потребує новішого формату дошки.',
+  'This board lists the images its generations used and requires a newer board format.': 'Ця дошка зберігає зображення, використані в генераціях, і потребує новішого формату дошки.',
+  'Invalid generation inputs.': 'Некоректний список вхідних зображень генерації.',
   // 3D models
   'Info': 'Інфо',
   'Model information': 'Інформація про модель',

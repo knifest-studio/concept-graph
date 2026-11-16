@@ -4,7 +4,7 @@ import { writeFile, stat, mkdtemp, copyFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import yauzl from 'yauzl';
 import yazl from 'yazl';
-import { validateGraph, imageFormat } from './graph.mjs';
+import { validateGraph, validateRunInputs, imageFormat } from './graph.mjs';
 import { boardName } from './workspace.mjs';
 import { hasPageData, validPageId } from './src/pages.mjs';
 import { maxModelBytes, validateGlb } from './src/model-assets.mjs';
@@ -47,6 +47,7 @@ function validateArchiveGraph(graph) {
     if ((run.model !== undefined && (typeof run.model !== 'string' || !/^[\w.\/:+-]{1,128}$/.test(run.model)))
       || (run.effort !== undefined && (typeof run.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(run.effort)))) fail('Invalid generation settings.');
     if (run.images !== undefined && (!Array.isArray(run.images) || run.images.length > 10 || !run.images.every(asset => typeof asset === 'string' && assetPattern.test(asset)))) fail('Invalid saved image inputs.');
+    validateRunInputs(run.inputs);
     if (run.snapshot !== undefined) {
       validateGraph({ nodes: run.snapshot, edges: [] });
       run.snapshot.forEach(validateNodeMetadata);
@@ -100,6 +101,9 @@ function hasImageEdits(graph) {
   return found;
 }
 
+// A cloud run's list of the images it was given (graph.mjs runInputRecord) names files that only it may still use.
+const hasRunInputs = graph => graph.runs.some(run => run.inputs?.length);
+
 function hasModels(graph) {
   let found = false;
   visitNodes(graph, node => { if (node?.type === 'model' || node?.data?.task === 'model3d') found = true; });
@@ -111,7 +115,10 @@ function referencedAssets(graph) {
   visitNodes(graph, node => {
     imageAssets(node).forEach(asset => assets.add(asset));
   });
-  for (const run of graph.runs) run.images?.forEach(asset => assets.add(asset));
+  for (const run of graph.runs) {
+    run.images?.forEach(asset => assets.add(asset));
+    run.inputs?.forEach(input => assets.add(input.asset));
+  }
   return assets;
 }
 
@@ -134,7 +141,7 @@ export async function exportBoardArchive(board, assetsDir) {
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasModels(saved.graph) ? 9 : hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasRunInputs(saved.graph) ? 10 : hasModels(saved.graph) ? 9 : hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -179,7 +186,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
@@ -193,6 +200,8 @@ export async function importBoardArchive(bytes, assetsDir) {
     if (manifest.version < 7 && hasShapes(board.graph)) fail('This board uses shapes or arrows and requires a newer board format.');
     if (manifest.version < 8 && hasImageEdits(board.graph)) fail('This board uses image crops or masks and requires a newer board format.');
     if (manifest.version < 9 && hasModels(board.graph)) fail('This board uses 3D models and requires a newer board format.');
+    // Apps before format 10 would not import the images a run lists, so they refuse it instead.
+    if (manifest.version < 10 && hasRunInputs(board.graph)) fail('This board lists the images its generations used and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');
@@ -225,6 +234,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     graph.nodes.forEach(remapNode);
     for (const run of graph.runs) {
       if (run.images) run.images = run.images.map(asset => remap.get(asset));
+      if (run.inputs) run.inputs = run.inputs.map(input => ({ ...input, asset: remap.get(input.asset) }));
       run.snapshot?.forEach(remapNode); remapNode(run.target);
       if (['queued', 'running'].includes(run.status)) {
         run.status = 'cancelled';
