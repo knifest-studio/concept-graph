@@ -22,13 +22,16 @@ test('main-image handles and edge routing stay display-only and refresh cached e
 });
 import { boardExtent, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, canvasView, createViewCache, visibleTitles, lodHandleProps, estimatedSize, nodeHandles, alignNodes, moveGroup, groupBounds, pruneGroups, connectionColor, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, preserveRemoteImageCaptions, mergeRemoteImageCaptions, boxTouches, boxSelection, reselect, selectionBounds } from '../src/canvas.mjs';
 
-test('server first-output placement clears the same multiline prompt bounds the canvas draws', () => {
-  const prompt = { id: 'prompt', type: 'text', position: { x: 400, y: 0 }, data: { text: 'A long prompt. '.repeat(150) } };
-  const output = { id: 'output', type: 'image', position: { x: 400, y: 100 }, data: {} };
-  positionFirstOutput(output, { nodes: [prompt], edges: [], groups: [] });
+test('server result placement clears the same multiline prompt bounds the canvas draws', () => {
+  const source = { id: 'source', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A bird' } };
+  const prompt = { id: 'prompt', type: 'text', position: { x: 390, y: -300 }, data: { text: 'A long prompt. '.repeat(150) } };
+  const output = { id: 'output', type: 'image', position: { x: 0, y: 0 }, data: {} };
+  positionRunOutput(output, { nodes: [source, prompt], edges: [], groups: [] }, { id: 'run', nodeId: 'source', outputIds: [] });
   const size = estimatedSize(prompt);
   assert.equal(size.height, 310);
-  assert.ok(output.position.x >= prompt.position.x + size.width || output.position.y >= prompt.position.y + size.height || output.position.y + 310 <= prompt.position.y);
+  // The long prompt reaches down beside the source, so its result goes under it (caption included), never above the source.
+  assert.ok(output.position.y >= source.position.y);
+  assert.ok(output.position.x >= prompt.position.x + size.width || output.position.y - 24 >= prompt.position.y + size.height);
 });
 
 test('undo preserves only a subsequently merged generation caption, without undoing manual edits', () => {
@@ -47,7 +50,8 @@ test('undo preserves only a subsequently merged generation caption, without undo
   assert.equal(mergeRemoteImageCaptions([localEdit], [image('Front view')], snapshot)[0], localEdit);
   assert.equal(preserveRemoteImageCaptions(snapshot, [localEdit], new Map(), 1)[0].data.caption, undefined);
 });
-import { validateGraph, collectInputs, groupRunOutputs, positionFirstOutput, commitGraph } from '../graph.mjs';
+import { validateGraph, collectInputs, groupRunOutputs, commitGraph } from '../graph.mjs';
+import { positionRunOutput } from '../src/output-placement.mjs';
 
 const text = (id, x, y) => ({ id, type: 'text', position: { x, y }, data: { text: id }, measured: { width: 310, height: 170 } });
 const image = (id, x, y) => ({ id, type: 'image', position: { x, y }, data: { asset: '12345678-1234-1234-1234-123456789abc.png' }, measured: { width: 310, height: 620 } });
@@ -149,17 +153,18 @@ test('a save returns its assigned revision even when generation changes the grap
 });
 
 test('first output chooses nearby free columns clear of existing content and group frames', () => {
-  const output = image('out', 400, 0);
-  const graph = { nodes: [image('a', 400, 200), image('b', 800, 900)], groups: [] };
-  positionFirstOutput(output, graph);
+  const prompt = { id: 'prompt', type: 'text', position: { x: 10, y: 0 }, data: { text: '' } }, run = { id: 'run', nodeId: 'prompt', outputIds: [] };
+  const output = image('out', 0, 0);
+  const graph = { nodes: [prompt, image('a', 400, 200), image('b', 800, 900)], edges: [], groups: [] };
+  positionRunOutput(output, graph, run);
   assert.deepEqual(output.position, { x: 734, y: 0 });
-  const grouped = image('next', 400, 0);
+  const grouped = image('next', 0, 0);
   graph.groups = [{ id: 'group', name: 'Group', nodeIds: ['a', 'b'], collapsed: false }];
-  positionFirstOutput(grouped, graph);
+  positionRunOutput(grouped, graph, run);
   assert.deepEqual(grouped.position, { x: 1158, y: 0 });
-  const nearby = image('nearby', 400, 0);
-  positionFirstOutput(nearby, { nodes: [image('far', 400, 1000000)], groups: [] });
-  assert.equal(nearby.position.y, 0);
+  const nearby = image('nearby', 0, 0);
+  positionRunOutput(nearby, { nodes: [prompt, image('far', 400, 1000000)], edges: [], groups: [] }, run);
+  assert.deepEqual(nearby.position, { x: 400, y: 0 });
 });
 
 test('undo retains the group of outputs that arrived after its snapshot', () => {

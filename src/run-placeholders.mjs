@@ -1,5 +1,6 @@
-import { isSiteGenerator, nodeSize, positionRunOutput, runOutputPage } from '../graph.mjs';
-import { boardPages, nodePage } from './pages.mjs';
+import { nextLayer } from './layers.mjs';
+import { plannedOutputs } from './output-placement.mjs';
+import { defaultPageId } from './pages.mjs';
 // Which waiting clip a placeholder opens on is decided from its id alone, because the clips themselves are listed
 // by the site and are not known here: the browser turns this seed into a clip once it has the list.
 export function waitingSeed(id) {
@@ -8,40 +9,24 @@ export function waitingSeed(id) {
   return hash;
 }
 
-// Diagnostics already reach local/hosted clients; progress text can outlive the tool call.
-export const codexImageActive = run => run.diagnostics?.events?.findLast(event => ['image_started', 'image_completed', 'image_failed', 'turn_completed', 'error'].includes(event.type))?.type === 'image_started';
-const knownAspect = node => {
-  const aspect = node?.data?.aspect || node?.data?.pixels?.height / node?.data?.pixels?.width;
-  return Number.isFinite(aspect) && aspect >= .1 && aspect <= 10 ? aspect : undefined;
-};
+export { codexImageActive } from './output-placement.mjs';
 
 export function runPlaceholders(graph, runs, page, spawns) {
-  const nodes = [], edges = [], pages = boardPages(graph), byId = new Map(graph.nodes.map(node => [node.id, node]));
+  const nodes = [], edges = [];
+  if (!runs.some(run => ['running', 'queued'].includes(run.status))) return { nodes, edges };
+  // Browser measurements are not stored; predict with the same bounds the server and shared document receive.
+  const plans = plannedOutputs({ ...graph, nodes: graph.nodes.map(({ measured, ...node }) => node) }, runs, page);
+  const z = nextLayer(graph.nodes), pageFields = page === defaultPageId ? {} : { page };
   for (const run of runs) {
-    if (!['running', 'queued'].includes(run.status)) continue;
-    const prompt = byId.get(run.nodeId);
-    if (!prompt || nodePage(prompt, pages) !== page || runOutputPage(graph, run) !== page) continue;
-    const task = run.task || prompt.data.task, describe = task === 'describe', model3d = task === 'model3d', upscale = task === 'upscale' || model3d, outputIds = run.outputIds || [];
-    const expected = describe ? 1 : upscale ? (run.images?.length || run.snapshot?.filter(node => node.type === 'image').length
-      || new Set(graph.edges.filter(edge => edge.target === run.nodeId && byId.get(edge.source)?.type === 'image').map(edge => edge.source)).size || 1)
-      : isSiteGenerator(run.provider) ? run.variants || 1 : codexImageActive(run) ? outputIds.length + 1 : 1;
-    const target = run.target || prompt;
-    const inputs = run.snapshot ? run.snapshot.filter(node => node.type === 'image')
-      : [...new Set(graph.edges.filter(edge => edge.target === run.nodeId).map(edge => edge.source))].map(id => byId.get(id)).filter(node => node?.type === 'image');
-    // Browser measurements are not stored; predict with the same bounds the server and shared document receive.
-    const scratch = { ...graph, nodes: graph.nodes.map(({ measured, ...node }) => node) }, placement = { ...run, outputIds: [...outputIds] };
+    const slots = plans.get(run.id) || [], task = slots.length && (run.task || graph.nodes.find(node => node.id === run.nodeId)?.data.task);
     // A run of many variants starts a few calls at a time and counts them in variantsStarted; the slots after them are queued.
-    const started = run.variantsStarted ?? expected;
-    for (let slot = outputIds.length; slot < expected; slot++) {
-      const aspect = model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1;
-      const id = `${run.id}-pending-${slot}`, output = { id, type: describe ? 'text' : model3d ? 'model' : 'image',
-        position: { x: target.position.x + 390, y: target.position.y + (describe ? 0 : slot * 340) }, data: { aspect, runId: run.id } };
-      positionRunOutput(output, scratch, placement);
-      const size = nodeSize(output), spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
-      nodes.push({ ...output, type: 'pending', selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
-        measured: size, style: size, data: { ...output.data, ...animation, describe, slot, status: run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : model3d ? 'Generating 3D' : upscale ? 'Upscaling' : 'Generating', seed: describe ? undefined : waitingSeed(id) } });
+    const first = run.outputIds?.length || 0, started = run.variantsStarted ?? Infinity;
+    for (const [index, { id, position, size, type, aspect }] of slots.entries()) {
+      const slot = first + index, describe = type === 'text', spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
+      const status = run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : task === 'model3d' ? 'Generating 3D' : task === 'upscale' ? 'Upscaling' : 'Generating';
+      nodes.push({ id, type: 'pending', position, ...pageFields, z: z + index, selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
+        measured: size, style: size, data: { aspect, runId: run.id, ...animation, describe, slot, status, seed: describe ? undefined : waitingSeed(id) } });
       edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, type: 'pending', data: animation, className: 'pending-edge', selectable: false, deletable: false, focusable: false });
-      scratch.nodes.push(output); placement.outputIds.push(id);
     }
   }
   return { nodes, edges };

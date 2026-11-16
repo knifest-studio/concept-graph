@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { imageNode, positionRunOutput, descriptionNode } from '../graph.mjs';
+import { imageNode, descriptionNode } from '../graph.mjs';
+import { positionRunOutput } from '../src/output-placement.mjs';
 import { codexImageActive, runPlaceholders, waitingSeed } from '../src/run-placeholders.mjs';
 import { clipAt } from '../src/waiting-videos.mjs';
 import { boxTouches, canvasView } from '../src/canvas.mjs';
@@ -115,17 +116,21 @@ test('describe has one text-shaped slot, no clip, and the same initial placement
   const result = pending(board, [job]);
   assert.equal(result.nodes.length, 1); assert.equal(result.nodes[0].data.seed, undefined);
   assert.equal(result.nodes[0].data.describe, true); assert.equal(result.nodes[0].data.status, 'Describing');
-  assert.deepEqual(result.nodes[0].style, { width: 310, height: 80 });
+  // Room for a description as long as the card shows, whatever text arrives.
+  assert.deepEqual(result.nodes[0].style, { width: 310, height: 310 });
   const output = descriptionNode({ ...job, target: board.nodes[0] }, 'A bird');
   positionRunOutput(output, board, job); assert.deepEqual(result.nodes[0].position, output.position);
   assert.equal(pending(board, [{ ...job, outputIds: ['description'] }]).nodes.length, 0);
 });
 
-test('placement uses real obstacles, groups, existing output sizes, requested aspect and the frozen local target', () => {
+test('placement uses real obstacles, groups, existing output sizes, requested aspect and the prompt where it is now', () => {
   const target = prompt('prompt', { aspect: .5 }), obstacle = { id: 'obstacle', type: 'image', position: { x: 420, y: 50 }, data: { aspect: 2 } };
   const board = graph([target, obstacle], { groups: [{ id: 'g', name: 'G', nodeIds: ['obstacle'], collapsed: false }] });
+  // A local run keeps the prompt as submitted; results still follow the prompt if it was moved since.
   const job = run({ target: { ...target, position: { x: 50, y: 60 } }, provider: 'nano-banana', variants: 2 });
   const outputs = pending(board, [job]).nodes, scratch = structuredClone(board), placement = structuredClone(job);
+  // Level with the live prompt, right of the expanded group frame (24px apart) with room for this run's own frame.
+  assert.deepEqual(outputs.map(node => node.position), [{ x: 802, y: 50 }, { x: 802, y: 259 }]);
   for (let index = 0; index < 2; index++) {
     const output = imageNode(placement, `image-${index}`, index, { width: 200, height: 100 });
     positionRunOutput(output, scratch, placement);

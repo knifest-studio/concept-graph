@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
-import { duplicateNodes, imageNode, positionRunOutput, validateGraph } from '../graph.mjs';
+import { duplicateNodes, imageNode, validateGraph } from '../graph.mjs';
+import { positionRunOutput } from '../src/output-placement.mjs';
 import { arrangeLayers, layerIndex, layerOrder, layerShortcut, nextLayer, stackOnTop, topLayer } from '../src/layers.mjs';
 import { canvasView, stampTargetAt } from '../src/canvas.mjs';
 import { cloneSelection, readNodeClipboard, selectedGraph } from '../src/clipboard.mjs';
