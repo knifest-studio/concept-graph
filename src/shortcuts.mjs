@@ -95,6 +95,10 @@ export function resolveBindings(overrides = active, mac = platformIsMac()) {
 }
 export const currentBindings = (id, overrides = active, mac = platformIsMac()) => resolveBindings(overrides, mac).get(id) || [];
 
+// Duplicate and Generate also run while typing, so a binding for them must not be a key that types or edits text:
+// it needs ⌘/Ctrl (macOS Option and AltGr type characters), or a function key.
+export const typingSafe = binding => { const parsed = typeof binding === 'string' ? parseBinding(binding) : binding; return !!parsed && (parsed.mod || parsed.ctrl || /^F\d+$/.test(parsed.code)); };
+
 // The wider of the text-field checks the app used: anything a person types into, but not checkboxes, sliders or buttons.
 export const textEntrySelector = 'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="color"]):not([type="file"]),textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
 export const isTextEntry = target => !!target?.closest?.(textEntrySelector);
@@ -131,7 +135,10 @@ export function matchShortcut(event, { scopes = ['canvas', 'global'], ids, editi
   for (const item of shortcutRegistry) {
     if (!scopes.includes(item.scope) || (ids && !ids.includes(item.id)) || (typing && !item.inText) || (native.repeat && !item.repeat)) continue;
     for (const text of resolved.get(item.id)) {
-      const binding = parseBinding(text), score = binding ? bindingScore(binding, native, mac) : 0;
+      const binding = parseBinding(text);
+      // A stored key that types text never fires from a text field, whatever brought it there.
+      if (!binding || (typing && !typingSafe(binding))) continue;
+      const score = bindingScore(binding, native, mac);
       if (score > bestScore) { best = item.id; bestScore = score; }
     }
   }
@@ -180,16 +187,26 @@ export function findShortcutConflict(id, binding, overrides = active, mac = plat
   return null;
 }
 
-// Turns a key press in the Settings recorder into a binding. Returns null while only modifiers are held.
+// Turns a key press in the Settings recorder into a binding. Returns null while only modifiers are held. Given the action's
+// id it also refuses, for actions that run while typing, keys that would type into a prompt.
 const modifierKeys = new Set(['Meta', 'Control', 'Alt', 'Shift', 'AltGraph', 'CapsLock', 'Fn', 'FnLock', 'Hyper', 'Super', 'OS', 'NumLock', 'ScrollLock', 'Symbol', 'SymbolLock']);
 const blockedCodes = new Set(['Tab', 'Space', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
-export function recordBinding(event, mac = platformIsMac()) {
+export function recordBinding(event, mac = platformIsMac(), { id, overrides = active } = {}) {
   const native = event?.nativeEvent || event, key = String(native.key ?? '');
   if (native.isComposing || key === 'Process' || native.keyCode === 229 || modifierKeys.has(key)) return null;
   let { shiftKey: shift, altKey: alt, ctrlKey: ctrl, metaKey: meta } = native, code;
-  const char = characters.get(key);
+  const char = characters.get(key), altGraph = ctrl && alt;
   if (/^[a-z]$/i.test(key)) code = `Key${key.toUpperCase()}`;
-  else if (char) { code = char.code; shift = char.shift; if (ctrl && alt) ctrl = alt = false; }
+  else if (char && Object.hasOwn(typed, native.code) && char.code !== native.code && !altGraph) {
+    // A punctuation or digit key that types another US character on this layout (Ukrainian "/" types "."): the key itself
+    // is recorded, so the shortcut stays on it after a switch to English. When that character already triggers another
+    // action, which would win on this layout, the character is recorded instead and Settings asks about the clash.
+    code = native.code;
+    const typedBinding = formatBinding({ mod: mac ? !!meta : !!(ctrl || meta), ctrl: mac && !!ctrl, alt: !!alt, shift: char.shift, code: char.code });
+    if (id && findShortcutConflict(id, typedBinding, overrides, mac)) { code = char.code; shift = char.shift; }
+  }
+  // A letter key typing punctuation (AZERTY "?" on M) or AltGr brackets record the character, as they are matched by it.
+  else if (char) { code = char.code; shift = char.shift; if (altGraph) ctrl = alt = false; }
   else if (key === ' ') code = 'Space';
   else if (Object.hasOwn(named, key)) code = key;
   else if (validCode(native.code) && !Object.hasOwn(named, native.code)) code = native.code;
@@ -199,6 +216,7 @@ export function recordBinding(event, mac = platformIsMac()) {
   if (blockedCodes.has(code) || (code === 'Enter' && !parsed.mod && !parsed.ctrl && !parsed.alt)) return { error: 'blocked', binding };
   // Browsers keep these for tabs, windows and quitting, and never pass them to the page.
   if ((parsed.mod && !parsed.alt && ['KeyW', 'KeyT', 'KeyN'].includes(code)) || (mac && parsed.mod && code === 'KeyQ') || (!mac && parsed.alt && code === 'F4')) return { error: 'reserved', binding };
+  if (id && byId.get(id)?.inText && !typingSafe(parsed)) return { error: 'typing', binding };
   return { binding };
 }
 

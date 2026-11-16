@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
-import { activeShortcutOverrides, defaultBindings, matchShortcut, shortcutRegistry } from '../src/shortcuts.mjs';
-import { assignShortcut, getShortcutOverrides, hasOverride, readShortcutOverrides, resetAllShortcuts, resetShortcut, sanitizeShortcutOverrides, savedShortcuts, setShortcutBindings, shortcutStorageKey, subscribeShortcutOverrides, withAssigned, withBindings, withoutOverride } from '../src/shortcut-preferences.mjs';
+import { activeShortcutOverrides, currentBindings, defaultBindings, matchShortcut, sameBinding, shortcutRegistry } from '../src/shortcuts.mjs';
+import { assignShortcut, getShortcutOverrides, hasOverride, readShortcutOverrides, resetAllShortcuts, resetConflict, resetShortcut, sanitizeShortcutOverrides, savedShortcuts, setShortcutBindings, shortcutStorageKey, subscribeShortcutOverrides, withAssigned, withBindings, withDefaults, withoutOverride } from '../src/shortcut-preferences.mjs';
 import { validPreferences, validShortcutPreferences } from '../desktop-preferences.mjs';
 import { ungroupTargets } from '../src/canvas.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -22,6 +22,11 @@ test('stored overrides keep only known, changeable actions with bindings the rec
   assert.deepEqual(sanitizeShortcutOverrides({ version: 1, bindings: { 'tool.pen': ['Mod+KeyQ'] } }, true).bindings, {});
   assert.deepEqual(sanitizeShortcutOverrides({ version: 1, bindings: { 'tool.pen': ['Mod+KeyQ'] } }, false).bindings, { 'tool.pen': ['Mod+KeyQ'] });
   assert.deepEqual(sanitizeShortcutOverrides({ version: 1, bindings: { 'edit.delete': ['Delete'], 'prompt.generate': ['Mod+Enter', 'F5'] } }, false).bindings, { 'edit.delete': ['Delete'], 'prompt.generate': ['Mod+Enter', 'F5'] });
+  // Actions that also run while typing never keep a key that types or edits text.
+  for (const binding of ['KeyG', 'Shift+KeyG', 'Alt+KeyG', 'Digit1', 'Backspace', 'Slash'])
+    for (const id of ['prompt.generate', 'edit.duplicate']) assert.deepEqual(sanitizeShortcutOverrides({ version: 1, bindings: { [id]: [binding] } }, false).bindings, {}, `${id} ${binding}`);
+  assert.deepEqual(sanitizeShortcutOverrides({ version: 1, bindings: { 'edit.duplicate': ['Mod+Alt+KeyD'] } }, true).bindings, { 'edit.duplicate': ['Mod+Alt+KeyD'] });
+  assert.deepEqual(withBindings(empty, 'edit.duplicate', ['KeyD'], false), empty);
 });
 
 test('changing, turning off, resetting and replacing keep only differences from the defaults', () => {
@@ -116,4 +121,39 @@ test('ungrouping by shortcut removes every targeted group in one undo step', () 
   undo.undo();
   assert.deepEqual(readCloudGraph(doc).groups.map(group => group.id).sort(), ['g1', 'g2', 'g3']);
   assert.equal(undo.undoStack.length, 0);
+});
+
+// Every changeable, non-viewer key is used by at most one action that can fire on it.
+const assertNoSharedKeys = (overrides, mac, message) => {
+  const items = shortcutRegistry.filter(item => item.scope !== 'zoom');
+  for (const [index, item] of items.entries()) for (const binding of currentBindings(item.id, overrides, mac))
+    for (const other of items.slice(index + 1)) assert.ok(!currentBindings(other.id, overrides, mac).some(theirs => sameBinding(theirs, binding, mac)), `${message}: ${binding} on ${item.id} and ${other.id}`);
+};
+
+test('resetting one action after Replace asks first and never leaves two actions on one key', () => {
+  for (const mac of [false, true]) {
+    // Replace gave P to Select; resetting Pen would hand P back while Select keeps it.
+    let overrides = withAssigned(empty, 'tool.select', 'KeyP', mac);
+    assert.deepEqual(resetConflict(overrides, 'tool.pen', mac), { binding: 'KeyP', other: { id: 'tool.select', label: 'Select', fixed: false } });
+    overrides = withDefaults(overrides, 'tool.pen', mac);
+    assert.deepEqual(overrides.bindings, { 'tool.select': [] });
+    assert.equal(matchShortcut({ key: 'p', code: 'KeyP' }, { overrides, mac }), 'tool.pen');
+    assertNoSharedKeys(overrides, mac, 'pen reset');
+    assert.equal(resetConflict(overrides, 'tool.select', mac), null, 'V is free again');
+    assert.deepEqual(withDefaults(overrides, 'tool.select', mac).bindings, {});
+    // The same for a group shortcut moved to a tool.
+    overrides = withAssigned(empty, 'tool.select', 'Mod+KeyG', mac);
+    assert.equal(resetConflict(overrides, 'group.create', mac).other.id, 'tool.select');
+    overrides = withDefaults(overrides, 'group.create', mac);
+    assert.equal(matchShortcut({ key: 'g', code: 'KeyG', [mac ? 'metaKey' : 'ctrlKey']: true }, { overrides, mac }), 'group.create');
+    assertNoSharedKeys(overrides, mac, 'group reset');
+    assert.equal(resetConflict(empty, 'tool.pen', mac), null, 'nothing to reset');
+    assert.equal(resetConflict(withBindings(empty, 'tool.pen', ['KeyQ'], mac), 'tool.pen', mac), null, 'nobody took P');
+    // Any mix of assignments and resets keeps every key on one action.
+    let many = empty;
+    for (const [action, id, binding] of [['assign', 'tool.select', 'KeyP'], ['assign', 'help', 'KeyV'], ['reset', 'tool.select'], ['assign', 'edit.duplicate', 'Mod+KeyG'], ['reset', 'tool.pen'], ['reset', 'group.create'], ['assign', 'tool.arrow', 'KeyT'], ['reset', 'help'], ['reset', 'prompt.add'], ['reset', 'edit.duplicate']]) {
+      many = action === 'assign' ? withAssigned(many, id, binding, mac) : withDefaults(many, id, mac);
+      assertNoSharedKeys(many, mac, `${action} ${id}`);
+    }
+  }
 });

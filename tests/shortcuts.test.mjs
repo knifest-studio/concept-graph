@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindingLabel, currentBindings, defaultBindings, findShortcutConflict, isHelpShortcut, isMacPlatform, keyboardShortcuts, matchShortcut, normalBinding, rebindable, recordBinding, shortcutHint, shortcutLabel, shortcutRegistry, shortcutRows, textEntrySelector, withShortcut } from '../src/shortcuts.mjs';
+import { bindingLabel, currentBindings, typingSafe, defaultBindings, findShortcutConflict, isHelpShortcut, isMacPlatform, keyboardShortcuts, matchShortcut, normalBinding, rebindable, recordBinding, shortcutHint, shortcutLabel, shortcutRegistry, shortcutRows, textEntrySelector, withShortcut } from '../src/shortcuts.mjs';
 import uk from '../src/locales/uk.mjs';
 
 test('shortcut reference covers actual tools and context-specific commands with Ukrainian labels', () => {
@@ -167,14 +167,14 @@ test('labels come from the bindings in force', () => {
 });
 
 test('the Settings recorder turns presses into bindings and refuses keys the board or browser needs', () => {
-  const record = (event, mac = false) => recordBinding(press(event.key, event.code, event), mac);
+  const record = (event, mac = false, ctx) => recordBinding(press(event.key, event.code, event), mac, ctx);
   assert.deepEqual(record({ key: 'g', code: 'KeyG', metaKey: true }, true), { binding: 'Mod+KeyG' });
   assert.deepEqual(record({ key: 'g', code: 'KeyG', ctrlKey: true }), { binding: 'Mod+KeyG' });
   assert.deepEqual(record({ key: 'g', code: 'KeyG', ctrlKey: true }, true), { binding: 'Ctrl+KeyG' });
   assert.deepEqual(record({ key: 'п', code: 'KeyG', metaKey: true }, true), { binding: 'Mod+KeyG' });
   assert.deepEqual(record({ key: 'z', code: 'KeyW' }), { binding: 'KeyZ' }, 'AZERTY records the printed letter');
   assert.deepEqual(record({ key: '?', code: 'Slash', shiftKey: true }), { binding: 'Shift+Slash' });
-  assert.deepEqual(record({ key: ',', code: 'Slash', shiftKey: true }), { binding: 'Comma' }, 'the typed character is recorded, as it is matched first');
+  assert.deepEqual(record({ key: ',', code: 'Slash', shiftKey: true }), { binding: 'Shift+Slash' }, 'Ukrainian Shift+/ records the key, as on English');
   assert.deepEqual(record({ key: 'х', code: 'BracketLeft', shiftKey: true }), { binding: 'Shift+BracketLeft' }, 'a non-Latin character records the physical key');
   assert.deepEqual(record({ key: '[', code: 'Digit8', ctrlKey: true, altKey: true }), { binding: 'BracketLeft' });
   assert.deepEqual(record({ key: 'å', code: 'KeyA', altKey: true }, true), { binding: 'Alt+KeyA' });
@@ -187,4 +187,48 @@ test('the Settings recorder turns presses into bindings and refuses keys the boa
   for (const [extra, mac] of [[{ key: 'w', code: 'KeyW', metaKey: true }, true], [{ key: 'T', code: 'KeyT', ctrlKey: true, shiftKey: true }, false], [{ key: 'n', code: 'KeyN', ctrlKey: true }, false], [{ key: 'q', code: 'KeyQ', metaKey: true }, true], [{ key: 'F4', code: 'F4', altKey: true }, false]]) assert.equal(record(extra, mac).error, 'reserved', JSON.stringify(extra));
   assert.deepEqual(record({ key: 'q', code: 'KeyQ', ctrlKey: true }), { binding: 'Mod+KeyQ' });
   assert.equal(record({ key: 'Unidentified', code: '' }).error, 'unsupported');
+});
+
+test('recorded punctuation stays on the same key after switching between Ukrainian and English', () => {
+  const record = (event, ctx) => recordBinding(press(event.key, event.code, event), false, ctx);
+  const on = binding => ({ version: 1, bindings: { 'tool.pen': [binding] } });
+  // Ukrainian "/" key types ".": the key is recorded, and English "/" on it still works.
+  const slash = record({ key: '.', code: 'Slash' }, { id: 'tool.pen', overrides: null }).binding;
+  assert.equal(slash, 'Slash');
+  assert.equal(match(press('.', 'Slash'), { overrides: on(slash) }), 'tool.pen', 'Ukrainian');
+  assert.equal(match(press('/', 'Slash'), { overrides: on(slash) }), 'tool.pen', 'English');
+  assert.equal(match(press('.', 'Period'), { overrides: on(slash) }), null, 'English "." is another key');
+  // Ukrainian Shift+2 types '"' and keeps its real Shift.
+  const quote = record({ key: '"', code: 'Digit2', shiftKey: true }, { id: 'tool.pen', overrides: null }).binding;
+  assert.equal(quote, 'Shift+Digit2');
+  assert.equal(match(press('@', 'Digit2', { shiftKey: true }), { overrides: on(quote) }), 'tool.pen', 'English Shift+2');
+  assert.equal(match(press('"', 'Digit2', { shiftKey: true }), { overrides: on(quote) }), 'tool.pen', 'Ukrainian Shift+2');
+  // Ukrainian Shift+7 types "?", which opens help on this layout, so the clash is reported rather than hidden.
+  assert.deepEqual(record({ key: '?', code: 'Digit7', shiftKey: true }, { id: 'tool.pen', overrides: null }), { binding: 'Shift+Slash' });
+  assert.deepEqual(record({ key: '?', code: 'Digit7', shiftKey: true }, { id: 'help', overrides: null }), { binding: 'Shift+Digit7' });
+  // AZERTY punctuation on a letter key and AltGr brackets still record the character.
+  assert.deepEqual(record({ key: '?', code: 'KeyM', shiftKey: true }), { binding: 'Shift+Slash' });
+  assert.deepEqual(record({ key: ']', code: 'Digit9', ctrlKey: true, altKey: true }), { binding: 'BracketRight' });
+  assert.deepEqual(record({ key: '/', code: 'Slash' }), { binding: 'Slash' });
+});
+
+test('actions that run while typing only take keys that cannot type text', () => {
+  const record = (event, id, mac = false) => recordBinding(press(event.key, event.code, event), mac, { id, overrides: null });
+  for (const id of ['prompt.generate', 'edit.duplicate']) {
+    for (const event of [{ key: 'g', code: 'KeyG' }, { key: 'G', code: 'KeyG', shiftKey: true }, { key: '1', code: 'Digit1' }, { key: 'Backspace', code: 'Backspace' }, { key: 'Delete', code: 'Delete' }, { key: '/', code: 'Slash' }, { key: 'Enter', code: 'Enter', altKey: true }])
+      assert.equal(record(event, id).error, 'typing', `${id} ${JSON.stringify(event)}`);
+    assert.equal(record({ key: 'å', code: 'KeyA', altKey: true }, id, true).error, 'typing', 'macOS Option types characters');
+    assert.deepEqual(record({ key: 'g', code: 'KeyG', ctrlKey: true }, id), { binding: 'Mod+KeyG' });
+    assert.deepEqual(record({ key: 'g', code: 'KeyG', ctrlKey: true }, id, true), { binding: 'Ctrl+KeyG' });
+    assert.deepEqual(record({ key: 'F8', code: 'F8' }, id), { binding: 'F8' });
+  }
+  assert.deepEqual(record({ key: 'g', code: 'KeyG' }, 'tool.pen'), { binding: 'KeyG' }, 'canvas tools keep bare letters');
+  assert.ok(typingSafe('Mod+KeyD') && typingSafe('Ctrl+Alt+KeyD') && typingSafe('F5'));
+  assert.ok(!typingSafe('KeyD') && !typingSafe('Shift+KeyD') && !typingSafe('Alt+KeyD') && !typingSafe('Backspace') && !typingSafe('nonsense'));
+  // Even a stored binding that slipped past the checks never fires from a text field, so the letter is typed.
+  const overrides = { version: 1, bindings: { 'prompt.generate': ['KeyG'], 'edit.duplicate': ['KeyD'] } };
+  assert.equal(match(press('g', 'KeyG', { target: field }), { scopes: ['prompt'], overrides }), null);
+  assert.equal(match(press('d', 'KeyD', { target: field }), { overrides }), null);
+  assert.equal(match(press('d', 'KeyD'), { overrides }), 'edit.duplicate', 'outside text fields the key works');
+  assert.equal(match(press('Enter', 'Enter', { ctrlKey: true, target: field }), { scopes: ['prompt'] }), 'prompt.generate');
 });

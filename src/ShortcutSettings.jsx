@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { bindingLabel, currentBindings, findShortcutConflict, platformIsMac, recordBinding, shortcutRegistry } from './shortcuts.mjs';
-import { assignShortcut, hasOverride, resetAllShortcuts, resetShortcut, setShortcutBindings } from './shortcut-preferences.mjs';
+import { assignShortcut, hasOverride, resetAllShortcuts, resetConflict, resetShortcut, setShortcutBindings } from './shortcut-preferences.mjs';
 import { useShortcutOverrides } from './useShortcutOverrides.jsx';
 import { t } from './i18n.mjs';
 import './shortcut-settings.css';
@@ -22,16 +22,23 @@ export function ShortcutSettings() {
     if (event.key === 'Tab') return;
     event.preventDefault(); event.stopPropagation();
     if (event.key === 'Escape') { setNotice(null); stop(); return; }
-    const result = recordBinding(event, mac);
+    const result = recordBinding(event, mac, { id: recording, overrides });
     if (!result) return;
     const key = result.binding ? bindingLabel(result.binding, mac) : '';
-    if (result.error) { setNotice({ id: recording, text: result.error === 'reserved' ? t('Your browser keeps {key} for itself. Choose another key.', { key }) : result.error === 'blocked' ? t('{key} is needed to move around the board and dialogs. Choose another key.', { key }) : t('This key can’t be a shortcut. Choose another key.') }); return; }
+    if (result.error) { setNotice({ id: recording, text: result.error === 'reserved' ? t('Your browser keeps {key} for itself. Choose another key.', { key }) : result.error === 'blocked' ? t('{key} is needed to move around the board and dialogs. Choose another key.', { key }) : result.error === 'typing' ? (mac ? t('This action also works while typing, so it needs ⌘ or Ctrl. Choose another key.') : t('This action also works while typing, so it needs Ctrl. Choose another key.')) : t('This key can’t be a shortcut. Choose another key.') }); return; }
     const other = findShortcutConflict(recording, result.binding, overrides, mac);
     if (other?.fixed) { setNotice({ id: recording, text: t('{key} is already used by {action}, which can’t be changed. Choose another key.', { key, action: t(other.label) }) }); return; }
     if (other) { setConflict({ id: recording, binding: result.binding, other }); setNotice(null); setRecording(null); return; }
     assignShortcut(recording, result.binding); setNotice(null); stop();
   };
-  const replace = () => { assignShortcut(conflict.id, conflict.binding); setFocusId(conflict.id); setConflict(null); };
+  const replace = () => { if (conflict.reset) resetShortcut(conflict.id); else assignShortcut(conflict.id, conflict.binding); setFocusId(conflict.id); setConflict(null); };
+  // A default that Replace gave another action since is asked about, as a new key would be.
+  const reset = id => {
+    setNotice(null);
+    const clash = resetConflict(overrides, id, mac);
+    if (clash) { setConflict({ id, binding: clash.binding, other: clash.other, reset: true }); return; }
+    setConflict(null); resetShortcut(id); setFocusId(id);
+  };
   return <section className="shortcut-settings" ref={root} aria-labelledby="shortcut-settings-title">
     <h3 id="shortcut-settings-title">{t('Keyboard shortcuts')}</h3>
     <p className="preference-hint">{t('They work on any keyboard layout and are saved on this device.')}</p>
@@ -47,7 +54,7 @@ export function ShortcutSettings() {
             ? <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => { setNotice(null); stop(item.id); }}>{t('Cancel')}</button>
             : <><button type="button" data-shortcut-change={item.id} aria-label={t('Change shortcut for {action}', { action: label })} onClick={() => start(item.id)}>{t('Change')}</button>
               {bindings.length > 0 && <button type="button" aria-label={t('Turn off shortcut for {action}', { action: label })} onClick={() => { setShortcutBindings(item.id, []); setFocusId(item.id); }}>{t('Remove')}</button>}
-              {hasOverride(overrides, item.id) && <button type="button" aria-label={t('Reset shortcut for {action}', { action: label })} onClick={() => { resetShortcut(item.id); setFocusId(item.id); }}>{t('Reset')}</button>}</>}</span>
+              {hasOverride(overrides, item.id) && <button type="button" aria-label={t('Reset shortcut for {action}', { action: label })} onClick={() => reset(item.id)}>{t('Reset')}</button>}</>}</span>
           {notice?.id === item.id && <p className="shortcut-notice" role="alert">{notice.text}</p>}
           {conflict?.id === item.id && <div className="shortcut-conflict" role="alert"><p>{t('{key} is already used by {action}.', { key: bindingLabel(conflict.binding, mac), action: t(conflict.other.label) })}</p>
             <button type="button" className="primary-button" autoFocus onClick={replace}>{t('Replace')}</button><button type="button" onClick={() => { setFocusId(conflict.id); setConflict(null); }}>{t('Cancel')}</button></div>}

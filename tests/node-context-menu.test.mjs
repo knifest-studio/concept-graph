@@ -10,4 +10,9 @@ test('context menu shortcuts act on its target and leave other shortcuts alone',
   assert.equal(contextMenuShortcut(key('c'), 'text'), null);
   assert.equal(contextMenuShortcut(key('c', { altKey: true }), 'image'), null);
   assert.equal(contextMenuShortcut(key('x'), 'image'), null);
+  // A group's menu shows the Ungroup keys, so they act on that group; other menus leave them to the canvas.
+  assert.equal(contextMenuShortcut(key('G', { shiftKey: true, code: 'KeyG' }), 'group'), 'ungroup');
+  assert.equal(contextMenuShortcut(key('П', { shiftKey: true, code: 'KeyG' }), 'group'), 'ungroup', 'Ukrainian layout');
+  assert.equal(contextMenuShortcut(key('G', { shiftKey: true, code: 'KeyG' }), 'image'), null);
+  assert.equal(contextMenuShortcut(key('g', { code: 'KeyG' }), 'group'), null);
 });

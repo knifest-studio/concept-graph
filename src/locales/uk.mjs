@@ -52,6 +52,8 @@ export default {
   "Your browser keeps {key} for itself. Choose another key.": "Браузер залишає {key} для себе. Виберіть іншу клавішу.",
   "{key} is needed to move around the board and dialogs. Choose another key.": "{key} потрібна для руху дошкою й діалогами. Виберіть іншу клавішу.",
   "This key can’t be a shortcut. Choose another key.": "Цю клавішу не можна призначити скороченням. Виберіть іншу.",
+  "This action also works while typing, so it needs ⌘ or Ctrl. Choose another key.": "Ця дія працює й під час введення тексту, тому потребує ⌘ або Ctrl. Виберіть іншу клавішу.",
+  "This action also works while typing, so it needs Ctrl. Choose another key.": "Ця дія працює й під час введення тексту, тому потребує Ctrl. Виберіть іншу клавішу.",
   "Your theme, your choice": "Ваша тема — ваш вибір",
   "Follow your system theme, or pick Light, Dark or System in Settings.": "Використовуйте системну тему або виберіть світлу, темну чи системну в налаштуваннях.",
   "Keep your best prompts handy": "Улюблені промпти під рукою",

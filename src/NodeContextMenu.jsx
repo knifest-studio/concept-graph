@@ -49,9 +49,9 @@ export function NodeContextMenu({ children, id, type, actions, slideshow, masked
   };
   const onKeyDown = event => {
     const shortcutAction = contextMenuShortcut(event, type);
-    if (shortcutAction) {
+    if (shortcutAction && (shortcutAction !== 'ungroup' || !readOnly)) {
       event.preventDefault(); event.stopPropagation();
-      choose(shortcutAction === 'image' ? actions.copyImage : actions.copyNodeId);
+      choose(shortcutAction === 'image' ? actions.copyImage : shortcutAction === 'ungroup' ? actions.removeNode : actions.copyNodeId);
       return;
     }
     const layer = !readOnly && !['group', 'section'].includes(type) && layerShortcut(event);
