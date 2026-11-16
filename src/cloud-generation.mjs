@@ -97,7 +97,8 @@ export class CloudGeneration {
     if ([...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nodeId, client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID), settings: 1 }) });
-    this.onStart?.(run);
+    // The room answers with the run's ID; its record may reach this tab later, so the caller is told which prompt it ran.
+    this.onStart?.({ nodeId, ...run });
   }
   // Runs that need no local helper to start or cancel.
   remote(id) { const run = this.doc.getMap('runs').get(id); return !!run?.delegate || isSiteGenerator(run?.provider); }

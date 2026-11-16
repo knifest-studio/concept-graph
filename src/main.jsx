@@ -1,4 +1,5 @@
 import { track, analyticsView, analyticsReady, analyticsViewport, analyticsVia } from './analytics.mjs';
+import { promptAnalytics } from './generation-analytics.mjs';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
@@ -8,7 +9,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { codexGenerator, generationFields, generatorOf, takesGenerationSettings, generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
+import { codexGenerator, generationFields, generatorOf, takesGenerationSettings, generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
@@ -367,8 +368,8 @@ function UpscaleNode({ id, data, selected }) {
           data-tooltip={!view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxUpscaleImages }) : blocked ? note : t('Upscale connected images')}><Icon name="play" size={12}/><span>{t('Upscale')}</span></button></div>
         {pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
     <div className="upscale-settings nodrag">
-      <div className="upscale-options" role="radiogroup" aria-label={t('Upscaler')}>{offeredUpscalers(view.falReady).map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={upscaler === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { upscaler: value })}>{label}</button>)}</div>
-      <div className="upscale-sizes" role="radiogroup" aria-label={t('Size')}>{sizes.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={scale === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { scale: value })}>{label}</button>)}</div>
+      <div className="upscale-options" role="radiogroup" aria-label={t('Upscaler')}>{offeredUpscalers(view.falReady).map(([value, label]) => <button type="button" role="radio" key={value} data-analytics-name={`Upscaler: ${label}`} aria-checked={upscaler === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { upscaler: value })}>{label}</button>)}</div>
+      <div className="upscale-sizes" role="radiogroup" aria-label={t('Size')}>{sizes.map(([value, label]) => <button type="button" role="radio" key={value} data-analytics-name={`Upscale size: ${label}`} aria-checked={scale === value} disabled={view.readOnly || pending} onClick={() => canvas.setUpscale(id, { scale: value })}>{label}</button>)}</div>
       <small>{unset ? note : t(upscaleHints[upscaler])}</small>
     </div>
     <div className="node-inputs">{view.images ? plural(view.images, '{count} image to upscale', '{count} images to upscale') : t('Connect images, then click Upscale')}</div>
@@ -404,7 +405,7 @@ function Model3dNode({ id, data, selected }) {
       <div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{t('Generating 3D')}… {view.timer}</span>}
         <button className={`run-button nano${pending ? ' run-pending' : ''}`} type="button" aria-label={t('Generate 3D models')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun || blocked || view.readOnly} data-tooltip={blocked ? note : !view.images ? t('Connect an image first') : !canRun ? t('Connect at most {count} images', { count: maxModel3dImages }) : t('Generate 3D models')}><Icon name="play" size={12}/><span>{t('Generate')}</span></button></div>
         {pending && canCancel && view.active && <button className="run-cancel" type="button" onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
-    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} aria-checked={modeler === value} data-tooltip={t(modelerTips[value])} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{blocked ? note : t(modelerHints[modeler])}</small></div>
+    <div className="upscale-settings nodrag"><div className="upscale-options" role="radiogroup" aria-label={t('3D generator')}>{modelerOptions.map(([value, label]) => <button type="button" role="radio" key={value} data-analytics-name={`3D generator: ${label}`} aria-checked={modeler === value} data-tooltip={t(modelerTips[value])} disabled={view.readOnly || pending} onClick={() => canvas.setModeler(id, value)}>{label}</button>)}</div><small>{blocked ? note : t(modelerHints[modeler])}</small></div>
     <div className="node-inputs">{view.images ? plural(view.images, '{count} image to turn into 3D', '{count} images to turn into 3D') : t('Connect images, then click Generate')}</div>
     {failedRun(view) && <div className="node-error nodrag">{t(view.error)}</div>}<Handle type="source" position={Position.Right}/>
   </article></NodeContextMenu>;
@@ -991,7 +992,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const mouse = useRef({ x: innerWidth / 2, y: innerHeight / 2 }), fileInput = useRef(null), modelInput = useRef(null), toastTimer = useRef(null);
   const keepToastRoom = useMemo(() => toastRoom(), []);
   const saveFn = useRef(null);
-  const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
+  // Both show the same toast. notify is for a problem: analytics logs it as an error, keeping only the interface's fixed
+  // wording. inform is for news (a confirmation, progress, a teammate's doing): counted by a fixed ID, or not at all when
+  // other events already record it, since every row costs D1 writes.
+  const inform = useCallback((message, notice) => { if (cloud && notice) track('notice', { target: notice }, 'app'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
+  const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); inform(message); }, [inform]);
   const refreshTemplates = useCallback(async () => {
     // An unchanged library keeps its identity, so a change elsewhere on the board does not re-render every prompt.
     const show = list => setTemplates(current => JSON.stringify(current) === JSON.stringify(list) ? current : list);
@@ -1008,9 +1013,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   useEffect(() => { cloudSession?.shareCodex?.(ownReady); }, [ownReady]);
   useEffect(() => {
     if (!cloudSession) return;
-    cloudSession.notify = notify;
-    return () => { cloudSession.notify = null; };
-  }, [notify]);
+    cloudSession.notify = notify; cloudSession.inform = inform;
+    return () => { cloudSession.notify = null; cloudSession.inform = null; };
+  }, [notify, inform]);
   useEffect(() => { if (cloudSession) cloudSession.selection([...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(group => group.selected).map(group => group.id), ...scoped.sections.filter(section => section.selected).map(section => section.id)]); }, [nodes, groups, sections, activePage]);
   useEffect(() => { cloudSession?.page?.(activePage); }, [activePage]);
   const putNodes = value => { nodeRef.current = typeof value === 'function' ? value(nodeRef.current) : value; clearTimeout(nodeCommit.current); nodeCommit.current = null; setNodes(nodeRef.current); };
@@ -1139,7 +1144,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (pairing || readiness.key !== 'ready' || !pendingIntent.current) return;
     const intent = pendingIntent.current; pendingIntent.current = null;
     if (intentUnchanged(intent, currentGraph(), boardId)) runAction.current(intent.nodeId, intent);
-    else { focusNode(intent.nodeId); notify(t('Prompt changed — review and click Generate')); }
+    else { focusNode(intent.nodeId); inform(t('Prompt changed — review and click Generate'), 'prompt_changed'); }
   }, [readiness.key, pairing]);
   useEffect(() => {
     if (!login || !helperNeeded) return;
@@ -1240,8 +1245,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     putSections(mergeSections(sectionRef.current, remote.sections || [], base.current.sections || []));
     base.current = remote;
     const newImages = newNodes.filter(node => node.type === 'image').length;
-    if (newImages) notify(plural(newImages, '{count} new image added to your canvas', '{count} new images added to your canvas'));
-    else if (newNodes.some(node => node.data.runId)) notify(t('New description added to your canvas'));
+    if (newImages) inform(plural(newImages, '{count} new image added to your canvas', '{count} new images added to your canvas'));
+    else if (newNodes.some(node => node.data.runId)) inform(t('New description added to your canvas'));
   };
   const saveNow = async () => {
     if (cloudSession) { syncCloud(); if (cloudOfflineEdits.current && !cloudSession.provider.synced) throw new Error(t('Reconnect before leaving this board so your offline edits can sync.')); return; }
@@ -1378,7 +1383,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       events.addEventListener('limits-changed', () => setLimitsVersion(version => version + 1));
       events.addEventListener('login', event => {
         const result = JSON.parse(event.data); setLogin(null);
-        if (result.success) notify(t('Signed in to ChatGPT.'));
+        if (result.success) inform(t('Signed in to ChatGPT.'), 'chatgpt_signed_in');
         else if (result.reason !== 'cancelled') notify(t('Sign-in did not complete. Try again.'));
       });
       events.addEventListener('graph', event => {
@@ -1390,7 +1395,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         effects.observeRun(run, feedbackLive);
         observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [run], feedbackLive);
         setRuns(current => { const old = current.find(r => r.id === run.id); return old ? current.map(r => r.id === run.id ? { ...r, ...run } : r) : [...current, run]; });
-        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) notify(t('Some images have generic names. Click a name to edit it.'));
+        if (['completed', 'cancelled', 'error'].includes(run.status) && run.captionMissing > 0) inform(t('Some images have generic names. Click a name to edit it.'), 'generic_names');
       });
       events.addEventListener('templates', refreshTemplates);
       events.addEventListener('mcp-prepare', async event => {
@@ -1642,7 +1647,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
           const isModel = modelFile(file);
           if (isModel) {
             if (modelExtension(file) !== 'glb') {
-              notify(t('Converting {name} to GLB…', { name: original.name }));
+              inform(t('Converting {name} to GLB…', { name: original.name }), 'model_converting');
               try { file = await converter.convertModel(file, batch.resources, { used: modelUsed, missing }); }
               catch (error) { throw new Error(t('Could not convert {name} to GLB: {error}', { name: original.name, error: t(error.message) })); }
             }
@@ -1654,7 +1659,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
           if (!alive.current || readOnlyRef.current || switchingRef.current || mcpLocked.current) return;
           const result = await api(isModel ? `/api/assets?boardId=${encodeURIComponent(boardId)}` : '/api/assets', { method: 'POST', headers: { 'Content-Type': isModel ? 'model/gltf-binary' : file.type || 'application/octet-stream' }, body: file });
           const { asset } = result;
-          if (smaller) notify(t('Uploaded a smaller copy of {name} ({from} → {to}).', { name: original.name || t('Pasted image'), from: sizeText(smaller.from, smaller.fromBytes), to: sizeText(smaller.to, smaller.blob.size) }));
+          if (smaller) inform(t('Uploaded a smaller copy of {name} ({from} → {to}).', { name: original.name || t('Pasted image'), from: sizeText(smaller.from, smaller.fromBytes), to: sizeText(smaller.to, smaller.blob.size) }), 'upload_reduced');
           let poster;
           if (isModel) {
             try {
@@ -2406,16 +2411,16 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (!node || mcpLocked.current) return;
     try {
       const copied = copyImageToClipboard(request(`/assets/${node.data.asset}`));
-      Promise.resolve(copied).then(() => notify(t('Image copied.'))).catch(error => notify(error.message || t('Could not copy the image.')));
+      Promise.resolve(copied).then(() => inform(t('Image copied.'), 'image_copied')).catch(error => notify(error.message || t('Could not copy the image.')));
     } catch (error) { notify(error.message || t('Could not copy the image.')); }
   };
   // The open page's selection for copying; a selected section brings what it holds.
   const boardSelection = () => { const scoped = pageGraph(); return selectedGraph(scoped.nodes, scoped.edges, { sections: scoped.sections, groups: scoped.groups, measure: measureView(viewCache.current) }); };
   const copyNodeId = value => copyText(Array.isArray(value) ? value.join('\n') : value);
   const copyNodeLink = nodeId => {
-    if (cloudSession) copyText(location.origin + nodePath(boardId, nodeId), t('Link copied. People with access to this board will open it at this node.'), t('Could not copy the link.'));
+    if (cloudSession) copyText(location.origin + nodePath(boardId, nodeId), t('Link copied. People with access to this board will open it at this node.'), t('Could not copy the link.'), 'link_copied');
   };
-  const copyText = (text, done = t('ID copied.'), failed = t('Could not copy the ID.')) => {
+  const copyText = (text, done = t('ID copied.'), failed = t('Could not copy the ID.'), notice = 'id_copied') => {
     if (!text || mcpLocked.current) return;
     const fallback = () => {
       const field = document.createElement('textarea');
@@ -2424,8 +2429,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       if (!ok) throw new Error(failed);
     };
     try {
-      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => notify(done)).catch(() => { try { fallback(); notify(done); } catch { notify(failed); } });
-      else { fallback(); notify(done); }
+      if (navigator.clipboard?.writeText) Promise.resolve(navigator.clipboard.writeText(text)).then(() => inform(done, notice)).catch(() => { try { fallback(); inform(done, notice); } catch { notify(failed); } });
+      else { fallback(); inform(done, notice); }
     } catch { notify(failed); }
   };
 
@@ -2524,8 +2529,14 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (starting || generationStarting.current) return;
     const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesSiteGenerator(runNode?.data);
     const site = runNode?.data.task === model3dTask ? model3dRef.current : runNode?.data.generator === generators.gptImage ? gptRef.current : nanoRef.current;
-    if (nanoRun && !(isDescribe(runNode) ? site.selectable : site.ready)) { notify(site.note); cloudSession.refreshNano?.(); return; }
+    // A Generate that does not start is logged once, as what it would have run and why: site access or limits (the note
+    // says which), or the Codex step pairing opens next.
+    if (nanoRun && !(isDescribe(runNode) ? site.selectable : site.ready)) {
+      if (cloud) track('generation_blocked', { ...promptAnalytics(currentGraph(), nodeId), errorKind: site.selectable ? 'quota' : 'access', message: site.note });
+      inform(site.note); cloudSession.refreshNano?.(); return;
+    }
     if (!nanoRun && readinessRef.current.key !== 'ready') {
+      if (cloud) track('generation_blocked', { ...promptAnalytics(currentGraph(), nodeId, { site: false }), errorKind: readinessRef.current.key });
       pendingIntent.current = requested; fixReadiness();
       return;
     }
@@ -2536,7 +2547,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     setStarting(nodeId);
     try {
       await saveNow();
-      if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); notify(t('Prompt changed — review and click Generate')); return; }
+      if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); inform(t('Prompt changed — review and click Generate'), 'prompt_changed'); return; }
       if (nanoRun) { await cloudSession.jobs.startNano(nodeId); cloudSession.refreshNano?.(); return; }
       if (cloudSession) { await cloudSession.jobs.start(nodeId, readinessRef.current.delegate); return; }
       const options = jsonOptions('POST', { nodeId, revision: base.current.revision });
@@ -2546,7 +2557,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [result], true);
       setRuns(current => current.some(r => r.id === result.id) ? current : [...current, result]);
     } catch (error) {
-      if (cloud && !userGeneration.current?.runId) track('generation_failed', { generator: runNode?.data.task === model3dTask ? 'fal' : runNode?.data.generator || 'codex', model: runNode?.data.task === model3dTask ? model3dModels[modelerOf(runNode)] : undefined, task: runNode?.data.task || 'image', variants: runNode?.data.variants || 1, duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
+      if (cloud && !userGeneration.current?.runId) track('generation_failed', { ...promptAnalytics(currentGraph(), nodeId, { site: nanoRun }), duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
       effects.failedStart();
       if (error.value?.graph) mergeRemote(error.value.graph);
       if (nanoRun) cloudSession.refreshNano?.();
@@ -2572,7 +2583,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     try {
       await saveNow();
       const runId = await cloudSession.jobs.start(nodeId, readinessRef.current.delegate);
-      if (runId) notify(t('Your agent started a generation'));
+      if (runId) inform(t('Your agent started a generation'), 'agent_generation');
       return runId;
     } catch (error) { effects.failedStart(); throw error; }
     finally { generationStarting.current = false; setStarting(null); }
@@ -2697,7 +2708,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       if (cloud) { cloudSession.deleted?.(); return; }
       updateBoards(result.boards);
       selectBoard(result.defaultBoardId);
-      notify(t('Deleted “{name}”', { name }));
+      inform(t('Deleted “{name}”', { name }));
     } catch (error) { if (cloud) cloudSession.deleting = false; notify(error.message); }
     finally { switchingRef.current = false; setSwitching(false); }
   };
@@ -2744,7 +2755,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (step === 'variation') {
       const nodes = pageGraph().nodes, image = nodes.find(node => node.selected && node.type === 'image') || [...nodes].reverse().find(node => node.type === 'image');
       if (image) focusNode(image.id, 'variation');
-      else { notify(t('Generate an image first, then choose + Prompt from this.')); gettingStartedStep('generate'); }
+      else { inform(t('Generate an image first, then choose + Prompt from this.'), 'variation_needs_image'); gettingStartedStep('generate'); }
     }
   };
   const viewCache = useRef(null); viewCache.current ||= createViewCache();
@@ -2856,7 +2867,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const peer = cloudSession.cursorStore.get().find(item => item.id === peerId), live = peer?.cursor || peer?.view;
     if (!peer && !called) return null;
     const known = Number.isFinite(live?.x) && Number.isFinite(live?.y), spot = known ? live : called?.spot, page = known ? peer.page : called?.page;
-    if (!Number.isFinite(spot?.x) || !Number.isFinite(spot?.y)) { notify(t('{name} isn’t looking at the board right now.', { name: peer?.user.name || called.name })); return null; }
+    if (!Number.isFinite(spot?.x) || !Number.isFinite(spot?.y)) { inform(t('{name} isn’t looking at the board right now.', { name: peer?.user.name || called.name }), 'peer_not_looking'); return null; }
     const previous = { page: activePageRef.current, viewport: flow.getViewport() };
     showPage(page, false);
     flow.setCenter(spot.x, spot.y, { zoom: flow.getZoom(), duration: 900 });
@@ -3008,7 +3019,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       <div className="lightbox-details">
         {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? t('Generated by') : t('Added by')}</span><AuthorBadge author={viewInfo.author}/></div>}
         {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}
-        {viewInfo.rows.length > 0 && <dl className="image-info">{viewInfo.rows.map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}{row.copy && <button type="button" className="image-info-copy" aria-label={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} data-tooltip={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} onClick={() => copyText(row.value, row.copy === 'id' ? t('ID copied.') : t('File name copied.'))}><Icon name="copy" size={13}/></button>}{row.note && <small>{row.note}</small>}</dd></div>)}</dl>}
+        {viewInfo.rows.length > 0 && <dl className="image-info">{viewInfo.rows.map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}{row.copy && <button type="button" className="image-info-copy" aria-label={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} data-tooltip={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} onClick={() => copyText(row.value, row.copy === 'id' ? t('ID copied.') : t('File name copied.'), t('Could not copy the ID.'), `${row.copy}_copied`)}><Icon name="copy" size={13}/></button>}{row.note && <small>{row.note}</small>}</dd></div>)}</dl>}
         {viewRun && <>{viewInfo.prompt && <><span className="detail-label">{cloud ? t('Prompt') : t('Original prompt')}</span><p className="prompt-snapshot">{viewInfo.prompt}</p></>}
           {!cloud && <><span className="detail-label">{t('Inputs at the time of this run')}</span>
           <div className="run-inputs">{viewInputs.length ? viewInputs.map((node, index) => node.type === 'image'

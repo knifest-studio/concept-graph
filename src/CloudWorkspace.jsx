@@ -16,7 +16,8 @@ import { CloudGeneration } from './cloud-generation.mjs';
 import { CodexSharing, sharingMessage } from './codex-sharing.mjs';
 import { CodexRequests, CodexSharingDetails, TeammateCodex } from './CodexSharing.jsx';
 import { boardAuthor } from './annotations.mjs';
-import { generators, collectInputs } from '../graph.mjs';
+import { generators } from '../graph.mjs';
+import { runTracker } from './generation-analytics.mjs';
 import { terminalRun } from './run-outputs.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { sharedPreviews } from './canvas-thumbnails.mjs';
@@ -263,31 +264,10 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     next.voiceStore = store({ online: false, busy: false, joined: false, muted: false, speaking: false, people: [], streams: [], error: '' });
     const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => { if (value.joined && !next.voiceStore.get()?.joined) track('voice_joined'); next.voiceStore.set(value); }, sound: collaborationSound });
     next.voice = voice.mesh; next.joinVoice = voice.join; next.leaveVoice = voice.leave;
-    const ownRuns = new Map();
+    // Generation analytics follow the runs this tab starts, from the record the room or this tab wrote.
+    const ownRuns = runTracker({ runs: doc.getMap('runs'), read: () => reader.read(), track, enabled: analyticsEnabled });
     const stopAnalyticsRuns = subscribeAnalytics(() => { if (!analyticsEnabled()) ownRuns.clear(); });
-    const finishedRun = run => {
-      if (!analyticsEnabled()) { ownRuns.clear(); return; }
-      const started = ownRuns.get(run?.id);
-      if (!started || !terminalRun(run.status)) return;
-      ownRuns.delete(run.id);
-      track(run.status === 'completed' ? 'generation_finished' : run.status === 'cancelled' ? 'generation_cancelled' : 'generation_failed', {
-        ...started, duration: Math.max(0, Date.parse(run.finishedAt || new Date().toISOString()) - Date.parse(run.startedAt || run.createdAt)),
-        errorKind: run.status === 'failed' ? /limit|budget|quota/i.test(run.error) ? 'quota' : /timeout|timed out/i.test(run.error) ? 'timeout' : /disconnect|network|fetch/i.test(run.error) ? 'network' : 'provider' : '',
-        message: run.error || '', count: run.outputIds?.length || 0
-      });
-    };
-    const startedRun = run => {
-      if (!analyticsEnabled() || ownRuns.has(run.id)) return;
-      let input; try { input = collectInputs(reader.read(), run.nodeId); } catch {}
-      const fields = { run: run.id, generator: run.task === 'model3d' ? 'fal' : run.provider || input?.target?.data.generator || 'codex', model: run.model, task: run.task || 'image',
-        variants: run.variants || input?.target?.data.variants || 1, references: input?.images?.length || 0, masked: !!input?.snapshot?.some(node => node.type === 'image' && node.data?.mask) };
-      ownRuns.set(run.id, fields); track('generation_started', fields);
-      if (['describe', 'upscale', 'model3d'].includes(run.task)) track(`${run.task}_started`, fields);
-      finishedRun(doc.getMap('runs').get(run.id) || run);
-    };
-    const analyticsRuns = event => { for (const id of event.keysChanged) finishedRun(doc.getMap('runs').get(id)); };
-    doc.getMap('runs').observe(analyticsRuns);
-    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, can: feature => !!helperRef.current?.features?.includes(feature), read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => { startedRun(run); next.onOwnRun?.(run.id); }, onError: (message, failure) => { setError(t(message)); if (failure?.status === 403) unpair(); } });
+    next.jobs = new CloudGeneration({ doc, boardId, user, ...services, sharing, can: feature => !!helperRef.current?.features?.includes(feature), read: () => reader.read(), ready: () => provider.synced && provider.wsconnected, onStart: run => { ownRuns.started(run); next.onOwnRun?.(run.id); }, onError: (message, failure) => { setError(t(message)); if (failure?.status === 403) unpair(); } });
     // Teammate Codex access is presence-only; every change re-checks grants and settles runs that can no longer start.
     next.sharing = sharing;
     // A viewer's helper could not place images on this board, so their Codex is never offered to teammates.
@@ -300,7 +280,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       try {
         sharing.live(provider.synced && provider.wsconnected);
         for (const event of sharing.maintain()) {
-          next.notify?.(sharingMessage(event));
+          next.inform?.(sharingMessage(event), `codex_${event.type}`);
           if (event.type === 'granted' && latest.current.pairing) latest.current.finishPair();
         }
         if (editable) next.jobs.maintain();
@@ -351,12 +331,13 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
         if (readSoundPreference(localStorage, sounds)) { unlockSounds(); playSound('call', () => readSoundPreference(localStorage, sounds), { background: true }); }
       } else if (value.type === 'attention-sent' && calling) {
         calling.id = value.id;
-        next.notify?.(calling.everyone ? plural(value.people, 'Called {count} person here', 'Called {count} people here') : t('Called {name} here', { name: calling.name }));
+        next.inform?.(calling.everyone ? plural(value.people, 'Called {count} person here', 'Called {count} people here') : t('Called {name} here', { name: calling.name }), 'call_sent');
       } else if (value.type === 'attention-reply' && calling?.id === value.id && typeof value.from?.name === 'string') {
         calling[value.answer === 'coming' ? 'coming' : 'later'].push(value.from.name);
-        next.notify?.([calling.coming.length && t('Coming: {names}', { names: names(calling.coming) }), calling.later.length && t('Not now: {names}', { names: names(calling.later) })].filter(Boolean).join(' · '));
+        // Each answer shows the whole list again, so it is not counted: answers were the most frequent toast logged as an error.
+        next.inform?.([calling.coming.length && t('Coming: {names}', { names: names(calling.coming) }), calling.later.length && t('Not now: {names}', { names: names(calling.later) })].filter(Boolean).join(' · '));
       } else if (value.type === 'attention-failed') {
-        next.notify?.(value.reason === 'busy' ? t('Wait a few seconds before calling again.') : value.reason === 'alone' ? t('Nobody else is on this board right now.') : t('{name} has left the board.', { name: calling?.name || t('Someone') }));
+        next.inform?.(value.reason === 'busy' ? t('Wait a few seconds before calling again.') : value.reason === 'alone' ? t('Nobody else is on this board right now.') : t('{name} has left the board.', { name: calling?.name || t('Someone') }), value.reason === 'busy' ? 'call_busy' : value.reason === 'alone' ? 'call_alone' : 'call_left');
       }
     };
     // The room forgets presence when it hibernates, so greet each newcomer with our state again.
@@ -404,7 +385,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       // The owner deleted the board: everyone goes back to their boards; only the others are told why.
       if (value?.type === 'deleted') latest.current.onDeleted(!next.deleting);
       // Someone put the whole board back as it was; everyone hears who did it and to when.
-      if (value?.type === 'restored') next.notify?.(t('{name} restored the board to {time}.', { name: typeof value.by === 'string' && value.by ? value.by : t('Someone'), time: new Date(value.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }));
+      if (value?.type === 'restored') next.inform?.(t('{name} restored the board to {time}.', { name: typeof value.by === 'string' && value.by ? value.by : t('Someone'), time: new Date(value.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }), 'board_restored');
     };
     let checked = 0;
     const closed = event => { if (event?.code === 4403 || (!provider.wsconnected && Date.now() - checked > 15000)) { checked = Date.now(); latest.current.onAccess(undefined); } };
@@ -418,7 +399,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       next.flush?.(); next.closed = true;
       next.chat.destroy();
       voice.leave(); window.removeEventListener('pagehide', voice.leave);
-      stopAnalyticsRuns(); doc.getMap('runs').unobserve(analyticsRuns); next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
+      stopAnalyticsRuns(); ownRuns.stop(); next.jobs.stop(); clearInterval(shareTimer); clearTimeout(shareSoon); doc.getMap('runs').unobserve(runsChanged); doc.getMap('runs').unobserve(nanoFinished); sharing.destroy(); reader.destroy(); provider.awareness.setLocalState(null); setCall(null);
       document.removeEventListener('visibilitychange', hidden);
       provider.awareness.off('change', presence); provider.awareness.off('change', greet); provider.awareness.off('change', shareLater); provider.awareness.off('update', keepAlive); provider.awareness.off('update', ownPresence); provider.off('status', status); provider.off('sync', sync);
       provider.off('custom-message', accessMessage); provider.off('connection-close', closed);

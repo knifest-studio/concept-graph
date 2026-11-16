@@ -11,8 +11,6 @@ export function analyticsSchema(db) {
       `CREATE TABLE IF NOT EXISTS analytics_sessions (id TEXT PRIMARY KEY, user TEXT NOT NULL, started INTEGER NOT NULL, last_seen INTEGER NOT NULL, day TEXT NOT NULL, event_count INTEGER NOT NULL DEFAULT 0, replay_chunks INTEGER NOT NULL DEFAULT 0, replay_bytes INTEGER NOT NULL DEFAULT 0, duration INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 0, width INTEGER NOT NULL DEFAULT 0, height INTEGER NOT NULL DEFAULT 0, platform TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}')`,
       `CREATE TABLE IF NOT EXISTS analytics_events (session TEXT NOT NULL, seq INTEGER NOT NULL, time INTEGER NOT NULL, user TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, area TEXT NOT NULL, board TEXT NOT NULL, details TEXT NOT NULL, PRIMARY KEY(session, seq))`,
       'CREATE INDEX IF NOT EXISTS analytics_events_time ON analytics_events(time)',
-      'CREATE INDEX IF NOT EXISTS analytics_events_name ON analytics_events(name, time)',
-      'CREATE INDEX IF NOT EXISTS analytics_events_user ON analytics_events(user, time)',
       'CREATE INDEX IF NOT EXISTS analytics_sessions_time ON analytics_sessions(started)',
       `CREATE TABLE IF NOT EXISTS analytics_replays (session TEXT NOT NULL, seq INTEGER NOT NULL, key TEXT NOT NULL, bytes INTEGER NOT NULL, created INTEGER NOT NULL, encoding TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session, seq))`,
       'CREATE INDEX IF NOT EXISTS analytics_replays_time ON analytics_replays(created)',
@@ -21,8 +19,14 @@ export function analyticsSchema(db) {
   })().catch(cause => { initialized.delete(db); throw cause; }));
   return initialized.get(db);
 }
-async function allowed(db, user, now, limit = 120) {
-  const row = await db.prepare(`INSERT INTO analytics_limits(user, minute, count) VALUES (?, ?, 1) ON CONFLICT(user, minute) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count`).bind(user, Math.floor(now / 60000), limit).first();
+// One counter per account and 10 minutes, stored under the window's first minute. Each request writes one row either way,
+// but a new counter row writes one more and its deletion by the daily purge another: with a counter per minute that was
+// about 1,000 rows in the Nov 16 11:00 hour (493 account-minutes), now about 140. A burst may use a whole window at once;
+// on average it is still 120 requests a minute. Replay uploads are counted too: anyone signed in can start sessions, so
+// only a per-account counter bounds what one account uploads, while the seq and byte quota bound one session each.
+const limitWindow = 10;
+async function allowed(db, user, now, limit) {
+  const row = await db.prepare(`INSERT INTO analytics_limits(user, minute, count) VALUES (?, ?, 1) ON CONFLICT(user, minute) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count`).bind(user, Math.floor(now / 60000 / limitWindow) * limitWindow, limit).first();
   if (!row) fail('Analytics rate limit reached.', 429);
 }
 async function session(db, id, user, now) {
@@ -38,15 +42,18 @@ async function events(request, env, user, now) {
   const batch = validateBatch(input, now), db = env.DB;
   await session(db, batch.session, user, now);
   const start = batch.events.find(event => event.name === 'session_start'), progress = batch.events.filter(event => ['session_end', 'visibility', 'heartbeat'].includes(event.name)).at(-1)?.details || {};
+  // A heartbeat only moves the session's duration and active time. Stored, it cost a written row for itself and one for
+  // each index entry and was most of the table, so it is not kept, also when tabs opened before this change send it.
+  const stored = batch.events.filter(event => !(event.kind === 'session' && event.name === 'heartbeat'));
   // The session's event count grows by the batch's events not stored yet, counted before they are inserted in the same
   // transaction. Recounting the whole session on every batch read every row it had, and long sessions used up D1's
   // daily read allowance.
-  const seqs = [...new Set(batch.events.map(event => event.seq))];
+  const seqs = [...new Set(stored.map(event => event.seq))];
   const writes = [db.prepare(`UPDATE analytics_sessions SET last_seen = ?, event_count = event_count + ? - (SELECT COUNT(*) FROM analytics_events WHERE session = ? AND seq IN (SELECT value FROM json_each(?))), duration = MAX(duration, ?), active = MAX(active, ?) WHERE id = ? AND user = ?`)
     .bind(now, seqs.length, batch.session, JSON.stringify(seqs), progress.duration || 0, progress.active || 0, batch.session, user)];
   // Stay below D1's 100 bound parameters per statement and free-tier query limit per invocation.
-  for (let offset = 0; offset < batch.events.length; offset += 10) {
-    const rows = batch.events.slice(offset, offset + 10);
+  for (let offset = 0; offset < stored.length; offset += 10) {
+    const rows = stored.slice(offset, offset + 10);
     writes.push(db.prepare(`INSERT OR IGNORE INTO analytics_events(session, seq, time, user, kind, name, area, board, details) VALUES ${rows.map(() => '(?,?,?,?,?,?,?,?,?)').join(',')}`)
       .bind(...rows.flatMap(event => [batch.session, event.seq, event.time, user, event.kind, event.name, event.area, event.board, JSON.stringify(event.details)])));
   }
@@ -91,13 +98,17 @@ async function replay(request, env, user, id, seq, now) {
 }
 const rows = async (db, sql, ...args) => (await db.prepare(sql).bind(...args).all()).results || [];
 async function overview(env, url, now) {
-  const days = Math.max(1, Math.min(180, Number(url.searchParams.get('days')) || 30)), cutoff = now - days * 86400000, db = env.DB;
+  const days = Math.max(1, Math.min(180, Number(url.searchParams.get('days')) || 7)), cutoff = now - days * 86400000, db = env.DB;
+  // Heartbeats stored before they stopped being kept are left out, so older days count the same events as new ones.
   const [totals, daily, controls, rage, errors, generations, sessions, heatmap] = await Promise.all([
-    db.prepare('SELECT COUNT(DISTINCT session) AS sessions, COUNT(DISTINCT user) AS users, COUNT(*) AS events FROM analytics_events WHERE time >= ?').bind(cutoff).first(),
-    rows(db, `SELECT date(time/1000,'unixepoch') AS day, COUNT(*) AS events, COUNT(DISTINCT user) AS users, COUNT(DISTINCT session) AS sessions FROM analytics_events WHERE time >= ? GROUP BY day ORDER BY day`, cutoff),
+    db.prepare("SELECT COUNT(DISTINCT session) AS sessions, COUNT(DISTINCT user) AS users, COUNT(*) AS events FROM analytics_events WHERE time >= ? AND name <> 'heartbeat'").bind(cutoff).first(),
+    rows(db, `SELECT date(time/1000,'unixepoch') AS day, COUNT(*) AS events, COUNT(DISTINCT user) AS users, COUNT(DISTINCT session) AS sessions FROM analytics_events WHERE time >= ? AND name <> 'heartbeat' GROUP BY day ORDER BY day`, cutoff),
     rows(db, `WITH controls AS (SELECT area, name, SUM(kind IN ('click','change')) AS clicks, SUM(kind='shortcut') AS shortcuts, COUNT(DISTINCT user) AS users FROM analytics_events WHERE time >= ? AND kind IN ('click','change','shortcut') GROUP BY area,name), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY area ORDER BY clicks + shortcuts DESC) AS hi, ROW_NUMBER() OVER (PARTITION BY area ORDER BY clicks + shortcuts ASC) AS lo FROM controls) SELECT area,name,clicks,shortcuts,users FROM ranked WHERE hi <= 50 OR lo <= 50 ORDER BY clicks + shortcuts DESC LIMIT 5000`, cutoff),
     rows(db, 'SELECT name, area, COUNT(*) AS count, COUNT(DISTINCT user) AS users FROM analytics_events WHERE time >= ? AND kind = ? GROUP BY name,area ORDER BY count DESC LIMIT 100', cutoff, 'rage'),
-    rows(db, "SELECT json_extract(details,'$.message') AS message, COUNT(*) AS count, COUNT(DISTINCT user) AS users FROM analytics_events WHERE time >= ? AND kind = 'error' GROUP BY message ORDER BY count DESC LIMIT 100", cutoff),
+    // A repeated error is one event whose count says how many times it happened (one if it has none). The same message
+    // with another type or place in the code is another problem, and noise goes last. Notices are app events, not errors.
+    rows(db, `SELECT name, json_extract(details,'$.errorType') AS errorType, json_extract(details,'$.location') AS location, json_extract(details,'$.noise') AS noise, json_extract(details,'$.message') AS message, SUM(COALESCE(json_extract(details,'$.count'), 1)) AS count, COUNT(DISTINCT user) AS users
+      FROM analytics_events WHERE time >= ? AND kind = 'error' GROUP BY name, errorType, location, noise, message ORDER BY noise IS NOT NULL, count DESC, name, errorType, location, message LIMIT 100`, cutoff),
     rows(db, `SELECT json_extract(details,'$.generator') AS generator, SUM(name='generation_started') AS started, SUM(name='generation_finished') AS finished, SUM(name='generation_failed') AS failed, AVG(CASE WHEN name IN ('generation_finished','generation_failed') THEN json_extract(details,'$.duration') END) AS duration FROM analytics_events WHERE time >= ? AND name IN ('generation_started','generation_finished','generation_failed') GROUP BY generator`, cutoff),
     rows(db, 'SELECT id,user,started,last_seen,event_count,replay_chunks,replay_bytes,duration,active,width,height,platform FROM analytics_sessions WHERE last_seen >= ? ORDER BY started DESC LIMIT 100', cutoff),
     rows(db, `SELECT json_extract(details,'$.route') AS route, CASE WHEN json_extract(details,'$.width') < 768 THEN 'small' WHEN json_extract(details,'$.width') < 1280 THEN 'medium' ELSE 'large' END AS viewport, ROUND(json_extract(details,'$.x')*50)/50.0 AS x, ROUND(json_extract(details,'$.y')*50)/50.0 AS y, COUNT(*) AS count FROM analytics_events WHERE time >= ? AND kind='click' AND json_type(details,'$.x') IS NOT NULL GROUP BY route,viewport,x,y LIMIT 10000`, cutoff)
@@ -111,7 +122,9 @@ export async function analyticsRoute(request, env, user, url, store, now = Date.
   const admin = path !== '/events' && !path.startsWith('/replay/');
   if (admin && !await store.siteRole(user.email)) fail('Only site admins can view analytics.', 403);
   await analyticsSchema(env.DB);
-  await allowed(env.DB, admin ? `${user.email}:admin` : user.email, now, admin ? 2000 : 120);
+  // Playing a recording fetches every chunk, which would write a counter row each; admins are already checked above.
+  const chunkRead = admin && method === 'GET' && /^\/sessions\/[^/]+\/\d+$/.test(path);
+  if (!chunkRead) await allowed(env.DB, admin ? `${user.email}:admin` : user.email, now, (admin ? 2000 : 120) * limitWindow);
   if (path === '/events' && method === 'POST') return events(request, env, user.email, now);
   const upload = path.match(/^\/replay\/([^/]+)\/(\d+)$/);
   if (upload && method === 'POST' && sessionPattern.test(upload[1]) && replaySequence(upload[2]) !== null) return replay(request, env, user.email, upload[1], Number(upload[2]), now);
@@ -145,10 +158,17 @@ export async function purgeAnalytics(env, now = Date.now()) {
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   await env.DB.batch([
+    // D1 counts a written row for an event and for each of its index entries: these two indexes were two of every event's
+    // five rows. No query looks events up by user, and the overview reads its period through the time index. Dropping an
+    // index writes no rows, but creating one writes a row per stored event, so this runs here, long after a deploy, and not
+    // at startup, where a Worker still running the previous version would create them again.
+    env.DB.prepare('DROP INDEX IF EXISTS analytics_events_name'),
+    env.DB.prepare('DROP INDEX IF EXISTS analytics_events_user'),
     env.DB.prepare('DELETE FROM analytics_replays WHERE created < ?').bind(cutoff.replays),
     env.DB.prepare('DELETE FROM analytics_events WHERE time < ?').bind(cutoff.events),
     env.DB.prepare('DELETE FROM analytics_sessions WHERE last_seen < ?').bind(cutoff.events),
-    env.DB.prepare('DELETE FROM analytics_limits WHERE minute < ?').bind(Math.floor(now / 60000) - 2),
-    env.DB.prepare('UPDATE analytics_sessions SET replay_chunks = (SELECT COUNT(*) FROM analytics_replays WHERE session = analytics_sessions.id AND ready = 1), replay_bytes = (SELECT COALESCE(SUM(bytes),0) FROM analytics_replays WHERE session = analytics_sessions.id) WHERE started < ?').bind(cutoff.replays)
+    env.DB.prepare('DELETE FROM analytics_limits WHERE minute < ?').bind(Math.floor(now / 60000 / limitWindow) * limitWindow),
+    // Only sessions that still count recordings: rewriting every session older than 30 days wrote thousands of rows a day.
+    env.DB.prepare('UPDATE analytics_sessions SET replay_chunks = (SELECT COUNT(*) FROM analytics_replays WHERE session = analytics_sessions.id AND ready = 1), replay_bytes = (SELECT COALESCE(SUM(bytes),0) FROM analytics_replays WHERE session = analytics_sessions.id) WHERE started < ? AND (replay_chunks > 0 OR replay_bytes > 0)').bind(cutoff.replays)
   ]);
 }

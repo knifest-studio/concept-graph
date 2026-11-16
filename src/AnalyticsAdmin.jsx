@@ -64,7 +64,7 @@ function Session({ id, services, onClose }) {
   </section>;
 }
 export default function AnalyticsAdmin({ services }) {
-  const [data, setData] = useState(null), [error, setError] = useState(''), [days, setDays] = useState(30), [selected, setSelected] = useState(null), [refresh, setRefresh] = useState(0), [least, setLeast] = useState(false), [area, setArea] = useState('');
+  const [data, setData] = useState(null), [error, setError] = useState(''), [days, setDays] = useState(7), [selected, setSelected] = useState(null), [refresh, setRefresh] = useState(0), [least, setLeast] = useState(false), [area, setArea] = useState('');
   useEffect(() => {
     let active = true; setError('');
     services.api(`/api/analytics/overview?days=${days}`).then(value => { if (active) setData(value); }).catch(cause => { if (active) setError(cause.message); });
@@ -78,7 +78,7 @@ export default function AnalyticsAdmin({ services }) {
         <label>{t('Order')} <select value={least ? 'least' : 'most'} onChange={event => setLeast(event.target.value === 'least')}><option value="most">{t('Most used')}</option><option value="least">{t('Least used')}</option></select></label></div>
         <p>{t('Most and least used 50 observed controls per area. Shortcut combinations appear in session details.')}</p><Table columns={[["area","Area"],["name","Control"],["clicks","Clicks / changes"],["shortcuts","Shortcuts"],["users","Unique users"]]} rows={data.controls.filter(row => !area || row.area === area).sort((a,b) => (least ? 1 : -1) * (a.clicks + a.shortcuts - b.clicks - b.shortcuts))}/></section>
       <section><h2>{t('Rage clicks')}</h2><Table columns={[["area","Area"],["name","Control"],["count","Count"],["users","Unique users"]]} rows={data.rage}/></section>
-      <section><h2>{t('Errors')}</h2><Table columns={[["message","Message"],["count","Count"],["users","Unique users"]]} rows={data.errors}/></section>
+      <section><h2>{t('Errors')}</h2><Table columns={[["name","Event"],["errorType","Type"],["location","Where"],["message","Message"],["noise","Noise"],["count","Count"],["users","Unique users"]]} rows={data.errors}/></section>
       <section><h2>{t('Generations')}</h2><Table columns={[["generator","Generator"],["started","Started"],["finished","Finished"],["failed","Failed"],["duration","Average duration"]]} rows={data.generations.map(row => ({ ...row, duration: duration(row.duration) }))}/></section>
       <Heatmap points={data.heatmap}/>
       <section><h2>{t('Recent sessions')}</h2><p>{t('Newest 100 sessions in the selected period.')}</p><Table columns={[["user","User"],["started","Started"],["duration","Duration"],["active","Active time"],["event_count","Events"],["recording","Recording"],["open","Details"]]} rows={data.sessions.map(row => ({ ...row, started: date(row.started), duration: duration(row.duration || row.last_seen - row.started), active: duration(row.active), recording: row.replay_chunks ? t('Available') : '—', open: <button type="button" onClick={() => setSelected(row.id)}>{t('Open session')}</button> }))}/></section>

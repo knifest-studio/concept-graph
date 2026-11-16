@@ -77,11 +77,19 @@ test('replay rejects raw oversize, gzip bombs and session totals beyond the quot
   await assert.rejects(call(`/replay/${id}/1`, { bytes: 'xx' }), { status: 413 });
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM analytics_replays').get().n, 1);
 });
-test('rate limit is per authenticated account and per minute, persisted across route calls', async t => {
-  const { call, send } = setup(t);
-  for (let i = 0; i < 120; i++) await call('/events', { data: send(i) });
-  await assert.rejects(call('/events', { data: send(121) }), { status: 429 });
-  assert.equal((await call('/events', { data: send(122), at: now + 60000 })).status, 204);
+test('rate limit is per authenticated account and per 10 minutes, counts replay uploads and keeps one counter row', async t => {
+  const { call, send, sqlite, env } = setup(t), window = Math.floor(now / 600000) * 600000;
+  // 1,200 requests in the window (120 a minute on average), events and replay uploads alike, in any minute of it.
+  for (let i = 0; i < 1199; i++) await call('/events', { data: send(i), at: window + (i % 10) * 60000 });
+  assert.equal((await call(`/replay/${id}/0`, { bytes: 'x', at: window + 540000 })).status, 204);
+  await assert.rejects(call('/events', { data: send(1200), at: window + 599999 }), { status: 429 });
+  await assert.rejects(call(`/replay/${id}/1`, { bytes: 'x', at: window + 30000 }), { status: 429 });
+  assert.equal((await call('/events', { data: { ...send(0), session: '22345678-1234-1234-1234-123456789abc' }, person: { email: 'other@example.com' }, at: window + 60000 })).status, 204);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM analytics_limits WHERE user = ?').get(user.email).n, 1);
+  assert.equal((await call('/events', { data: send(1202), at: window + 600000 })).status, 204);
+  // The daily purge keeps only the current window's counter, so it cannot reset a window in use.
+  await purgeAnalytics(env, window + 660000);
+  assert.deepEqual(sqlite.prepare('SELECT user, minute, count FROM analytics_limits').all().map(row => ({ ...row })), [{ user: user.email, minute: (window + 600000) / 60000, count: 1 }]);
 });
 test('daily cleanup removes expired recordings, orphaned R2 objects, events and rate counters', async t => {
   const { call, send, sqlite, env, files } = setup(t);
@@ -111,4 +119,71 @@ test('ingestion keeps session counters exact without reading the whole session',
     if (!/analytics_(events|replays)\b/.test(detail) || /^(SCAN|SEARCH) (json_each|CONSTANT)/.test(detail)) continue;
     assert.match(detail, /SEARCH analytics_(events|replays) USING (PRIMARY KEY|(COVERING )?INDEX sqlite_autoindex_\w+) \(session=\? AND seq=\?\)/, query);
   }
+});
+test('heartbeats move the session’s time without being stored, from new and older tabs alike, and counts stay exact', async t => {
+  const { call, send, sqlite } = setup(t);
+  const beat = (seq, active) => ({ seq, time: now, kind: 'session', name: 'heartbeat', details: { duration: seq * 60000, active } });
+  await call('/events', { data: send() });
+  // A tab opened before this change sends a heartbeat every minute, next to what the person did.
+  const batch = { session: id, events: [beat(1, 30000), { seq: 2, time: now, kind: 'click', name: 'Generate', area: 'sidebar', details: {} }, beat(3, 90000)] };
+  await call('/events', { data: batch });
+  await call('/events', { data: batch }); // A retry.
+  await call('/events', { data: { session: id, events: [beat(4, 120000)] } });
+  assert.deepEqual(sqlite.prepare('SELECT seq, name FROM analytics_events ORDER BY seq').all().map(row => [row.seq, row.name]), [[0, 'session_start'], [2, 'Generate']]);
+  assert.deepEqual({ ...sqlite.prepare('SELECT event_count, duration, active FROM analytics_sessions').get() }, { event_count: 2, duration: 240000, active: 120000 });
+});
+test('the error overview tells problems apart by type and place, adds up repeats, puts noise last and leaves notices out', async t => {
+  const { call, sqlite } = setup(t);
+  const error = (seq, details, name = 'window_error') => ({ seq, time: now, kind: 'error', name, details: { message: 'Error (details hidden)', ...details } });
+  await call('/events', { data: { session: id, events: [
+    error(0, { errorType: 'TypeError', location: 'index-B3k9.js:1:4321' }), error(1, { errorType: 'TypeError', location: 'index-B3k9.js:1:4321', count: 416 }),
+    error(2, { errorType: 'TypeError', location: 'index-B3k9.js:1:99' }), error(3, {}), error(4, { noise: 'resize_observer' }), error(5, { noise: 'resize_observer', count: 2000 }),
+    { seq: 6, time: now, kind: 'app', name: 'notice', details: { target: 'attention_call' } }, error(7, { message: 'Failed to fetch' }, 'notify'),
+    { seq: 8, time: now, kind: 'session', name: 'heartbeat', details: { duration: 1, active: 1 } }
+  ] } });
+  // Heartbeats stored before they stopped being kept are not counted as events either.
+  sqlite.prepare("INSERT INTO analytics_events(session, seq, time, user, kind, name, area, board, details) VALUES (?, 9, ?, ?, 'session', 'heartbeat', 'editor', '', '{}')").run(id, now, user.email);
+  const result = await (await call('/overview', { method: 'GET', admin: true })).json();
+  assert.deepEqual(result.errors.map(row => [row.name, row.errorType, row.location, row.noise, row.message, row.count]), [
+    ['window_error', 'TypeError', 'index-B3k9.js:1:4321', null, 'Error (details hidden)', 417], ['notify', null, null, null, 'Failed to fetch', 1],
+    ['window_error', null, null, null, 'Error (details hidden)', 1], ['window_error', 'TypeError', 'index-B3k9.js:1:99', null, 'Error (details hidden)', 1],
+    ['window_error', null, null, 'resize_observer', 'Error (details hidden)', 2001]]);
+  assert.equal(result.totals.events, 8); assert.deepEqual(result.daily.map(row => row.events), [8]);
+});
+test('the daily cleanup recounts recordings only for old sessions that still count some, not every old session', async t => {
+  const { call, send, sqlite, env } = setup(t), old = now - 40 * 86400000, other = '22345678-1234-1234-1234-123456789abc';
+  await call('/events', { data: send() }); await call('/events', { data: { ...send(), session: other } });
+  sqlite.prepare('UPDATE analytics_sessions SET started = ?').run(old);
+  sqlite.prepare('UPDATE analytics_sessions SET replay_chunks = 2, replay_bytes = 50 WHERE id = ?').run(other);
+  sqlite.exec('CREATE TABLE rewritten (id TEXT); CREATE TRIGGER count_rewrites AFTER UPDATE ON analytics_sessions BEGIN INSERT INTO rewritten VALUES (NEW.id); END');
+  await purgeAnalytics(env, now);
+  assert.deepEqual(sqlite.prepare('SELECT id FROM rewritten').all().map(row => row.id), [other]);
+  assert.deepEqual({ ...sqlite.prepare('SELECT replay_chunks, replay_bytes FROM analytics_sessions WHERE id = ?').get(other) }, { replay_chunks: 0, replay_bytes: 0 });
+  await purgeAnalytics(env, now + 86400000);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rewritten').get().n, 1);
+});
+test('an event writes only its row, key and time index; the daily cleanup drops the two unused indexes, and the overview still reads its period through the time index', async t => {
+  const { call, send, sqlite, env } = setup(t), queries = [], prepare = env.DB.prepare;
+  await call('/events', { data: send() });
+  const indexes = () => sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'analytics_events' ORDER BY name").all().map(row => row.name);
+  assert.deepEqual(indexes(), ['analytics_events_time', 'sqlite_autoindex_analytics_events_1']);
+  // A database made before this change has them.
+  sqlite.exec('CREATE INDEX analytics_events_name ON analytics_events(name, time); CREATE INDEX analytics_events_user ON analytics_events(user, time)');
+  await purgeAnalytics(env, now);
+  assert.deepEqual(indexes(), ['analytics_events_time', 'sqlite_autoindex_analytics_events_1']);
+  env.DB.prepare = query => { const statement = prepare(query), bind = statement.bind; statement.bind = (...values) => { queries.push([query, values]); return bind.apply(statement, values); }; return statement; };
+  await call('/overview', { method: 'GET', admin: true });
+  const period = queries.filter(([query]) => /FROM analytics_events WHERE time >= \?/.test(query));
+  assert.equal(period.length, 7);
+  for (const [query, values] of period) assert.ok(sqlite.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...values).some(({ detail }) => /analytics_events USING (COVERING )?INDEX analytics_events_time/.test(detail)), query);
+});
+test('playing a recording writes no rate-limit rows', async t => {
+  const { call, sqlite } = setup(t);
+  for (let seq = 0; seq < 3; seq++) await call(`/replay/${id}/${seq}`, { bytes: `chunk ${seq}\n` });
+  const rows = () => sqlite.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(count), 0) AS used FROM analytics_limits').get();
+  const before = rows();
+  for (let seq = 0; seq < 3; seq++) assert.equal(await (await call(`/sessions/${id}/${seq}`, { method: 'GET', admin: true })).text(), `chunk ${seq}\n`);
+  assert.deepEqual({ ...rows() }, { ...before });
+  await call(`/sessions/${id}`, { method: 'GET', admin: true });
+  assert.notDeepEqual({ ...rows() }, { ...before });
 });

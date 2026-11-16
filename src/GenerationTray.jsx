@@ -108,7 +108,7 @@ export function GenerationTray({ runs, launching, user, viewer = 'local', onFocu
       </button>
       : <header><strong>{t('Generations')}</strong><span>{t('{count} in progress', { count: running })}</span>
         <div className="generation-tray-tools">
-          {failures.length >= 2 && <button type="button" className="generation-tray-dismiss-all" onClick={() => dismiss(failures.map(row => row.run.id))}>{t('Dismiss all')}</button>}
+          {failures.length >= 2 && <button type="button" className="generation-tray-dismiss-all" data-analytics-name="Dismiss all" onClick={() => dismiss(failures.map(row => row.run.id))}>{t('Dismiss all')}</button>}
           {onHistory && <button type="button" className="generation-tray-icon" aria-label={t('Open History')} data-tooltip={t('Open History')} onClick={onHistory}>{icons.history}</button>}
           <button ref={toggle} type="button" className="generation-tray-icon" aria-expanded="true" aria-controls={listId} aria-label={t('Collapse generations')} data-tooltip={t('Collapse generations')} onClick={() => fold(true)}>{icons.collapse}</button>
         </div>

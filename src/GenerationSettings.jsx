@@ -33,7 +33,8 @@ export function GenerationSettings({ id, data, generator, readOnly, references =
   const node = { id, type: 'text', data }, parts = settingParts(node, generator, { mask: masked });
   const full = parts.map(part => part.off ? `${part.text} (${t(part.reason)})` : part.text).join(' · ') || partsText(parts);
   return <>
-    <button ref={chip} type="button" className={`gen-settings-chip${parts.length ? ' set' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? popoverId : undefined}
+    {/* Its label lists this prompt's settings, not fixed interface text, so on the private board analytics would log it unnamed. */}
+    <button ref={chip} type="button" className={`gen-settings-chip${parts.length ? ' set' : ''}`} data-analytics-name="Generation settings" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? popoverId : undefined}
       aria-label={`${t('Generation settings')}: ${full}`} data-tooltip={`${t('Generation settings')} · ${full}`}
       onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'Escape' && open) { event.stopPropagation(); setOpen(false); } }}>
       <Sliders/><span className="gen-settings-chip-text">{parts.length ? parts.map((part, index) => <React.Fragment key={part.key}>{index ? ' · ' : ''}<span className={part.off ? 'off' : undefined}>{part.text}</span></React.Fragment>) : partsText(parts)}</span>

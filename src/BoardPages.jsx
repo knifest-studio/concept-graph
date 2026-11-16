@@ -61,7 +61,7 @@ export function BoardPages({ pages, active, peers = [], disabled, readOnly = fal
     <ul ref={list} className="board-pages-list">{pages.map(page => <li key={page.id}>
       {editing === page.id ? <input className="board-page-input" autoFocus aria-label={t('Page name')} maxLength={80} value={draft} onFocus={event => event.target.select()} onChange={event => setDraft(event.target.value)} onBlur={finishEdit}
         onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelled.current = true; event.currentTarget.blur(); } }}/>
-        : <button type="button" data-page-id={page.id} className={`board-page${page.id === active ? ' active' : ''}`} aria-current={page.id === active ? 'page' : undefined} disabled={disabled} title={page.name}
+        : <button type="button" data-page-id={page.id} data-analytics-name="Page tab" className={`board-page${page.id === active ? ' active' : ''}`} aria-current={page.id === active ? 'page' : undefined} disabled={disabled} title={page.name}
           onClick={() => onSelect(page.id)} onDoubleClick={() => startEdit(page)} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); startEdit(page); } }}
           onContextMenu={event => { event.preventDefault(); const box = event.currentTarget.getBoundingClientRect(); if (!disabled && !readOnly) setMenu({ page, x: event.clientX || box.left + 12, y: event.clientY || box.bottom }); }}>
           <svg className="board-page-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg>

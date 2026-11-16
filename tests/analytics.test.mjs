@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import viteConfig from '../vite.config.js';
 import { controlName, rageDetector, shortcut, shortcutControl, sanitizeEvent, validateBatch, replayKey, replaySequence, retentionCutoffs, splitEvents, eventBytes, byteLength, details } from '../src/analytics-core.mjs';
 
 const session = '12345678-1234-1234-1234-123456789abc';
@@ -77,4 +79,11 @@ test('replay keys and retention cutoffs cannot traverse storage paths', () => {
   assert.throws(() => replayKey('2026-11-13', '../secret', 0));
   assert.equal(replaySequence('01'), null); assert.equal(replaySequence(-1), null); assert.equal(replaySequence(999999), 999999);
   assert.deepEqual(retentionCutoffs(200 * 86400000), { replays: 170 * 86400000, events: 20 * 86400000 });
+});
+test('every build names its version in the meta that session_start reads', async () => {
+  const plugin = viteConfig.plugins.find(plugin => plugin.name === 'concept-graph-version'), [tag] = plugin.transformIndexHtml();
+  assert.equal(tag.tag, 'meta'); assert.equal(tag.injectTo, 'head'); assert.equal(tag.attrs.name, 'concept-graph-version');
+  assert.match(tag.attrs.content, /^[\da-f]{7,}(?:-dirty)?$|^\d+\.\d+\.\d+\+\d{8}T\d{6}Z$/);
+  assert.ok((await readFile(new URL('../src/analytics.mjs', import.meta.url), 'utf8')).includes(`meta[name="${tag.attrs.name}"]`));
+  assert.equal(sanitizeEvent({ ...event(), kind: 'session', name: 'session_start', details: { version: tag.attrs.content } }).details.version, tag.attrs.content);
 });

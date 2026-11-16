@@ -10,7 +10,15 @@ export const privateTextSelector = [
   '.attention-card', '.codex-share', '.codex-share-panel', '.codex-requests', '.codex-teammates',
   '.board-author', '.toast', '[role="alert"]', '[role="tooltip"]', 'head title'
 ].join(',');
-export const blockedMediaSelector = 'img,video,canvas,model-viewer,.drawing-node,.stroke-preview';
+// Blocked nodes are recorded as same-size empty boxes and their later changes are dropped (rrweb). Teammates' cursors and
+// call pings move many times a second, so every tab recorded every other person's pointer: replay grew with people².
+export const blockedMediaSelector = 'img,video,canvas,model-viewer,.drawing-node,.stroke-preview,.cloud-cursor,.attention-ping';
+// A control's own text without what sits in a private container inside it, e.g. a page tab without its name and people.
+export function publicText(element) {
+  if (!element || element.closest?.(privateTextSelector)) return '';
+  const visit = node => node.nodeType === 3 ? node.data : node.nodeType !== 1 || node.matches(privateTextSelector) ? '' : [...node.childNodes].map(visit).join('');
+  return visit(element);
+}
 
 const userSlot = /\{(?:name|label|email|owner|names|domain|prompt|text|message|error|file|filename|path|caption|page)\}/;
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -48,6 +56,48 @@ export function errorMessage(value) {
   const clean = stripUserContent(value);
   // A provider or arbitrary exception can echo an unquoted prompt; only known UI message structure is safe.
   return fixedMessages.has(clean) ? clean : 'Error (details hidden)';
+}
+// Error facts that carry no content: the error's type, where in our own scripts it was thrown (file name, line and column
+// only) and known noise. Message and stack text never leave the browser.
+const extensionUrl = /^(?:[a-z]+-)*extension:|^webkit-masked-url:/i; // Safari masks extension script URLs as webkit-masked-url://hidden/
+export const ownScript = /^[\w.-]{1,100}\.(?:m?js|jsx|tsx?):\d{1,9}:\d{1,9}$/;
+export function scriptLocation(url, line, column, origin = globalThis.location?.origin) {
+  if (typeof url !== 'string' || !url) return '';
+  if (extensionUrl.test(url)) return 'extension';
+  let parsed; try { parsed = new URL(url, origin); } catch { return ''; }
+  if (parsed.origin !== origin) return 'external';
+  const where = `${parsed.pathname.split('/').pop()}:${Math.max(0, line | 0)}:${Math.max(0, column | 0)}`;
+  return ownScript.test(where) ? where : 'inline';
+}
+// The first frame in our own scripts, else what the top frame is. Chrome's stack starts with the message, so only its
+// "at" lines are read; Firefox and Safari write name@url:line:col.
+export function stackLocation(stack, origin = globalThis.location?.origin) {
+  const lines = String(stack || '').split('\n'), chrome = lines.some(line => /^\s+at\s/.test(line));
+  let top = '';
+  for (const line of lines.filter(line => chrome ? /^\s+at\s/.test(line) : line.includes('@')).slice(0, 50)) {
+    const frame = chrome ? line.match(/^\s*at (?:.*? \()?(\S+?):(\d+):(\d+)\)?$/) : line.match(/@(\S+?):(\d+):(\d+)$/), where = frame ? scriptLocation(frame[1], +frame[2], +frame[3], origin) : '';
+    if (ownScript.test(where)) return where;
+    top ||= where;
+  }
+  return top;
+}
+// Built-in and DOMException names (TypeError, AbortError) or what was thrown instead of an Error.
+const errorName = /^(?:[A-Z][A-Za-z]{0,40})?Error$/, thrownTypes = new Set(['string', 'number', 'bigint', 'boolean', 'symbol', 'undefined', 'object', 'function', 'null']);
+export const validErrorType = value => typeof value === 'string' && (errorName.test(value) || thrownTypes.has(value));
+export function errorType(value) {
+  if (value === null) return 'null';
+  if (typeof value?.name === 'string' && errorName.test(value.name) && (value instanceof Error || 'message' in value)) return value.name;
+  return value instanceof Error ? 'Error' : typeof value;
+}
+export function windowErrorFacts({ message, error, filename, lineno, colno } = {}, origin = globalThis.location?.origin) {
+  const where = scriptLocation(filename, lineno, colno, origin) || (typeof error?.stack === 'string' ? stackLocation(error.stack, origin) : ''), text = String(message || '');
+  // Browsers report a cross-origin script's error only as "Script error."; the ResizeObserver one is a skipped layout frame.
+  const noise = /ResizeObserver loop/.test(text) ? 'resize_observer' : where === 'extension' ? 'extension' : /^Script error\.?$/.test(text) ? 'cross_origin' : undefined;
+  return { errorType: error ? errorType(error) : undefined, location: where || undefined, noise };
+}
+export function rejectionFacts(reason, origin = globalThis.location?.origin) {
+  const where = typeof reason?.stack === 'string' ? stackLocation(reason.stack, origin) : '';
+  return { errorType: errorType(reason), location: where || undefined, noise: where === 'extension' ? 'extension' : undefined };
 }
 export function referrerOrigin(value) { try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.origin : ''; } catch { return ''; } }
 

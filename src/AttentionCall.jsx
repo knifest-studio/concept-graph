@@ -44,17 +44,17 @@ export function AttentionCard({ call, color, pageName, onGo, onLater, onBack, on
   const style = { '--caller': color };
   if (arrived) return <div className="attention-card attention-arrived" role="status" style={style}>
     <Avatar user={{ name, color }}/><span>{t('You’re with {name}', { name })}</span>
-    <button type="button" className="attention-secondary" onClick={() => { onBack(arrived.previous); onClose(); }}>{t('Back to where I was')}</button>
-    <button type="button" className="attention-close" aria-label={t('Dismiss')} onClick={onClose}>×</button>
+    <button type="button" className="attention-secondary" data-analytics-name="Back to where I was" onClick={() => { onBack(arrived.previous); onClose(); }}>{t('Back to where I was')}</button>
+    <button type="button" className="attention-close" data-analytics-name="Dismiss call" aria-label={t('Dismiss')} onClick={onClose}>×</button>
   </div>;
   const note = call.everyone ? held ? (typing() ? t('Finish typing, then choose Go now.') : t('Waiting for you to return to this tab.')) : t('Taking you there in {count} s', { count: left })
     : pageName ? t('On {page}', { page: pageName }) : t('Choose Go now to see where on the board.');
-  return <div className="attention-card" role="alert" style={style}>
+  return <div className="attention-card" role="alert" data-analytics-notice="attention_call" style={style}>
     <span className="attention-avatar"><i/><i/><Avatar user={{ name, color }}/></span>
     <span className="attention-text"><b>{title}</b><small>{note}{call.everyone && pageName ? ` · ${pageName}` : ''}</small></span>
     <span className="attention-actions">
-      <button type="button" className="attention-go" onClick={() => go.current()}>{t('Go now')}</button>
-      <button type="button" className="attention-secondary" onClick={onLater}>{t('Not now')}</button>
+      <button type="button" className="attention-go" data-analytics-name="Go now" onClick={() => go.current()}>{t('Go now')}</button>
+      <button type="button" className="attention-secondary" data-analytics-name="Not now" onClick={onLater}>{t('Not now')}</button>
     </span>
     {call.everyone && <span className="attention-progress" aria-hidden="true"><span style={{ transform: `scaleX(${left / countdown})` }}/></span>}
   </div>;

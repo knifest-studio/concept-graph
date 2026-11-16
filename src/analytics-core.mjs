@@ -1,4 +1,4 @@
-import { stripUserContent, privateControlLabel, errorMessage, referrerOrigin } from './analytics-privacy.mjs';
+import { stripUserContent, privateControlLabel, errorMessage, referrerOrigin, ownScript, validErrorType } from './analytics-privacy.mjs';
 import { isTextEntry, matchShortcut } from './shortcuts.mjs';
 
 // Shared rules for the browser and Worker, with no package dependencies. No client identity is accepted.
@@ -16,7 +16,8 @@ const uiValues = {
   source: ['settings', 'system', 'sidebar', 'node_toolbar', 'context_menu', 'tip', 'invite', 'copy', 'sidebar_click', 'sidebar_drag', 'node_type'],
   item: ['menu', 'getting_started', 'shortcuts', 'whats_new'],
   tip: ['duplicate_to_custom_node', 'custom_nodes_invite'],
-  action: ['shown', 'accepted', 'dismissed']
+  action: ['shown', 'accepted', 'dismissed'],
+  noise: ['resize_observer', 'cross_origin', 'extension']
 };
 export function details(value) {
   const result = {};
@@ -25,6 +26,9 @@ export function details(value) {
   for (const [key, [min, max]] of Object.entries(numbers)) if (typeof value[key] === 'number' && Number.isFinite(value[key])) result[key] = clamp(value[key], min, max);
   for (const key of booleans) if (typeof value[key] === 'boolean') result[key] = value[key];
   for (const [key, allowed] of Object.entries(uiValues)) if (allowed.includes(value[key])) result[key] = value[key];
+  // Error facts are checked by shape here too, so no client can put text in them.
+  if (validErrorType(value.errorType)) result.errorType = value.errorType;
+  if (typeof value.location === 'string' && (ownScript.test(value.location) || ['external', 'extension', 'inline'].includes(value.location))) result.location = value.location;
   if (result.page && !sessionPattern.test(result.page) && result.page !== 'page-1') delete result.page;
   if (result.run && !sessionPattern.test(result.run)) delete result.run;
   if (result.route && !['board', 'boards', 'admin'].includes(result.route)) delete result.route;

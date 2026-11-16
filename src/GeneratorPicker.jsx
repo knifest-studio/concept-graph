@@ -38,7 +38,7 @@ export function VariantRow({ id, variants = 1, choose, disabled, compact = false
   };
   const label = t('Custom number of variants, 1–{max}', { max: maxVariants });
   return <div className={`variant-group${compact ? ' compact' : ''}`} role="group" aria-label={t('Number of variants')} data-tooltip={t('Variants: separate images from one Generate. Type any number up to {max}.', { max: maxVariants })}>
-    <span>{t('Variants')}</span>{variantPresets.map(count => <button type="button" key={count} aria-pressed={variants === count} disabled={disabled} onClick={() => choose(id, count)}>{count}</button>)}
+    <span>{t('Variants')}</span>{variantPresets.map(count => <button type="button" key={count} data-analytics-name={`Variants: ${count}`} aria-pressed={variants === count} disabled={disabled} onClick={() => choose(id, count)}>{count}</button>)}
     {/* Enter or Escape in the field hands focus back to the button that replaces it, so the keyboard does not lose its place. */}
     {compact && !editing ? <button ref={element => { if (element && refocus.current) { refocus.current = false; element.focus({ preventScroll: true }); } }} type="button" className={`variant-custom${custom ? ' chosen' : ''}`} aria-label={label} aria-pressed={!!custom} disabled={disabled} onClick={() => setEditing(true)}>{custom || '…'}</button>
       : <input className={`variant-custom${custom ? ' chosen' : ''}`} type="text" inputMode="numeric" maxLength={2} placeholder="…" aria-label={label} disabled={disabled} autoFocus={compact}

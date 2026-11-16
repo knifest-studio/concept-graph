@@ -56,7 +56,7 @@ export function ShortcutSettings() {
               {bindings.length > 0 && <button type="button" aria-label={t('Turn off shortcut for {action}', { action: label })} onClick={() => { setShortcutBindings(item.id, []); setFocusId(item.id); }}>{t('Remove')}</button>}
               {hasOverride(overrides, item.id) && <button type="button" aria-label={t('Reset shortcut for {action}', { action: label })} onClick={() => reset(item.id)}>{t('Reset')}</button>}</>}</span>
           {notice?.id === item.id && <p className="shortcut-notice" role="alert">{notice.text}</p>}
-          {conflict?.id === item.id && <div className="shortcut-conflict" role="alert"><p>{t('{key} is already used by {action}.', { key: bindingLabel(conflict.binding, mac), action: t(conflict.other.label) })}</p>
+          {conflict?.id === item.id && <div className="shortcut-conflict" role="alert" data-analytics-notice="shortcut_conflict"><p>{t('{key} is already used by {action}.', { key: bindingLabel(conflict.binding, mac), action: t(conflict.other.label) })}</p>
             <button type="button" className="primary-button" autoFocus onClick={replace}>{t('Replace')}</button><button type="button" onClick={() => { setFocusId(conflict.id); setConflict(null); }}>{t('Cancel')}</button></div>}
         </div>;
       })}</div>)}</div>
