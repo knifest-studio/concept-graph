@@ -205,9 +205,78 @@ export function nanoError(status, code, message) {
   return new NanoError('upstream', `Nano Banana failed${status ? ` (${status})` : ''}. Try again.`);
 }
 
-export function decodeImage(data, name = 'Nano Banana') {
+const imageSpans = new WeakMap(), textDecoder = new TextDecoder();
+const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', base64Values = new Int16Array(256).fill(-1);
+for (let i = 0; i < alphabet.length; i++) base64Values[alphabet.charCodeAt(i)] = i;
+
+function base64Length(bytes) {
+  const length = bytes.length, padding = bytes[length - 1] === 61 ? bytes[length - 2] === 61 ? 2 : 1 : 0;
+  if (length % 4 === 1 || (padding && length % 4)) throw new Error('Invalid base64');
+  for (let i = 0; i < length - padding; i++) if (base64Values[bytes[i]] < 0) throw new Error('Invalid base64');
+  return Math.floor(length * 3 / 4) - padding;
+}
+
+function decodeBase64Bytes(data) {
+  const bytes = new Uint8Array(base64Length(data));
+  let bits = 0, value = 0, offset = 0;
+  for (let i = 0; offset < bytes.length; i++) {
+    value = (value << 6) | base64Values[data[i]]; bits += 6;
+    if (bits >= 8) { bits -= 8; bytes[offset++] = (value >> bits) & 255; }
+  }
+  return bytes;
+}
+
+// Keep large image strings as byte spans, so JSON.parse never makes another base64-sized string. Decode lazily: thought
+// steps may contain draft images, which must never become outputs or consume decoded-image memory.
+export async function readImageResponse(response) {
+  const raw = new Uint8Array(await response.arrayBuffer());
+  const plain = () => { try { return JSON.parse(textDecoder.decode(raw)); } catch { return null; } };
+  try {
+    const spans = [], parts = [];
+    let last = 0;
+    const space = byte => [32, 9, 10, 13].includes(byte);
+    const endOfString = start => {
+      let end = start;
+      while (end < raw.length && raw[end] !== 34) { if (raw[end] === 92) end++; end++; }
+      if (end === raw.length) throw new Error('Unterminated string');
+      return end;
+    };
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] !== 34) continue;
+      const start = i + 1, end = endOfString(start);
+      i = end;
+      if (end - start !== 4 && end - start !== 8) continue;
+      const key = textDecoder.decode(raw.subarray(start, end));
+      if (key !== 'data' && key !== 'b64_json') continue;
+      let value = end + 1;
+      while (space(raw[value])) value++;
+      if (raw[value++] !== 58) continue;
+      while (space(raw[value])) value++;
+      if (raw[value] !== 34) continue;
+      const from = value + 1, to = endOfString(from);
+      i = to;
+      if (to - from <= 4096) continue;
+      const span = raw.subarray(from, to);
+      base64Length(span); // Escapes, whitespace and non-base64 bytes take the ordinary JSON path.
+      parts.push(textDecoder.decode(raw.subarray(last, from)), `#${spans.length}`);
+      spans.push(span); last = to;
+    }
+    if (!spans.length) return plain();
+    parts.push(textDecoder.decode(raw.subarray(last)));
+    const body = JSON.parse(parts.join(''));
+    imageSpans.set(body, spans);
+    return body;
+  } catch { return plain(); }
+}
+
+export function decodeImage(data, name = 'Nano Banana', body) {
   let bytes, format;
-  try { const binary = atob(data); bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); }
+  try {
+    const span = typeof data === 'string' && /^#\d+$/.test(data) && imageSpans.get(body)?.[Number(data.slice(1))];
+    if (span) bytes = decodeBase64Bytes(span);
+    else if (Uint8Array.fromBase64) bytes = Uint8Array.fromBase64(data);
+    else { const binary = atob(data); bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); }
+  }
   catch { throw new NanoError('upstream', `${name} returned an unreadable image. Try again.`); }
   try { format = imageFormat(bytes); }
   catch { throw new NanoError('upstream', `${name} returned an image format the board cannot show.`); }
@@ -223,7 +292,7 @@ export function nanoResult(status, body) {
   if (!body || typeof body !== 'object') throw new NanoError('upstream', 'Nano Banana returned an unreadable response. Try again.');
   const blocks = [...(Array.isArray(body.steps) ? body.steps : []).filter(step => step?.type === 'model_output').flatMap(step => Array.isArray(step.content) ? step.content : []),
     ...(Array.isArray(body.outputs) ? body.outputs : [])];
-  const images = blocks.filter(block => block?.type === 'image' && typeof block.data === 'string' && block.data).map(block => decodeImage(block.data));
+  const images = blocks.filter(block => block?.type === 'image' && typeof block.data === 'string' && block.data).map(block => decodeImage(block.data, 'Nano Banana', body));
   if (!images.length) {
     const failure = Array.isArray(body.errors) ? body.errors[0] : undefined;
     if (failure || ['failed', 'cancelled'].includes(body.status)) throw nanoError(0, errorCode(failure?.code), failure?.message);

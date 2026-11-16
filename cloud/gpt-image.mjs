@@ -64,7 +64,7 @@ export function gptImageError(status, code = '', message = '') {
 export function gptImageResult(status, body) {
   if (status < 200 || status > 299) throw gptImageError(status, body?.error?.code || body?.error?.type, body?.error?.message);
   if (!body || typeof body !== 'object') throw new NanoError('upstream', 'GPT Image returned an unreadable response. Try again.');
-  const images = (Array.isArray(body.data) ? body.data : []).filter(item => typeof item?.b64_json === 'string' && item.b64_json).map(item => decodeImage(item.b64_json, 'GPT Image'));
+  const images = (Array.isArray(body.data) ? body.data : []).filter(item => typeof item?.b64_json === 'string' && item.b64_json).map(item => decodeImage(item.b64_json, 'GPT Image', body));
   if (!images.length) throw new NanoError('no_image', 'GPT Image returned no image. Try rephrasing the prompt.');
   return { images, usage: body.usage };
 }

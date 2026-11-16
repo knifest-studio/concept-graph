@@ -466,7 +466,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   useEffect(() => { if (user) analyticsView(boardId ? 'board' : location.pathname === '/admin/analytics' ? 'admin' : 'boards', boardId || ''); // Watching a recording must not record the admin page again.
     if (location.pathname !== '/admin/analytics') return startAnalytics(user?.email || null); }, [user?.email]);
   useEffect(() => { if (user && !boardId) analyticsView(location.pathname === '/admin/analytics' ? 'admin' : 'boards'); }, [user, boardId]);
-  const [showAllBuilds, setShowAllBuilds] = useState(false);
+  const [showAllBuilds, setShowAllBuilds] = useState(false), [pairAlternative, setPairAlternative] = useState(null);
   const [theme, setTheme] = useThemePreference();
   const pendingRun = useRef(null);
   useEffect(() => {
@@ -486,11 +486,12 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   useEffect(() => {
     if (paired && pendingRun.current) { const run = pendingRun.current; pendingRun.current = null; run(); }
   }, [paired]);
-  const openPair = (callback, downloads = false) => { pendingRun.current = callback || null; setShowAllBuilds(downloads); setPairing(true); };
-  const cancelPair = () => { setPairing(false); pendingRun.current = null; setPairCancel(value => value + 1); };
+  // `alternative` offers the team key instead when the prompt that asked for Codex could run on it: { title, note, label, run }.
+  const openPair = (callback, downloads = false, alternative = null) => { pendingRun.current = callback || null; setShowAllBuilds(downloads); setPairAlternative(alternative); setPairing(true); };
+  const cancelPair = () => { setPairing(false); pendingRun.current = null; setPairAlternative(null); setPairCancel(value => value + 1); };
   // A teammate's Codex was granted instead: close setup but keep the pending generation, which then starts.
-  const finishPair = () => { setPairing(false); pendingRun.current = null; };
-  const pairDialog = teammates => pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Pair local helper')} onKeyDown={keepDialogFocus}><button className="cloud-pair-close" autoFocus onClick={cancelPair}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg>{t('Back to board')}</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair} teammates={teammates} onClose={cancelPair}/></div>;
+  const finishPair = () => { setPairing(false); pendingRun.current = null; setPairAlternative(null); };
+  const pairDialog = teammates => pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Pair local helper')} onKeyDown={keepDialogFocus}><button className="cloud-pair-close" autoFocus onClick={cancelPair}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg>{t('Back to board')}</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair} teammates={<>{pairAlternative && <section className="codex-teammates pair-alternative" aria-label={pairAlternative.title}><strong>{pairAlternative.title}</strong><p>{pairAlternative.note}</p><button type="button" className="primary-button" data-analytics-name="Use team key instead" onClick={() => { const { run } = pairAlternative; cancelPair(); setTimeout(run); }}>{pairAlternative.label}</button></section>}{teammates}</>} onClose={cancelPair}/></div>;
   const unpair = (rejected = true) => {
     services.unpair(); setHelperCode(''); setPaired(false); setHelperStatus({});
     if (!rejected) { pendingRun.current = null; setPairCancel(value => value + 1); }

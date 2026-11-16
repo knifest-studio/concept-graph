@@ -6,14 +6,17 @@ import './generator-picker.css';
 // Cloud prompts choose a personal Codex or a site API key. Status lines explain setup, access and the shared allowance.
 // A describe node offers the same two: Codex, or Gemini on the same site key (a text model, not Nano Banana itself).
 export function GeneratorPicker({ id, generator, nano, gpt, choose, describe = false }) {
+  // Without access the reason and who gives it is the picker's tip, so it reads before the menu is opened.
+  const locked = !nano.selectable && nano.note;
   const line = status => `${status.note}${status.budget ? ` · ${status.budget}` : ''}`, shared = !describe && line(nano) === line(gpt);
   const nanoChosen = generator === generators.nanoBanana, gptChosen = !describe && generator === generators.gptImage, siteModel = describe ? 'Gemini' : 'Nano Banana';
-  return <label className={`generator-picker nodrag nopan${nanoChosen || gptChosen ? ' nano' : ''}`} data-tooltip={gptChosen ? `GPT Image · ${gpt.note}` : nanoChosen ? `${siteModel} · ${nano.note}` : describe ? t('Describe with Codex or Gemini') : t('Generate with Codex, Nano Banana or GPT Image')}>
+  return <label className={`generator-picker nodrag nopan${nanoChosen || gptChosen ? ' nano' : ''}`} data-tooltip={gptChosen ? `GPT Image · ${gpt.note}` : nanoChosen ? `${siteModel} · ${nano.note}` : locked ? `${siteModel}${describe ? '' : ' / GPT Image'} · ${nano.note}` : describe ? t('Describe with Codex or Gemini') : t('Generate with Codex, Nano Banana or GPT Image')}>
     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     <select aria-label={t('Image generator')} value={nanoChosen || gptChosen ? generator : ''} onChange={event => choose(id, event.target.value || null)}>
       <option value="">Codex</option>
-      <option value={generators.nanoBanana} disabled={!nano.selectable && !nanoChosen}>{siteModel}</option>
-      {!describe && <option value={generators.gptImage} disabled={!gpt.selectable && !gptChosen}>GPT Image</option>}
+      {/* One this person can't use stays clickable and says why when chosen (setGenerator), instead of ignoring the click. */}
+      <option value={generators.nanoBanana}>{siteModel}{!nano.selectable && !nanoChosen && nano.short ? ` · ${nano.short}` : ''}</option>
+      {!describe && <option value={generators.gptImage}>GPT Image{!gpt.selectable && !gptChosen && gpt.short ? ` · ${gpt.short}` : ''}</option>}
       {/* Both share access and limits, so one line says it when their status matches (e.g. "50 of 50 left today"). */}
       {shared ? <option value="note" disabled>{line(nano)}</option> : <>
         <option value="note" disabled>{siteModel} · {line(nano)}</option>

@@ -118,3 +118,5 @@
 .preference-analytics{gap:20px}.preference-analytics span{max-width:360px}.preference-analytics input{flex-shrink:0}
 
 @media(max-width:900px){.app-shell[data-cloud] .cloud-history-button{padding:8px}.app-shell[data-cloud] .cloud-history-button svg{display:block}}
+/* The team-key way out of Codex setup: the same card as a teammate's Codex, in the site generators' yellow. */
+.helper-panel>.pair-alternative{border-color:#e9cf7a;background:color-mix(in srgb,#f2c230 14%,var(--panel))}.pair-alternative .primary-button{margin-top:2px}

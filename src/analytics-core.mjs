@@ -15,7 +15,7 @@ const uiValues = {
   to: ['light', 'dark', 'system'],
   source: ['settings', 'system', 'sidebar', 'node_toolbar', 'context_menu', 'tip', 'invite', 'copy', 'sidebar_click', 'sidebar_drag', 'node_type'],
   item: ['menu', 'getting_started', 'shortcuts', 'whats_new'],
-  tip: ['duplicate_to_custom_node', 'custom_nodes_invite'],
+  tip: ['duplicate_to_custom_node', 'custom_nodes_invite', 'first_prompt'],
   action: ['shown', 'accepted', 'dismissed'],
   noise: ['resize_observer', 'cross_origin', 'extension']
 };

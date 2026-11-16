@@ -1,5 +1,6 @@
 // Ukrainian interface text, keyed by the English it replaces. Plurals list the one, few, many and other forms.
 export default {
+  'The board is busy with other generations. Run the prompt again in a minute.': 'На дошці зараз виконуються інші генерації. Запустіть промпт знову за хвилину.',
   "Supported 3D formats: GLB, glTF, OBJ, FBX, STL, PLY, 3MF, USDZ, or ZIP with companion files.": "Підтримувані 3D-формати: GLB, glTF, OBJ, FBX, STL, PLY, 3MF, USDZ або ZIP із супровідними файлами.",
   "3D upload batches can be at most 300 MB, including unpacked files.": "Загальний розмір файлів для додавання 3D-моделей не може перевищувати 300 МБ, включно з розпакованими файлами.",
   "Converted GLB exceeds 80 MB. Use smaller textures or a simpler model.": "Перетворений GLB перевищує 80 МБ. Зменште текстури або спростіть модель.",
@@ -1428,4 +1429,17 @@ export default {
   "{count} image to turn into 3D": ["{count} зображення для перетворення на 3D", "{count} зображення для перетворення на 3D", "{count} зображень для перетворення на 3D", "{count} зображення для перетворення на 3D"],
   "{count} model": ["{count} модель", "{count} моделі", "{count} моделей", "{count} моделі"],
   "Done · {count} model": ["Готово · {count} модель", "Готово · {count} моделі", "Готово · {count} моделей", "Готово · {count} моделі"],
+  'Or use the team’s API key': 'Або скористайтеся API-ключем команди',
+  'This node describes with Codex. Gemini on the team’s key can describe it now; you can switch back in its generator menu.': 'Цей вузол описує через Codex. Gemini на ключі команди опише його вже зараз; повернути Codex можна в меню генератора вузла.',
+  'This prompt generates with Codex. {name} on the team’s key can generate it now; you can switch back in its generator menu.': 'Цей промпт генерує через Codex. {name} на ключі команди згенерує його вже зараз; повернути Codex можна в меню генератора промпту.',
+  'not set up': 'не налаштовано',
+  'no access': 'немає доступу',
+  'Not available for your account yet. Ask {names}: site admins give access in Team access.': 'Поки недоступно для вашого облікового запису. Попросіть {names}: доступ дають адміністратори сайту в «Доступ команди».',
+  '3D generation isn’t available for your account yet. Ask {names}: site admins give access in Team access.': '3D-генерація поки недоступна для вашого облікового запису. Попросіть {names}: доступ дають адміністратори сайту в «Доступ команди».',
+  'Dismiss tip': 'Закрити підказку',
+  'Start here: add a prompt, describe the image you want, then press Generate.': 'Почніть звідси: додайте промпт, опишіть потрібне зображення й натисніть «Згенерувати».',
+  'Write what you want to see in your prompt, then press Generate.': 'Напишіть у промпті, що хочете побачити, і натисніть «Згенерувати».',
+  'Go to my prompt': 'До мого промпту',
+  'Generate right away': 'Генеруйте одразу',
+  'With team access, new prompts start on Nano Banana when your Codex isn’t connected, and a generator you can’t use says whom to ask. When several people generate at once, the board queues their runs instead of interrupting them.': 'Із доступом команди нові промпти починають із Nano Banana, коли ваш Codex не під’єднано, а недоступний генератор підказує, кого попросити. Коли генерують кілька людей водночас, дошка ставить запуски в чергу, а не перериває їх.',
 };

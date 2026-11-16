@@ -76,6 +76,16 @@ export class Directory extends DurableObject {
   model3dEntries() { return this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM model3d_access ORDER BY email').toArray().map(row => ({ ...row })); }
   model3dAllowed(person) { const address = email(person); return !!address && !!this.ctx.storage.sql.exec('SELECT 1 FROM model3d_access WHERE email = ?', address).toArray().length; }
 
+  // Display names of the people who give generation access (the owner first, then admins by seniority), shown to people
+  // who lack it so they know whom to ask. Names only, as boards show them; never emails.
+  adminNames() {
+    const owner = email(this.env?.SITE_OWNER_EMAIL), admins = this.ctx.storage.sql.exec('SELECT email FROM site_admins ORDER BY addedAt').toArray().map(row => row.email);
+    // A board's owner keeps their name on the board itself; everyone else's visits record it in board_people.
+    const name = address => this.ctx.storage.sql.exec('SELECT name FROM board_people WHERE email = ? AND name IS NOT NULL ORDER BY openedAt DESC LIMIT 1', address).toArray()[0]?.name
+      || this.ctx.storage.sql.exec('SELECT ownerName AS name FROM boards WHERE owner = ? AND ownerName IS NOT NULL ORDER BY updatedAt DESC LIMIT 1', address).toArray()[0]?.name;
+    return [...new Set([owner, ...admins].filter(Boolean))].map(name).filter(Boolean).slice(0, 3);
+  }
+
   // What admins see: separate image and 3D access, who the admins are, and each person's shared usage today.
   teamAccess(person, now = Date.now()) {
     const role = this.siteRole(person);

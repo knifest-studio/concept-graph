@@ -190,7 +190,13 @@ async function route(request, env) {
   if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
-  if (path === '/api/nano') return method === 'GET' ? json({ ...await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, directory(env)) }) : error('Method not allowed.', 405);
+  if (path === '/api/nano') {
+    if (method !== 'GET') return error('Method not allowed.', 405);
+    const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store) };
+    // Someone without access learns whom to ask.
+    if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed)) status.admins = await store.adminNames();
+    return json(status);
+  }
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
   if (voiceMatch) {
     if (method !== 'POST') return error('Method not allowed.', 405);

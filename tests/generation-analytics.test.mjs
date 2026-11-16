@@ -13,7 +13,7 @@ import { failureKind, promptAnalytics, recordedKind, runAnalytics, runTracker, s
 import { details } from '../src/analytics-core.mjs';
 import { errorMessage } from '../src/analytics-privacy.mjs';
 import { describeModel, generationSettings, generators, gptImageModel, isDescribe, model3dModels, model3dTask, nanoModel, seedvrModel, topazModel } from '../graph.mjs';
-import { usesSiteGenerator } from '../src/generator.mjs';
+import { generatorKind, startingGenerator, usesSiteGenerator } from '../src/generator.mjs';
 import { t } from '../src/i18n.mjs';
 
 // The room runs for real (only Cloudflare's base class is replaced), so the prompt's reading is checked against what it writes.
@@ -230,7 +230,7 @@ function editorRun(graph, { site = { selectable: true, ready: true, note: '' }, 
   const env = {
     alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: (graph, boardId, nodeId) => ({ nodeId }), currentGraph: () => graph, boardId: 'board',
     notify: message => toasts.push(['error', message]), inform: (message, notice) => toasts.push(['news', message, notice]), starting: null, generationStarting: ref(false), nodeRef: ref(graph.nodes),
-    cloud: true, usesSiteGenerator, model3dTask, generators, isDescribe, model3dRef: ref(site), gptRef: ref(site), nanoRef: ref(site), readinessRef: ref({ key: readiness }), pendingIntent: ref(null),
+    cloud: true, usesSiteGenerator, generatorKind, startingGenerator, rememberGenerator() {}, model3dTask, generators, isDescribe, model3dRef: ref(site), gptRef: ref(site), nanoRef: ref(site), readinessRef: ref({ key: readiness }), pendingIntent: ref(null),
     fixReadiness: () => opened.push('pairing'), effects: { start() {}, failedStart() {} }, userGeneration: ref(null), viewerMoved: ref(false), setStarting() {}, saveNow: async () => {},
     cloudSession: { refreshNano() {}, unpair() {}, jobs: { startNano: begin, start: begin } }, helperNeeded: true, setHelperOffline() {}, openHelper() {}, mergeRemote() {}, focusNode() {}, intentUnchanged: () => true, t,
     track: (name, fields, kind = 'app') => events.push([name, details(fields), kind]), promptAnalytics
