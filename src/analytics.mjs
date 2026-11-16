@@ -106,9 +106,10 @@ function createSession() {
   }, { capture: true, passive: true });
   on(document, 'change', e => { const target = e.target; if (target?.matches?.('select,input[type="checkbox"],input[type="radio"]')) event('change', elementName(target), { ...lastPoint, width: innerWidth, height: innerHeight, zoom: zoom(), checked: target.checked }, elementArea(target)); }, { capture: true });
   on(document, 'keydown', e => {
-    const combo = shortcut(e, !!e.target?.closest?.('input,textarea,[contenteditable]:not([contenteditable="false"]),[role="textbox"]'));
-    if (combo) lastAction = { via: 'shortcut', time: Date.now() };
-    if (combo) event('shortcut', shortcutControl(combo), { combo, zoom: zoom() }, elementArea(e.target));
+    // Keys pressed while recording a shortcut in Settings are not actions. The combo field holds the action's ID.
+    const action = e.target?.closest?.('[data-shortcut-recorder]') ? '' : shortcut(e);
+    if (action) lastAction = { via: 'shortcut', time: Date.now() };
+    if (action) event('shortcut', shortcutControl(action), { combo: action, zoom: zoom() }, elementArea(e.target));
     lastPoint = { pointer: 'keyboard' }; interact();
   }, { capture: true });
   on(document, 'paste', () => { lastAction = { via: 'paste', time: Date.now() }; }, { capture: true });

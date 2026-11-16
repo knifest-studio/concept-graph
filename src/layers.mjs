@@ -44,14 +44,6 @@ export function stackOnTop(existing, added) {
   return added.map(node => node.type === 'group' ? node : { ...node, z: Math.min(maxLayer, top + rank.get(node.id)) });
 }
 
-// Figma's shortcuts: ] and [ jump to the front or back, ⌘/Ctrl moves one step. Physical bracket keys also work on layouts such as Ukrainian.
-export function layerShortcut(event) {
-  const typed = event.key === '[' || event.key === ']', key = typed ? event.key : !event.altKey && !event.shiftKey && { BracketLeft: '[', BracketRight: ']' }[event.code];
-  if (!key) return null;
-  const step = event.metaKey || (event.ctrlKey && !event.altKey);
-  return key === ']' ? step ? 'forward' : 'front' : step ? 'backward' : 'back';
-}
-
 // Reorders one page and returns only the changed layers. Stamps drawn directly above their parent move with it unless selected on their own.
 export function arrangeLayers(nodes, ids, action) {
   if (!layerActions.includes(action)) throw new Error('Unknown layer action.');

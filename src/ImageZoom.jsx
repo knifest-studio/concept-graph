@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { t } from './i18n.mjs';
+import { matchShortcut } from './shortcuts.mjs';
 
 const maxScale = 16, step = 1.25;
 const clampScale = (scale, fit) => Math.min(Math.max(maxScale, fit), Math.max(fit, scale));
@@ -54,14 +55,15 @@ export function ZoomableImage({ src, alt, crossOrigin, onLoad }) {
     return () => element.removeEventListener('wheel', wheel);
   }, [zoom]);
   useEffect(() => {
+    // Fixed keys; the typed character or the physical key counts, so AZERTY's digit row works too.
     const key = event => {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.target.closest?.('textarea,input,select,[contenteditable="true"]')) return;
-      const moves = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] };
-      if (['+', '='].includes(event.key)) zoom(step);
-      else if (['-', '_'].includes(event.key)) zoom(1 / step);
-      else if (event.key === '0') fit();
-      else if (event.key === '1') zoom(1, undefined, undefined, 1);
-      else if (moves[event.key]) pan(...moves[event.key]);
+      const action = matchShortcut(event, { scopes: ['zoom'] });
+      const moves = { 'pan.left': [80, 0], 'pan.right': [-80, 0], 'pan.up': [0, 80], 'pan.down': [0, -80] };
+      if (action === 'zoom.in') zoom(step);
+      else if (action === 'zoom.out') zoom(1 / step);
+      else if (action === 'zoom.fit') fit();
+      else if (action === 'zoom.actual') zoom(1, undefined, undefined, 1);
+      else if (moves[action]) pan(...moves[action]);
       else return;
       event.preventDefault();
     };

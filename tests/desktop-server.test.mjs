@@ -119,11 +119,18 @@ test('desktop preferences survive a restart on a different port and reject inval
   assert.equal((await write({ theme: 'blue', boardId: board.id })).status, 400);
   assert.equal((await write({ theme: 'light', boardId: '00000000-0000-0000-0000-000000000000' })).status, 400);
   assert.equal((await write({ theme: 'light', boardId: board.id, extra: true })).status, 400);
+  // Personal shortcuts ride along, because the page's own storage starts empty on each new port.
+  const shortcuts = { version: 1, bindings: { 'group.create': ['Mod+Alt+KeyG'], 'prompt.add': [] } };
+  assert.equal((await write({ theme: 'dark', boardId: board.id, shortcuts: { version: 1, bindings: { 'group.create': 'Mod+KeyG' } } })).status, 400);
+  assert.equal((await write({ theme: 'dark', boardId: board.id, shortcuts })).status, 200);
   await stop(first.child);
   let second = await start();
   if (second.port === first.port) { await stop(second.child); second = await start(); }
   assert.notEqual(second.port, first.port);
   response = await fetch(second.url + '/api/workspace');
-  assert.deepEqual((await response.json()).desktopPreferences, { theme: 'dark', boardId: board.id });
+  assert.deepEqual((await response.json()).desktopPreferences, { theme: 'dark', boardId: board.id, shortcuts });
+  // Turning every shortcut back to the default saves the file without them, as older versions wrote it.
+  assert.equal((await fetch(second.url + '/api/desktop/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ theme: 'dark', boardId: board.id }) })).status, 200);
   await stop(second.child);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'desktop-preferences.json'), 'utf8')), { version: 2, theme: 'dark', boardId: board.id });
 });
