@@ -1,0 +1,8 @@
+/* Alt (Option) held over something a drag picks up says the drag will copy it. Only an editor's cards are .draggable,
+   and the canvas only gets data-alt-copy for editors; controls inside a card keep their own pointer. */
+.canvas[data-board-tool=select][data-alt-copy] :is(.react-flow__node.draggable, .react-flow__node.draggable :not(button, a, textarea, input, select, [contenteditable=true], .nodrag, .nodrag *), .selection-grip){cursor:copy}
+.canvas[data-duplicating=copy], .canvas[data-duplicating=copy] *{cursor:copy!important}
+/* React Flow still marks the original it picked up as dragging, but it stays where it was, so it must not look lifted. */
+.canvas[data-duplicating] .react-flow__node.dragging:not(.drag-copy) :is(.feel-inner, .group-frame){transform:none;transition:none}
+.canvas[data-duplicating] .react-flow__node.dragging:not(.drag-copy) :is(.node-card, .collapsed-node, .group-frame)::after{opacity:0}
+.canvas[data-duplicating] .react-flow__node.dragging:not(.drag-copy) .node-feedback::after{border:0}
