@@ -1,5 +1,6 @@
-import { imageNode, descriptionNode, isDescribe, isUpscale, positionRunOutput, groupRunOutputs, uniqueImageName, uniqueModelName, isModel3d } from '../graph.mjs';
+import { imageNode, descriptionNode, isDescribe, isUpscale, groupRunOutputs, uniqueImageName, uniqueModelName, isModel3d } from '../graph.mjs';
 import { boardAuthor } from './annotations.mjs';
+import { positionRunOutput } from './output-placement.mjs';
 import { boardPages, nodePage, pageField, samePage } from './pages.mjs';
 
 export const terminalRun = status => ['completed', 'failed', 'cancelled'].includes(status);
@@ -18,6 +19,7 @@ export function placeRunOutput(before, { runId, nodeId, run: current, author, fi
   if (terminalRun(current?.status) || current?.outputIds?.includes(id)) return null;
   // Copies only what this step changes; untouched nodes stay shared, so the diff skips them.
   const graph = { ...before, nodes: [...before.nodes], edges: [...before.edges], groups: before.groups.map(group => ({ ...group, nodeIds: [...group.nodeIds] })), runs: [...before.runs] };
+  // A prompt deleted mid-run leaves placement to start from its earlier results (see positionRunOutput).
   const target = graph.nodes.find(node => node.id === nodeId) || { position: { x: 0, y: 0 } };
   const run = { ...(current || { id: runId, nodeId, label: 'Recovered generation', ...pageField(nodePage(target, boardPages(graph))) }), by: boardAuthor(current?.by || author), ...fields, status: 'running', outputIds: [...(current?.outputIds || [])] };
   let node = graph.nodes.find(node => node.id === id);

@@ -1,8 +1,7 @@
 import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
-import { boardPages, defaultPageId, pageContent, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
-import { layerIndex, maxLayer, nextLayer, topLayer, validLayer } from './src/layers.mjs';
+import { boardPages, defaultPageId, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
+import { layerIndex, maxLayer, topLayer, validLayer } from './src/layers.mjs';
 import { validateSections } from './src/sections.mjs';
-import { nearestFreePosition } from './src/node-placement.mjs';
 import { validateImageEdits, generationReferences, maskInstruction } from './src/image-edits.mjs';
 import { maxModelBytes } from './src/model-assets.mjs';
 
@@ -422,33 +421,6 @@ export function textNodeSize(node, inputs = false) {
 
 // Outputs stay on the page frozen when the run was submitted, or the first page if it is gone.
 export const runOutputPage = (graph, run) => resolvePage(boardPages(graph), run.page ?? defaultPageId);
-export function positionRunOutput(node, graph, run) {
-  const page = runOutputPage(graph, run), scoped = { ...graph, ...pageContent(graph, page) };
-  if (page === defaultPageId) delete node.page; else node.page = page;
-  // Each new result appears above everything already on the board.
-  node.z = nextLayer(graph.nodes);
-  const nodes = new Map(scoped.nodes.map(item => [item.id, item]));
-  const previous = run.outputIds.map(id => nodes.get(id)).filter(Boolean);
-  if (!previous.length) return positionFirstOutput(node, scoped);
-  node.position = { x: previous[0].position.x, y: Math.max(...previous.map(item => item.position.y + nodeSize(item).height)) + 30 + captionHeight(node) };
-}
-
-// Stay beside the prompt when free; compare nearby rows and columns when its column is occupied.
-export function positionFirstOutput(node, graph) {
-  const fed = new Set((graph.edges || []).map(edge => edge.target));
-  const layoutSize = item => item.type === 'text' && !item.data?.collapsed ? textNodeSize(item, fed.has(item.id) || !!item.data?.template?.assets?.length) : nodeSize(item);
-  const bounds = graph.nodes.map(item => ({ id: item.id, x: item.position.x, y: item.position.y - captionHeight(item), width: layoutSize(item).width, height: layoutSize(item).height + captionHeight(item) }));
-  const byId = new Map(bounds.map(item => [item.id, item]));
-  for (const group of graph.groups || []) {
-    const members = group.nodeIds.map(id => byId.get(id)).filter(Boolean);
-    if (!members.length) continue;
-    const x = Math.min(...members.map(item => item.x)) - 24, y = Math.min(...members.map(item => item.y)) - 72;
-    bounds.push({ x, y, width: Math.max(...members.map(item => item.x + item.width)) - x + 24, height: Math.max(...members.map(item => item.y + item.height)) - y + 24 });
-  }
-  const size = layoutSize(node), wanted = node.position;
-  const obstacles = bounds.map(box => ({ x: box.x - 24, y: box.y - 24, width: box.width + 48, height: box.height + 96 }));
-  node.position = nearestFreePosition(wanted, size, obstacles, { minX: wanted.x, minY: wanted.y - Math.min(200, size.height + 24) });
-}
 
 // Read only image headers; usable with both browser Uint8Arrays and Node Buffers.
 export function imageSize(bytes) {

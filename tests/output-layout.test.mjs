@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { imageSize, imageNode, nodeSize, captionHeight, positionRunOutput, positionFirstOutput, validateGraph } from '../graph.mjs';
+import { imageSize, imageNode, nodeSize, captionHeight, validateGraph } from '../graph.mjs';
+import { positionRunOutput } from '../src/output-placement.mjs';
 import { alignNodes, groupBounds } from '../src/canvas.mjs';
 
 const asset = '12345678-1234-1234-1234-123456789abc.png';
@@ -66,24 +67,24 @@ test('a first output takes a nearer right column instead of falling below a tall
   const blocker = imageNode(run, asset, 0); blocker.position = { x: 470, y: 0 }; blocker.measured = { width: 310, height: 4000 };
   const graph = { nodes: [blocker], edges: [], groups: [] }, before = structuredClone(graph);
   const output = imageNode(run, asset, 0);
-  positionFirstOutput(output, graph);
+  positionRunOutput(output, graph, run);
   assert.deepEqual(output.position, { x: 804, y: 40 }); assert.deepEqual(graph, before);
   const secondColumn = { ...blocker, id: 'second', position: { x: 804, y: 0 } };
   const next = imageNode(run, asset, 0);
-  positionFirstOutput(next, { ...graph, nodes: [secondColumn, blocker] });
+  positionRunOutput(next, { ...graph, nodes: [secondColumn, blocker] }, run);
   assert.deepEqual(next.position, { x: 1138, y: 40 });
 });
 
-test('first outputs compare short downward and upward moves, preserving a free wanted position', () => {
+test('another prompt in the way sends a first output under it or, when nearer, to its right, never above the prompt', () => {
   const blocker = { id: 'block', type: 'text', position: { x: 470, y: 100 }, measured: { width: 310, height: 100 }, data: { text: '', height: 100 } };
   const output = imageNode(run, asset, 0);
-  positionFirstOutput(output, { nodes: [blocker], groups: [] });
-  assert.deepEqual(output.position, { x: 470, y: 272 });
-  const up = imageNode(run, asset, 0);
-  positionFirstOutput(up, { nodes: [{ ...blocker, position: { x: 470, y: 330 } }], groups: [] });
-  assert.deepEqual(up.position, { x: 470, y: -4 });
+  positionRunOutput(output, { nodes: [blocker], edges: [], groups: [] }, run);
+  assert.deepEqual(output.position, { x: 470, y: 248 });
+  const right = imageNode(run, asset, 0);
+  positionRunOutput(right, { nodes: [{ ...blocker, position: { x: 470, y: 330 } }], edges: [], groups: [] }, run);
+  assert.deepEqual(right.position, { x: 804, y: 40 });
   const free = imageNode(run, asset, 0);
-  positionFirstOutput(free, { nodes: [{ ...blocker, position: { x: 2000, y: 0 } }], groups: [] });
+  positionRunOutput(free, { nodes: [{ ...blocker, position: { x: 2000, y: 0 } }], edges: [], groups: [] }, run);
   assert.deepEqual(free.position, { x: 470, y: 40 });
 });
 
@@ -91,7 +92,7 @@ test('placement avoids group frames and is deterministic under obstacle reorderi
   const members = [0, 1].map(index => ({ id: `member-${index}`, type: 'text', position: { x: 450 + index * 400, y: index * 500 }, data: { text: '' } }));
   const groups = [{ id: 'g', name: 'G', nodeIds: members.map(node => node.id) }];
   const first = imageNode(run, asset, 0), second = imageNode(run, asset, 0);
-  positionFirstOutput(first, { nodes: members, groups }); positionFirstOutput(second, { nodes: [...members].reverse(), groups });
+  positionRunOutput(first, { nodes: members, edges: [], groups }, run); positionRunOutput(second, { nodes: [...members].reverse(), edges: [], groups }, run);
   assert.deepEqual(first.position, second.position);
   const frame = groupBounds(groups[0], members);
   assert.ok(first.position.x >= frame.x + frame.width || first.position.x + 310 <= frame.x || first.position.y >= frame.y + frame.height || first.position.y + 310 <= frame.y);

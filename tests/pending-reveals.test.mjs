@@ -60,15 +60,16 @@ test('real Nano Banana placements consume shown slots in arrival order when vari
   assert.equal(slots.size, 0);
 });
 
-test('a first nonzero variant preserves real placement and skips a reveal when it misses shown slots', () => {
+test('a first nonzero variant takes the first shown slot and is revealed from it', () => {
   const prompt = { id: 'prompt', type: 'text', position: { x: 30, y: 50 }, data: { text: 'A bird', aspect: .5 } };
   const run = { id: 'run', nodeId: 'prompt', status: 'running', provider: 'nano-banana', variants: 3, outputIds: [] };
   const graph = { nodes: [prompt], edges: [], groups: [], runs: [run], revision: 0 };
   const slots = new Map(runPlaceholders(graph, [run], 'page-1').nodes.map(node => [node.id, slot({ id: node.id, x: node.position.x, y: node.position.y })]));
   const next = placeRunOutput(graph, { runId: run.id, nodeId: prompt.id, run, output: { index: 2, caption: 'Bird' }, asset: 'image-2', dimensions: { width: 200, height: 100 } });
   const output = next.nodes.find(node => node.id === 'run-output-2');
-  assert.deepEqual(output.position, { x: 420, y: 730 });
-  assert.equal(matchingPlaceholder(slots, run.id, output.position, 100), undefined);
+  // Variants answer in any order; whichever arrives first sits beside the prompt, where the first placeholder was.
+  assert.deepEqual(output.position, { x: 420, y: 50 });
+  assert.equal(matchingPlaceholder(slots, run.id, output.position, 100).id, 'run-pending-0');
 });
 
 test('the reveal JSX, image readiness wiring and CSS parse without a browser or build output', () => {
