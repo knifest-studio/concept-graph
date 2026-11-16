@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { imageNode, captionHeight, nodeSize } from '../graph.mjs';
 import { expectedOutputs, positionRunOutput } from '../src/output-placement.mjs';
 import { runPlaceholders } from '../src/run-placeholders.mjs';
-import { placeRunOutput } from '../src/run-outputs.mjs';
+import { placeRunOutput, placeRunText } from '../src/run-outputs.mjs';
 import { groupBounds } from '../src/canvas.mjs';
 
 const asset = '12345678-1234-1234-1234-123456789abc.png';
@@ -86,6 +86,64 @@ test('a re-run takes the next column at the prompt’s level, past an expanded s
   let columns = board([prompt()]);
   for (let index = 0; index < 5; index++) columns = deliver({ ...columns, runs: [...columns.runs, job({ id: `run-${index}`, createdAt: `2026-11-16T10:0${index}:00.000Z` })] }, `run-${index}`, 1);
   assert.deepEqual(columns.nodes.filter(node => node.type === 'image').map(node => node.position), [{ x: 390, y: 0 }, { x: 724, y: 0 }, { x: 1058, y: 0 }, { x: 1392, y: 0 }, { x: 390, y: 358 }]);
+});
+
+test('a re-run on one of several stacked prompts stays in its row instead of going under the next prompt’s results', () => {
+  const rows = gap => {
+    const nodes = [], runs = [];
+    for (let row = 0; row < 10; row++) {
+      nodes.push(prompt(`p${row}`, 0, row * gap));
+      for (let column = 0; column < 4; column++) {
+        const id = `old-${row}-${column}`;
+        nodes.push(image(`${id}-output-0`, 390 + column * 334, row * gap, { runId: id }));
+        runs.push({ id, nodeId: `p${row}`, status: 'completed', outputIds: [`${id}-output-0`], createdAt: '2026-11-16T09:00:00.000Z' });
+      }
+    }
+    return board(nodes, { runs });
+  };
+  const tight = rows(400);
+  assert.deepEqual(placed(tight, job({ nodeId: 'p0' })), { x: 1726, y: 0 });
+  assert.deepEqual(positions(shown(tight, [job({ nodeId: 'p0' })])), [{ x: 1726, y: 0 }]);
+  // Four variants are taller than the row: they stay level with their prompt, past its results, and land on their slots.
+  const four = variants(4, { nodeId: 'p0' }), withFour = { ...tight, runs: [...tight.runs, four] };
+  assert.deepEqual(positions(shown(withFour)), [0, 1, 2, 3].map(index => ({ x: 1750, y: index * 364 })));
+  deliver(withFour, four.id, 4);
+  // A row with room under the prompt’s results keeps the re-run under the first of them.
+  assert.deepEqual(placed(rows(800), job({ nodeId: 'p0' })), { x: 390, y: 358 });
+  // Without prompts below, a long grid beside the prompt is passed on the level, not followed down.
+  const grid = [prompt()];
+  for (let row = 0; row < 30; row++) for (let column = 0; column < 4; column++) grid.push(image(`i-${row}-${column}`, 390 + column * 334, row * 358));
+  assert.deepEqual(placed(board(grid), job()), { x: 1726, y: 0 });
+});
+
+test('a description lands where its placeholder showed, which keeps room for a full description', () => {
+  const describe = prompt('p', 0, 0, { text: '', task: 'describe' }), source = image('source', -400, 0), feeds = { id: 'feeds', source: 'source', target: 'p' };
+  const run = job({ task: 'describe', provider: 'nano-banana' }), long = 'A small bird sits on a mossy branch in soft morning light. '.repeat(20);
+  const graph = board([describe, source, image('below', 390, 200)], { edges: [feeds], runs: [run] }), [slot] = shown(graph);
+  assert.deepEqual(slot.style, { width: 310, height: 310 }); assert.deepEqual(slot.position, { x: 724, y: 0 });
+  for (const text of ['A bird.', long]) assert.deepEqual(placeRunText(graph, { runId: run.id, nodeId: 'p', run, text }).nodes.find(node => node.id === 'run-output-0').position, slot.position);
+  // A run started later on a prompt just below keeps clear of that room, even when its image comes first.
+  const later = job({ id: 'later', nodeId: 'q', provider: 'nano-banana', createdAt: '2026-11-16T10:01:00.000Z' });
+  let both = board([describe, source, prompt('q', 0, 250)], { edges: [feeds], runs: [run, later] });
+  const initial = new Map(shown(both).map(node => [node.id, node.position]));
+  assert.deepEqual(initial.get('run-pending-0'), { x: 390, y: 0 });
+  both = placeRunOutput(both, { runId: 'later', nodeId: 'q', run: later, output: { index: 0 }, asset, dimensions: { width: 100, height: 100 } });
+  assert.deepEqual(both.nodes.find(node => node.id === 'later-output-0').position, initial.get('later-pending-0'));
+  both = placeRunText(both, { runId: run.id, nodeId: 'p', run, text: long });
+  assert.deepEqual(both.nodes.find(node => node.id === 'run-output-0').position, initial.get('run-pending-0'));
+});
+
+test('a 3D run keeps one model-shaped slot per connected image, stacked, and its models land on them', () => {
+  const sources = [image('i0', -400, 0), image('i1', -400, 400)], run = job({ task: 'model3d', provider: 'nano-banana' });
+  let graph = board([prompt('p', 0, 0, { text: '', task: 'model3d' }), ...sources], { edges: sources.map(node => ({ id: `${node.id}-edge`, source: node.id, target: 'p' })), runs: [run] });
+  assert.deepEqual(expectedOutputs(graph, run), [{ type: 'model', aspect: 1 }, { type: 'model', aspect: 1 }]);
+  const slots = shown(graph);
+  assert.deepEqual(slots.map(node => [node.position, node.style, node.data.status]), [0, 416].map(y => [{ x: 390, y }, { width: 310, height: 386 }, 'Generating 3D']));
+  for (const index of [0, 1]) {
+    graph = placeRunOutput(graph, { runId: run.id, nodeId: 'p', run: graph.runs.find(item => item.id === run.id), output: { index }, asset: '12345678-1234-1234-1234-123456789abc.glb', model: { name: 'Cube 3D' } });
+    const model = graph.nodes.find(node => node.id === `run-output-${index}`);
+    assert.equal(model.type, 'model'); assert.deepEqual(model.position, slots[index].position);
+  }
 });
 
 test('arrows and attached stamps never move a result; drawings and loose stamps do, level with the prompt', () => {

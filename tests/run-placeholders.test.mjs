@@ -102,7 +102,8 @@ test('describe has one text-shaped slot, no clip, and the same initial placement
   const result = pending(board, [job]);
   assert.equal(result.nodes.length, 1); assert.equal(result.nodes[0].data.seed, undefined);
   assert.equal(result.nodes[0].data.describe, true); assert.equal(result.nodes[0].data.status, 'Describing');
-  assert.deepEqual(result.nodes[0].style, { width: 310, height: 80 });
+  // Room for a description as long as the card shows, whatever text arrives.
+  assert.deepEqual(result.nodes[0].style, { width: 310, height: 310 });
   const output = descriptionNode({ ...job, target: board.nodes[0] }, 'A bird');
   positionRunOutput(output, board, job); assert.deepEqual(result.nodes[0].position, output.position);
   assert.equal(pending(board, [{ ...job, outputIds: ['description'] }]).nodes.length, 0);
