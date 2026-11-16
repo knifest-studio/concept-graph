@@ -231,15 +231,15 @@ test('GPT Image is a site generator with shared quotas and four placeholders; de
   for (const task of ['describe', 'upscale']) assert.throws(() => validateGraph(boardGraph({ task })), /GPT Image only generates images/);
 });
 
-test('changed JSX compiles and the real picker renders three cloud generators, disabled setup, and no GPT descriptions', async () => {
+test('changed JSX compiles and the real picker renders three cloud generators, setup reasons, and no GPT descriptions', async () => {
   for (const file of ['main.jsx', 'CloudWorkspace.jsx', 'TeamAccessDialog.jsx']) await transformWithEsbuild(await readFile(new URL(`../src/${file}`, import.meta.url), 'utf8'), file, { loader: 'jsx' });
   const source = (await readFile(new URL('../src/GeneratorPicker.jsx', import.meta.url), 'utf8')).replace(/import .*?;\n/g, '');
   const compiled = await transformWithEsbuild(source, 'GeneratorPicker.jsx', { loader: 'jsx', format: 'cjs' });
   const module = { exports: {} };
   new Function('module', 'exports', 'React', 'generators', 'maxVariants', 'variantPresets', 'clampVariants', 't', compiled.code)(module, module.exports, React, generators, maxVariants, variantPresets, clampVariants, translate);
-  const props = { id: 'p', generator: generators.gptImage, nano: { selectable: true, note: 'Ready' }, gpt: { selectable: false, note: 'GPT Image isn’t set up on this site' }, choose() {} };
+  const props = { id: 'p', generator: generators.gptImage, nano: { selectable: true, note: 'Ready' }, gpt: nanoState({ configured: false }, generators.gptImage), choose() {} };
   const markup = renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, generator: null }));
-  assert.match(markup, /value="nano-banana"/); assert.match(markup, /value="gpt-image" disabled/); assert.match(markup, /GPT Image isn’t set up/);
+  assert.match(markup, /value="nano-banana"/); assert.match(markup, /value="gpt-image">GPT Image · not set up/); assert.match(markup, /GPT Image isn’t set up/);
   assert.doesNotMatch(renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, describe: true })), /GPT Image/);
   setLanguage('uk');
   try {

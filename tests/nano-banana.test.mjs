@@ -4,7 +4,10 @@ import * as nodeModule from 'node:module';
 import * as Y from 'yjs';
 import { signSession, userColor } from '../cloud/auth.mjs';
 import { readFile } from 'node:fs/promises';
-import { defaultDailyImages, defaultMonthlyUsd, NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, staleSettings, staleSettingsError, variantLanes, variantLanesFor, variantRunTimeout } from '../cloud/nano-banana.mjs';
+import { defaultDailyImages, defaultMonthlyUsd, NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, readImageResponse, staleSettings, staleSettingsError, variantLanes, variantLanesFor, variantRunTimeout } from '../cloud/nano-banana.mjs';
+import { gptImageResult } from '../cloud/gpt-image.mjs';
+import { answerMemoryFactor, callMemoryBytes, expectedOutputBytes, MemoryBudget, queueWaitTimeout, roomBusy, roomMemoryBudget } from '../cloud/room-memory.mjs';
+import { setLanguage, t as translate } from '../src/i18n.mjs';
 import { clampVariants, imageSize, maxVariants, promptVariants, validateGraph, variantPresets } from '../graph.mjs';
 import { runPlaceholders } from '../src/run-placeholders.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -34,6 +37,7 @@ function png(width = 1, height = 1) {
   return bytes;
 }
 const b64 = bytes => Buffer.from(bytes).toString('base64');
+const largePng = (length, width = 1024, height = 1024) => { const bytes = new Uint8Array(length).fill(255); bytes.set(png(width, height)); return bytes; };
 const usage = { total_input_tokens: 1500, total_output_tokens: 2280, total_thought_tokens: 400, total_tokens: 4180, output_tokens_by_modality: [{ modality: 'image', tokens: 2240 }, { modality: 'text', tokens: 40 }] };
 // The shape of a completed Interaction: a thought step (which may hold a draft image) and the model's output step.
 const interaction = (images, extra = {}) => ({ id: 'interaction-1', object: 'interaction', status: 'completed', model: 'gemini-nano-banana-2.1', created: '2026-11-04T10:00:00Z', updated: '2026-11-04T10:00:20Z',
@@ -183,6 +187,41 @@ test('responses give every final image with its format, and failures become clea
   fails(200, 'nonsense', 'upstream', /unreadable response/);
 });
 
+test('lean answers retain byte spans and decode only final Nano images, including GPT b64_json', async t => {
+  const images = [largePng(6001), largePng(9011, 1536, 1024)], answer = interaction(images);
+  answer.steps[0].summary[0].data = b64(largePng(12000));
+  const body = await readImageResponse(Response.json(answer));
+  assert.equal(body.steps[0].summary[0].data, '#0');
+  assert.deepEqual(body.steps[1].content.filter(part => part.type === 'image').map(part => part.data), ['#1', '#2']);
+  // Neither decoding route for plain strings should be used by a lean answer, including its unused thought image.
+  t.mock.method(globalThis, 'atob', () => { throw new Error('Unexpected string decode'); });
+  if (Uint8Array.fromBase64) t.mock.method(Uint8Array, 'fromBase64', () => { throw new Error('Unexpected string decode'); });
+  assert.deepEqual(nanoResult(200, body).images.map(image => image.bytes), images);
+  const gpt = await readImageResponse(Response.json({ data: [{ b64_json: b64(images[0]) }] }));
+  assert.equal(gpt.data[0].b64_json, '#0');
+  assert.deepEqual(gptImageResult(200, gpt).images[0].bytes, images[0]);
+});
+
+test('lean answers fall back for escaped or invalid base64, preserve other JSON strings, and reject non-JSON', async () => {
+  const image = largePng(7000), answer = interaction([image]), encoded = JSON.stringify(answer).replaceAll('/', '\\/');
+  assert.match(encoded, /\\\//);
+  const escaped = await readImageResponse(new Response(encoded));
+  assert.equal(escaped.steps[1].content[1].data, b64(image));
+  assert.deepEqual(nanoResult(200, escaped).images[0].bytes, image);
+  answer.steps[1].content[1].data = 'A'.repeat(5000) + '!';
+  const invalid = await readImageResponse(Response.json(answer));
+  assert.equal(invalid.steps[1].content[1].data, answer.steps[1].content[1].data);
+  assert.throws(() => nanoResult(200, invalid), /unreadable image/);
+  for (const suffix of ['===', '=', 'A']) {
+    const bad = { data: [{ b64_json: 'A'.repeat(5000) + suffix }] };
+    assert.deepEqual(await readImageResponse(Response.json(bad)), bad);
+  }
+  const text = { text: 'data: "b64_json" \\ "/"', data: ['kept'], nested: { b64_json: 12 } };
+  assert.deepEqual(await readImageResponse(Response.json(text)), text);
+  assert.equal(await readImageResponse(new Response('<html>not JSON</html>')), null);
+  assert.equal(await readImageResponse(new Response('{"data":"' + 'A'.repeat(5000))), null);
+});
+
 test('cost follows the usage Google returns, with a conservative estimate when it does not', () => {
   // 1500 input tokens at $1.50/M, 2240 image tokens at $30/M, 40 text + 400 thinking tokens at $7.50/M.
   assert.equal(Math.round(nanoCost(usage, { images: 2 }) * 1e6), 72750);
@@ -201,8 +240,8 @@ test('prompts may choose site generators; unknown generator values are rejected'
 
 test('the generator menu says what Nano Banana can do for this person', () => {
   assert.deepEqual(nanoState(undefined), { selectable: true, ready: true, note: 'Uses the site’s Gemini key', budget: '', fal: true });
-  assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, note: 'Nano Banana isn’t set up on this site', budget: '', fal: true });
-  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, note: 'Not available for your account. Ask a site admin for access.', budget: '', fal: true });
+  assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, short: 'not set up', note: 'Nano Banana isn’t set up on this site', budget: '', fal: true });
+  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, short: 'no access', requestable: true, requested: false, note: 'Not available for your account. Ask a site admin for access.', budget: '', fal: true });
   const status = { configured: true, allowed: true, dailyImages: 50, usedToday: 12, monthlyUsd: 50, teamSpentUsd: 3.2 };
   assert.deepEqual(nanoState(status), { selectable: true, ready: true, note: '38 of 50 left today', budget: 'Team: $3.20 of $50 this month', fal: true });
   // Topaz and SeedVR2 need the site's fal.ai key; the status says when it is missing.
@@ -262,7 +301,7 @@ test('Nano Banana prompts start and cancel through the board API, never through 
   // settings: 1 tells the room this page shows generation settings.
   assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID), settings: 1 });
   assert.deepEqual(started, ['nano-run']);
-  doc.getMap('runs').set('nano-run', { id: 'nano-run', nodeId: 'p', status: 'running', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: user, startedAt: '2026-11-04T10:00:00.000Z' });
+  doc.getMap('runs').set('nano-run', { id: 'nano-run', nodeId: 'p', status: 'queued', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: user, startedAt: '2026-11-04T10:00:00.000Z' });
   await generation.startNano('p');
   assert.equal(calls.length, 1, 'a generating prompt is not started twice');
   assert.equal(generation.remote('nano-run'), true);
@@ -362,7 +401,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
   assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 100, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
-  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false } });
+  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false }, admins: [], requested: false });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);
@@ -392,14 +431,14 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
 
 runtimeTest('Generate places Nano Banana images like Codex outputs for everyone and records what the call cost', async t => {
   const { request, cookie, board, boardRoom, settle, files, directory } = cloudSetup(t);
-  const held = gate();
+  const held = gate(); t.after(() => held.open());
   const calls = fakeGemini(t, async () => { await held.promise; return Response.json(interaction([png(200, 100), png(100, 100)])); });
   const before = readCloudGraph(boardRoom.document);
   const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('LEAD@studio.example'), data: { nodeId: 'p' } });
   assert.equal(response.status, 202);
   const { run: { id } } = await response.json();
   const running = boardRoom.document.getMap('runs').get(id);
-  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', inputs: [{ nodeId: 'i', asset: reference, label: 'Front view', number: 1 }], provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', by: user, startedAt: 'time', createdAt: 'time' });
+  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', inputs: [{ nodeId: 'i', asset: reference, label: 'Front view', number: 1 }], provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', variantsStarted: 1, by: user, startedAt: 'time', createdAt: 'time' });
   held.open();
   await settle();
   assert.equal(calls.length, 1);
@@ -607,12 +646,169 @@ runtimeTest('sixteen variants share one request and keep at most four calls in f
   assert.equal(calls.length, 16); assert.equal(most, 4);
   // Built once: every call sends the very same headers object and the same body text.
   assert.ok(calls.every(call => call.init.headers === calls[0].init.headers && call.init.body === calls[0].init.body));
-  assert.deepEqual(seen, [4, 4, 4, 4, ...Array.from({ length: 12 }, (_, index) => index + 5)]);
+  assert.deepEqual(seen, Array.from({ length: 16 }, (_, index) => index + 1));
   const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
   assert.deepEqual([run.status, run.count, run.variants, run.variantsStarted, run.error], ['completed', 16, 16, 16, undefined]);
   assert.deepEqual(graph.groups.map(group => [group.slideshow, group.nodeIds.length]), [[true, 16]]);
   assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 16);
   validateGraph(graph);
+});
+
+runtimeTest('the Nov 16 burst shares one room budget across three people and completes all ten images', { timeout: 10000 }, async t => {
+  const { boardRoom, board, settle, files, directory } = cloudSetup(t);
+  await boardRoom.setName(board.id);
+  const small = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', medium = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png';
+  for (const [asset, bytes] of [[reference, largePng(13751912, 8192, 8192)], [small, largePng(226000)], [medium, largePng(2 * 1024 * 1024)]]) files.set(`assets/${asset}`, { bytes, size: bytes.length });
+  const before = readCloudGraph(boardRoom.document), graph = structuredClone(before);
+  graph.nodes.find(node => node.id === 'p').data.variants = 4;
+  graph.nodes.push(...['two', 'four'].map((id, index) => ({ id, type: 'text', position: { x: 800, y: index * 400 }, data: { text: id, generator: 'nano-banana', variants: index ? 4 : 2 } })),
+    { id: 'small', type: 'image', position: { x: 0, y: 0 }, data: { asset: small } }, { id: 'medium', type: 'image', position: { x: 0, y: 0 }, data: { asset: medium } });
+  graph.edges.push({ id: 'small-p', source: 'small', target: 'p' }, { id: 'medium-two', source: 'medium', target: 'two' }, { id: 'small-four', source: 'small', target: 'four' });
+  applyLocalGraph(boardRoom.document, graph, before, 'burst');
+  const held = gate(), preparing = gate(), changes = [], prepared = [];
+  t.after(() => { held.open(); preparing.open(); });
+  const prepare = boardRoom.prepareReferences.bind(boardRoom);
+  let first = true;
+  t.mock.method(boardRoom, 'prepareReferences', async (...args) => { if (first) { first = false; await preparing.promise; } const refs = await prepare(...args); prepared.push(...refs); return refs; });
+  boardRoom.document.getMap('runs').observe(event => { for (const id of event.keysChanged) { const run = event.target.get(id); if (run) changes.push({ id, status: run.status, finishedAt: run.finishedAt }); } });
+  const image = largePng(1024 * 1024);
+  let flying = 0, bytes = 0, peak = 0, most = 0;
+  const calls = fakeGemini(t, async init => {
+    const size = Buffer.byteLength(init.body);
+    flying++; bytes += size; most = Math.max(most, flying); peak = Math.max(peak, bytes + flying * answerMemoryFactor * expectedOutputBytes());
+    await held.promise; await new Promise(resolve => setImmediate(resolve));
+    flying--; bytes -= size;
+    return Response.json(interaction([image]));
+  });
+  const emails = ['lead@studio.example', 'second@studio.example', 'third@studio.example'];
+  const started = await Promise.all(['p', 'two', 'four'].map((nodeId, index) => boardRoom.startNano({ nodeId, requester: { name: `Person ${index}`, email: emails[index] } })));
+  assert.ok(started.every(result => result.run?.id));
+  await new Promise(resolve => setImmediate(resolve));
+  const queued = [...boardRoom.document.getMap('runs').values()].filter(run => run.status === 'queued');
+  const placeholders = runPlaceholders(readCloudGraph(boardRoom.document), queued, 'page-1').nodes;
+  preparing.open(); await new Promise(resolve => setImmediate(resolve));
+  held.open(); await settle();
+  t.diagnostic(`Peak weighted in-flight bytes: ${peak}; budget: ${roomMemoryBudget}; peak calls: ${most}`);
+  assert.ok(peak <= roomMemoryBudget, `burst held ${peak} weighted bytes, over ${roomMemoryBudget}`);
+  assert.ok(most < 10); assert.equal(calls.length, 10);
+  assert.ok(queued.length, 'a primary lease really waited while the first run prepared its references');
+  assert.ok(placeholders.length && placeholders.every(node => node.data.status === 'Queued'));
+  for (const queuedRun of queued) {
+    assert.equal(queuedRun.variantsStarted, 0); assert.equal(queuedRun.finishedAt, undefined);
+    assert.ok(changes.some(change => change.id === queuedRun.id && change.status === 'running' && !change.finishedAt));
+  }
+  const result = readCloudGraph(boardRoom.document);
+  for (const [index, { run: { id } }] of started.entries()) {
+    const run = result.runs.find(run => run.id === id);
+    assert.deepEqual([run.status, run.count, run.variantsStarted], ['completed', [4, 2, 4][index], [4, 2, 4][index]]);
+    for (const id of run.outputIds) assert.deepEqual(files.get(`assets/${result.nodes.find(node => node.id === id).data.asset}`).bytes, image);
+  }
+  assert.equal(emails.reduce((sum, email) => sum + directory.nanoUsage(email).usedToday, 0), 10);
+  assert.ok(prepared.length && prepared.every(reference => !Object.hasOwn(reference, 'data') && reference.size && reference.byteLength));
+  assert.equal(boardRoom.memory.used, 0); assert.equal(boardRoom.memory.queue.length, 0);
+});
+
+runtimeTest('a primary lane finishes every variant even when no extra call fits the budget', { timeout: 2000 }, async t => {
+  const { boardRoom, board, settle } = cloudSetup(t);
+  await boardRoom.setName(board.id); setVariants(boardRoom, 10);
+  boardRoom.memory = new MemoryBudget(1);
+  let flying = 0, peak = 0;
+  const calls = fakeGemini(t, async () => { flying++; peak = Math.max(peak, flying); await new Promise(resolve => setImmediate(resolve)); flying--; return Response.json(interaction([png()])); });
+  const { run: { id } } = await boardRoom.startNano({ nodeId: 'p', requester: { ...user, email: 'lead@studio.example' } });
+  await settle();
+  assert.equal(calls.length, 10); assert.equal(peak, 1);
+  assert.equal(boardRoom.document.getMap('runs').get(id).status, 'completed');
+  assert.equal(boardRoom.memory.used, 0); assert.equal(boardRoom.memory.queue.length, 0);
+});
+
+runtimeTest('cancelling a queued run sends nothing, removes its wait and refunds every reservation', async t => {
+  const { boardRoom, board, settle, directory } = cloudSetup(t);
+  await boardRoom.setName(board.id); setVariants(boardRoom, 4);
+  const held = await boardRoom.memory.acquire(roomMemoryBudget), calls = fakeGemini(t, () => { throw new Error('Must not send'); });
+  t.after(() => held.release());
+  const { run: { id } } = await boardRoom.startNano({ nodeId: 'p', requester: { ...user, email: 'lead@studio.example' } });
+  assert.equal(boardRoom.document.getMap('runs').get(id).status, 'queued');
+  assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 4);
+  boardRoom.cancelNano({ runId: id, email: 'lead@studio.example' }); await settle();
+  assert.equal(calls.length, 0); assert.equal(boardRoom.memory.queue.length, 0);
+  assert.equal(boardRoom.document.getMap('runs').get(id).status, 'cancelled');
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 0, teamSpentUsd: 0 });
+  held.release(); assert.equal(boardRoom.memory.used, 0);
+});
+
+runtimeTest('a queue wait past its own limit fails with a translated busy message and refunds everything', async t => {
+  const { boardRoom, board, settle, directory } = cloudSetup(t);
+  await boardRoom.setName(board.id); setVariants(boardRoom, 4);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const held = await boardRoom.memory.acquire(roomMemoryBudget), calls = fakeGemini(t, () => { throw new Error('Must not send'); });
+  t.after(() => held.release());
+  const { run: { id } } = await boardRoom.startNano({ nodeId: 'p', requester: { ...user, email: 'lead@studio.example' } });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(queueWaitTimeout(nanoTimeout)); await settle();
+  assert.deepEqual([boardRoom.document.getMap('runs').get(id).status, boardRoom.document.getMap('runs').get(id).error], ['failed', roomBusy]);
+  assert.equal(calls.length, 0); assert.equal(boardRoom.memory.queue.length, 0);
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 0, teamSpentUsd: 0 });
+  setLanguage('uk');
+  try { assert.equal(translate(roomBusy), 'На дошці зараз виконуються інші генерації. Запустіть промпт знову за хвилину.'); }
+  finally { setLanguage('en'); }
+});
+
+runtimeTest('a queued run gets its full execution timeout only after admission', async t => {
+  const { boardRoom, board, settle } = cloudSetup(t);
+  await boardRoom.setName(board.id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const held = await boardRoom.memory.acquire(roomMemoryBudget), calls = fakeGemini(t, hanging);
+  t.after(() => held.release());
+  const { run: { id } } = await boardRoom.startNano({ nodeId: 'p', requester: { ...user, email: 'lead@studio.example' } });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(nanoTimeout); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(boardRoom.document.getMap('runs').get(id).status, 'queued'); assert.equal(calls.length, 0);
+  held.release(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1); assert.equal(boardRoom.document.getMap('runs').get(id).status, 'running');
+  t.mock.timers.tick(nanoTimeout - 1); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(boardRoom.document.getMap('runs').get(id).status, 'running');
+  t.mock.timers.tick(1); await settle();
+  assert.match(boardRoom.document.getMap('runs').get(id).error, /took longer than 5 minutes/);
+  assert.equal(boardRoom.memory.used, 0);
+});
+
+runtimeTest('Nano, GPT, describe, both upscalers and 3D all wait on the same room budget before preparing references', async t => {
+  const { boardRoom, board, settle, directory } = cloudSetup(t, { OPENAI_API_KEY: 'openai', FAL_KEY: 'fal', SITE_OWNER_EMAIL: 'lead@studio.example' });
+  await boardRoom.setName(board.id);
+  directory.changeTeamAccess('lead@studio.example', { model3d: { email: 'lead@studio.example', allowed: true } });
+  const before = readCloudGraph(boardRoom.document), nodes = [
+    { id: 'gpt', data: { generator: 'gpt-image', imageSize: '4K' } }, { id: 'describe', data: { generator: 'nano-banana', task: 'describe' } },
+    { id: 'nano-upscale', data: { task: 'upscale', upscaler: 'nano-banana', scale: 2 } }, { id: 'fal-upscale', data: { task: 'upscale', upscaler: 'topaz', scale: 2 } },
+    { id: 'model', data: { task: 'model3d' } },
+  ].map(node => ({ ...node, type: 'text', position: { x: 0, y: 0 }, data: { text: 'Robot', ...node.data } }));
+  applyLocalGraph(boardRoom.document, { ...before, nodes: [...before.nodes, ...nodes], edges: [...before.edges, ...nodes.map(node => ({ id: `i-${node.id}`, source: 'i', target: node.id }))] }, before, 'tasks');
+  const held = await boardRoom.memory.acquire(roomMemoryBudget), calls = fakeGemini(t, () => { throw new Error('Must not send'); });
+  t.after(() => held.release());
+  const prepare = t.mock.method(boardRoom, 'prepareReferences', () => { throw new Error('Must not prepare before admission'); });
+  const started = await Promise.all(['p', ...nodes.map(node => node.id)].map(nodeId => boardRoom.startNano({ nodeId, requester: { ...user, email: 'lead@studio.example' }, settings: true })));
+  assert.ok(started.every(result => result.run?.id));
+  assert.equal(boardRoom.memory.queue.length, 6);
+  assert.ok([...boardRoom.document.getMap('runs').values()].every(run => run.status === 'queued' && run.variantsStarted === 0 && !run.finishedAt));
+  for (const { run: { id } } of started) boardRoom.cancelNano({ runId: id, email: 'lead@studio.example' });
+  await settle();
+  assert.equal(prepare.mock.callCount(), 0); assert.equal(calls.length, 0); assert.equal(boardRoom.memory.queue.length, 0);
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 0, teamSpentUsd: 0 });
+});
+
+runtimeTest('cancelling a 3D run waiting for the download lane promptly releases its primary memory lease', async t => {
+  const { boardRoom, board, settle, directory } = cloudSetup(t, { FAL_KEY: 'fal', SITE_OWNER_EMAIL: 'lead@studio.example' });
+  await boardRoom.setName(board.id);
+  directory.changeTeamAccess('lead@studio.example', { model3d: { email: 'lead@studio.example', allowed: true } });
+  const before = readCloudGraph(boardRoom.document);
+  applyLocalGraph(boardRoom.document, { ...before, nodes: [...before.nodes, { id: 'model', type: 'text', position: { x: 0, y: 0 }, data: { text: '', task: 'model3d' } }], edges: [...before.edges, { id: 'i-model', source: 'i', target: 'model' }] }, before, 'model');
+  const held = gate(); boardRoom.model3dLane = held.promise; t.after(() => held.open());
+  const calls = fakeGemini(t, () => { throw new Error('Must not send'); });
+  const { run: { id } } = await boardRoom.startNano({ nodeId: 'model', requester: { ...user, email: 'lead@studio.example' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(boardRoom.memory.used > 0);
+  boardRoom.cancelNano({ runId: id, email: 'lead@studio.example' }); await settle();
+  assert.equal(boardRoom.memory.used, 0); assert.equal(calls.length, 0);
+  assert.deepEqual(directory.nanoUsage('lead@studio.example'), { usedToday: 0, teamSpentUsd: 0 });
 });
 
 runtimeTest('cancelling many variants sends no further calls and refunds the ones that never started', async t => {
