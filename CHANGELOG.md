@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cloud team boards: 1, 2, 4, 8, 16 or up to 32 variants per prompt, run four at a time, with defaults of 100 images a day per person and $100 a month for the team; references too large for a generator go as reduced copies, and images gain Resize… and Restore original size. Everywhere: results land beside their prompt, the generations tray folds away and clears seen results, oversize uploads go up as smaller copies, shortcuts work on any keyboard layout with group/ungroup keys and personal rebinding in Settings, and Alt-drag duplicates.
+
 - Added on-demand help, keyboard shortcuts and What’s new in English and Ukrainian; clarified Settings, system themes and custom-node discovery, with cloud UI usage events.
 
 - Cloud team boards: persistent text chat with unread alerts, deletions, node links and MCP `list_chat` / `send_chat`; audio-only WebRTC voice for up to eight participants with optional Cloudflare TURN. Viewers can participate. Voice is not recorded; desktop boards are unchanged.

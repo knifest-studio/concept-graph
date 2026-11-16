@@ -272,6 +272,35 @@ runtimeTest('Generate refuses an image that cannot be reduced before reserving a
   assert.equal(readCloudGraph(room.document).runs.at(-1).status, 'completed'); assert.equal(images.calls.length, 1);
 });
 
+// Variants build one request from the prepared references and send it in every call; preparing them happens once per
+// run, before the first call.
+runtimeTest('sixteen variants reduce their reference once and send that same copy in every call', async t => {
+  const database = new DatabaseSync(':memory:'); t.after(() => database.close());
+  const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
+  const r2 = storage(), images = fakeImages(({ transforms }) => jpeg(transforms[0].width, Math.round(transforms[0].width * 9 / 16))), reads = new Map(), get = r2.binding.get;
+  r2.binding.get = (key, options) => { reads.set(key, (reads.get(key) || 0) + 1); return get(key, options); };
+  let directory;
+  const env = { GEMINI_API_KEY: 'test-key', NANO_BANANA_ALLOWED: '@studio.example', FILES: r2.binding, IMAGES: images.binding, Directory: { idFromName: name => name, get: () => directory } };
+  directory = new Directory({ storage: { sql } }, env);
+  const room = roomWith(t, env), requester = { name: 'Lead', email: 'lead@studio.example' };
+  room.onSave = async () => {};
+  const waits = []; room.ctx.waitUntil = promise => waits.push(promise);
+  const graph = { nodes: [{ id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A courier robot', generator: 'nano-banana', variants: 16 } }, { id: 'i', type: 'image', position: { x: -400, y: 0 }, data: { asset: hero, caption: 'Hero' } }],
+    edges: [{ id: 'e', source: 'i', target: 'p' }], groups: [], runs: [] };
+  applyLocalGraph(room.document, graph, { nodes: [], edges: [], groups: [], runs: [] }, 'seed');
+  const bodies = []; t.mock.method(globalThis, 'fetch', async (url, init) => { bodies.push(init.body); return Response.json({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'image', mime_type: 'image/png', data: Buffer.from(png(64, 64)).toString('base64') }] }], usage: { total_input_tokens: 100, total_output_tokens: 1120 } }); });
+  r2.files.set(`assets/${hero}`, { bytes: jpeg(7680, 4320), size: 12 * MB });
+  assert.ok((await room.startNano({ nodeId: 'p', requester })).run); await Promise.all(waits);
+  assert.equal(bodies.length, 16); assert.equal(new Set(bodies).size, 1, 'every variant sends the same body');
+  assert.equal(images.calls.length, 1, 'the reference is reduced once');
+  const derived = [...reads.keys()].filter(key => key.startsWith('derived/'));
+  assert.equal(derived.length, 1); assert.equal(reads.get(derived[0]), 1, 'the reduced copy is read once for the whole run');
+  assert.deepEqual(imageSize(Buffer.from(JSON.parse(bodies[0]).input.find(part => part.type === 'image').data, 'base64')), { width: 3072, height: 1728 });
+  const run = readCloudGraph(room.document).runs[0];
+  assert.equal(run.status, 'completed'); assert.equal(run.outputIds.length, 16);
+  assert.equal(directory.nanoUsage(requester.email).usedToday, 16);
+});
+
 test('images for Codex go through the browser copy one at a time, and the original is sent when no copy is made', async () => {
   let active = 0, most = 0;
   const shrink = async blob => { active++; most = Math.max(most, active); await new Promise(resolve => setTimeout(resolve, 5)); active--; const bytes = new Uint8Array(await blob.arrayBuffer()); if (bytes[0] === 2) throw new Error('decode failed'); return bytes[0] === 1 ? new Blob([new Uint8Array([9])]) : null; };

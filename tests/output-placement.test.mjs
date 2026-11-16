@@ -68,6 +68,13 @@ test('sixteen variants stay in one column beside their prompt', () => {
   assert.deepEqual(positions(outputs(deliver(graph, run.id, 16), run.id)), Array.from({ length: 16 }, (_, index) => ({ x: 390, y: index * 364 })));
 });
 
+test('the largest run, 32 variants, stays in one column, its slots past the started calls queued', () => {
+  const run = variants(32, { variantsStarted: 4 }), graph = board([prompt()], { runs: [run] }), slots = shown(graph), column = Array.from({ length: 32 }, (_, index) => ({ x: 390, y: index * 364 }));
+  assert.deepEqual(positions(slots), column);
+  assert.deepEqual(slots.map(node => node.data.status), [...Array(4).fill('Generating'), ...Array(28).fill('Queued')]);
+  assert.deepEqual(positions(outputs(deliver(graph, run.id, 32), run.id)), column);
+});
+
 test('a re-run takes the next column at the prompt’s level, past an expanded slideshow or only a folded one’s card', () => {
   let graph = deliver(board([prompt()], { runs: [variants(4)] }), 'run', 4);
   assert.equal(graph.groups.length, 1); assert.equal(graph.groups[0].collapsed, false);
