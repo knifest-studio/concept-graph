@@ -8,7 +8,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
+import { generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
@@ -30,6 +30,7 @@ import { CopyCustomNodes } from './CopyCustomNodes.jsx';
 import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDiscovery } from './custom-node-discovery.mjs';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
 import { ZoomableImage } from './ImageZoom.jsx';
+import { RunInputs } from './RunInputs.jsx';
 import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
 import { modelFile, modelExtension, modelInputAccept, groupModelFiles, checkModelBatch, checkModelFile, modelPoster, supportedModelFormats } from './model-upload.mjs';
 import { ImageEditor } from './ImageEditor.jsx';
@@ -53,6 +54,7 @@ import { bindingLabel, matchShortcut, platformIsMac, shortcutHint, withShortcut 
 import { getShortcutOverrides, replaceShortcutOverrides, savedShortcuts, subscribeShortcutOverrides } from './shortcut-preferences.mjs';
 import { useShortcutOverrides } from './useShortcutOverrides.jsx';
 import { installBackdropClose } from './backdrop-close.mjs';
+import { toastRoom } from './toast-room.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx';
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
@@ -981,6 +983,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const remoteGroups = useRef({ version: 0, added: new Map() });
   const remoteCaptions = useRef({ version: 0, added: new Map() });
   const mouse = useRef({ x: innerWidth / 2, y: innerHeight / 2 }), fileInput = useRef(null), modelInput = useRef(null), toastTimer = useRef(null);
+  const keepToastRoom = useMemo(() => toastRoom(), []);
   const saveFn = useRef(null);
   const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
   const refreshTemplates = useCallback(async () => {
@@ -2764,6 +2767,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const viewNode = viewId ? nodes.find(node => node.id === viewId && node.type === 'image') : undefined;
   const viewRun = runs.find(run => run.id === viewNode?.data.runId);
   const viewInputs = viewRun?.snapshot?.filter(node => node.id !== viewRun.nodeId) || [];
+  // Cloud runs list their images instead of a snapshot; older ones list nothing, and nothing is guessed for them.
+  const viewRunInputs = cloud ? runInputList(viewRun) : undefined;
   const viewInfo = viewNode && imageInfo(viewNode, runs, viewSize?.asset === viewNode.data.asset ? viewSize : undefined);
   const { selectedCount, canGroup } = useMemo(() => {
     const selectedNodes = scoped.nodes.filter(n => n.selected), ids = new Set(selectedNodes.map(node => node.id));
@@ -2958,12 +2963,14 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     }}/>}
     {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">{t('Connect your ChatGPT account')}</h2><p>{t('Sign in to generate images with your Codex account. Your boards and images stay on this computer.')}</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>{t('Sign in with ChatGPT')}</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>{t('Not now')}</button></div></div>}
     {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">{t('Sign in with ChatGPT')}</h2><p>{t('Continue in your browser to connect your account. Return here when you finish.')}</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">{t('Continue in browser')}</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>{t('Cancel')}</button></div></div>}
-    {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
+    {toast && <div className="toast" role="status" ref={keepToastRoom}>{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
     {modelView && nodes.some(node => node.id === modelView.id && node.type === 'model') && <ModelDialog key={modelView.id} node={nodes.find(node => node.id === modelView.id)} orbit={modelView.orbit} assetUrl={assetUrl} onClose={() => setModelView(null)} save={saveModelView} readOnly={readOnly} Icon={Icon}/>}
-    {viewNode && !imageEdit && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" onClick={event => event.stopPropagation()}>
-      <button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button>
+    {/* The close button sits in its own strip above the scrolling details (beside the image on a wide screen, under it
+        on a phone), so no text can scroll beneath it. The card is keyed by image so opening an input focuses Close again. */}
+    {viewNode && !imageEdit && <div className="lightbox" role="dialog" aria-modal="true" aria-label={t('Image details')} onClick={() => setViewId(null)}><div className="lightbox-card" key={viewNode.id} onClick={event => event.stopPropagation()}>
+      <header className="lightbox-head"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span><button className="lightbox-close icon-button" autoFocus aria-label={t('Close image')} onClick={() => setViewId(null)}><Icon name="close"/></button></header>
       <ZoomableImage key={viewNode.data.asset} src={assetUrl(viewNode.data.asset)} crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName(viewNode)} onLoad={size => setViewSize({ asset: viewNode.data.asset, ...size })}/>
-      <div className="lightbox-details"><span className="eyebrow">{viewInfo.kind === 'generated' ? t('GENERATED CONCEPT') : t('UPLOADED REFERENCE')}</span>
+      <div className="lightbox-details">
         {viewInfo.author && <div className="image-info-author"><span className="detail-label">{viewInfo.kind === 'generated' ? t('Generated by') : t('Added by')}</span><AuthorBadge author={viewInfo.author}/></div>}
         {viewInfo.caption && <h3 className="image-info-title">{viewInfo.caption}</h3>}
         {viewInfo.rows.length > 0 && <dl className="image-info">{viewInfo.rows.map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}{row.copy && <button type="button" className="image-info-copy" aria-label={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} data-tooltip={row.copy === 'id' ? t('Copy node ID') : t('Copy file name')} onClick={() => copyText(row.value, row.copy === 'id' ? t('ID copied.') : t('File name copied.'))}><Icon name="copy" size={13}/></button>}{row.note && <small>{row.note}</small>}</dd></div>)}</dl>}
@@ -2972,6 +2979,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
           <div className="run-inputs">{viewInputs.length ? viewInputs.map((node, index) => node.type === 'image'
             ? <img key={node.id} src={assetUrl(node.data.asset)} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={t('Input image {number}', { number: index + 1 })} loading="lazy"/>
             : <p key={node.id}>{node.data.text}</p>) : <p>{t('No connected inputs')}</p>}</div></>}
+          {cloud && viewRunInputs && <RunInputs inputs={viewRunInputs} canOpen={id => nodes.some(node => node.id === id && node.type === 'image')} open={setViewId} assetUrl={assetUrl} Icon={Icon}/>}
           {viewRun.snapshot?.filter(node => node.type === 'text' && node.data.template).map(node => <div className="run-template" key={node.id}>
             <span className="detail-label">{t('Custom node: {name}', { name: node.data.template.name })}</span>
             {node.data.template.instructions && <p>{node.data.template.instructions}</p>}
@@ -2980,8 +2988,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         <div className="lightbox-actions">{cloud && !readOnly && <><button type="button" onClick={() => editImage(viewNode.id, 'crop')}>{t('Crop')}</button><button type="button" onClick={() => editImage(viewNode.id, 'mask')}>{viewNode.data.mask ? t('Edit mask') : t('Mask')}</button><button type="button" onClick={() => editImage(viewNode.id, 'resize')}>{t('Resize…')}</button></>}<button data-tooltip={t('Download original image')} onClick={() => downloadImage(originalAsset(viewNode.data))}><Icon name="download" size={17}/> {t('Download original')}</button></div>
       </div>
     </div></div>}
-  </div>{uploading && !toast && <div className="toast" role="status">{t('Uploading files…')}</div>}{imageEdit && !readOnly && (imageEdit.mode === 'resize' ? <ResizeDialog key={`${imageEdit.node.id}:resize`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>
-    : <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>)} {mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
+  </div>{uploading && !toast && <div className="toast" role="status" ref={keepToastRoom}>{t('Uploading files…')}</div>}{imageEdit && !readOnly && (imageEdit.mode === 'resize' ? <ResizeDialog key={`${imageEdit.node.id}:resize`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>
+    : <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>)} {mcpBusy && <div className="toast" role="status" ref={keepToastRoom}>{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [

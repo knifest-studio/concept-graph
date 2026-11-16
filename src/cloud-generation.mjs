@@ -1,5 +1,5 @@
 import { getState } from 'yjs';
-import { collectInputs, generationSettings, imageSize, isSiteGenerator } from '../graph.mjs';
+import { collectInputs, generationSettings, imageSize, isSiteGenerator, runInputRecord } from '../graph.mjs';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { t } from './i18n.mjs';
@@ -63,7 +63,8 @@ export class CloudGeneration {
     if (task === 'model3d') throw new Error('3D generation runs on the site, not in Codex.');
     if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
     if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
-    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), ...generationSettings, ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
+    // The images the run is given, for its results' details (a teammate's helper refreshes them when it takes the run).
+    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), inputs: runInputRecord(graph, nodeId), ...generationSettings, ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
     if (owner !== undefined) {
       if (this.sharing?.using()?.to !== owner) throw new Error(t('Your teammate’s Codex is no longer available. Ask for access again.'));
@@ -207,9 +208,11 @@ export class CloudGeneration {
     try {
       let body;
       try {
-        // Inputs are read now, from the board as it is when this helper takes the run.
-        const { prompt, images, target, task } = collectInputs(this.read(), run.nodeId);
+        // Inputs are read now, from the board as it is when this helper takes the run, and its record follows them.
+        const graph = this.read(), { prompt, images, target, task } = collectInputs(graph, run.nodeId);
         if (task && !this.can(task)) throw new Error(outdatedHelper);
+        const inputs = runInputRecord(graph, run.nodeId), current = this.doc.getMap('runs').get(run.id);
+        if (current && !terminal(current.status) && JSON.stringify(current.inputs) !== JSON.stringify(inputs)) this.setRun({ ...current, inputs });
         body = { jobId: run.id, boardId: this.boardId, nodeId: run.nodeId, prompt, labelOutputs: target.data.labelOutputs, ...(task ? { task } : {}), images: await this.inputs(images) };
       } catch (error) { if (this.ready()) this.settle(run.id, { status: 'failed', error: error.message || 'Could not prepare this generation.' }); return; }
       if (terminal(this.doc.getMap('runs').get(run.id)?.status)) return;

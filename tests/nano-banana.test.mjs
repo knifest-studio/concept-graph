@@ -395,7 +395,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   assert.equal(response.status, 202);
   const { run: { id } } = await response.json();
   const running = boardRoom.document.getMap('runs').get(id);
-  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', by: user, startedAt: 'time', createdAt: 'time' });
+  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', inputs: [{ nodeId: 'i', asset: reference, label: 'Front view' }], provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', by: user, startedAt: 'time', createdAt: 'time' });
   held.open();
   await settle();
   assert.equal(calls.length, 1);
@@ -1055,4 +1055,31 @@ runtimeTest('a 3D thumbnail that fails to store falls back to the source poster'
   });
   const started = await app.boardRoom.startNano({ nodeId: '3d', requester: { ...user, email: 'lead@studio.example' } }); await app.settle();
   const graph = readCloudGraph(app.boardRoom.document); assert.equal(graph.runs.find(run => run.id === started.run.id).status, 'completed'); assert.equal(graph.nodes.find(node => node.data.runId === started.run.id).data.poster, reference);
+});
+
+runtimeTest('site runs record the images they were given: prompts with masks and custom node references, descriptions, upscales and 3D', async t => {
+  const { boardRoom, board, files, settle } = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'fal-test-key' });
+  await boardRoom.setName(board.id);
+  const marked = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', style = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.png';
+  for (const asset of [marked, style]) files.set(`assets/${asset}`, { bytes: png(640, 480), size: 33 });
+  const before = readCloudGraph(boardRoom.document), next = structuredClone(before);
+  next.nodes.find(node => node.id === 'c').data.template.assets = [style];
+  next.nodes.find(node => node.id === 'i').data.mask = { asset: reference, marked, base: reference, source: reference };
+  for (const task of ['describe', 'upscale', 'model3d']) {
+    next.nodes.push({ id: task, type: 'text', position: { x: 0, y: 600 }, data: { text: '', task } });
+    next.edges.push({ id: `i-${task}`, source: 'i', target: task });
+  }
+  applyLocalGraph(boardRoom.document, next, before, 'seed');
+  // Every outside call fails; the list is written when the run starts.
+  t.mock.method(globalThis, 'fetch', async () => new Response('offline', { status: 503 }));
+  const requester = { ...user, email: 'lead@studio.example' }, front = { nodeId: 'i', asset: reference, label: 'Front view' }, recorded = {};
+  for (const nodeId of ['p', 'describe', 'upscale', 'model3d']) {
+    const started = await boardRoom.startNano({ nodeId, requester });
+    assert.ok(started.run, `${nodeId}: ${started.error}`);
+    recorded[nodeId] = boardRoom.document.getMap('runs').get(started.run.id).inputs;
+  }
+  assert.deepEqual(recorded, { p: [{ asset: style, template: 'Style' }, { ...front, mask: true }], describe: [front], upscale: [front], model3d: [front] });
+  await settle();
+  // The list survives the run's later writes.
+  for (const run of boardRoom.document.getMap('runs').values()) assert.deepEqual(run.inputs, recorded[run.nodeId]);
 });

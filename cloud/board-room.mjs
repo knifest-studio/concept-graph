@@ -4,7 +4,7 @@ import { boardStats } from './board-stats.mjs';
 import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, variantLanes, variantRunTimeout } from './nano-banana.mjs';
 import { gptImageCost, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from './gpt-image.mjs';
-import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
+import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, runInputRecord, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
@@ -368,8 +368,9 @@ export class BoardRoom extends YServer {
     if (model3d ? !await this.directory().model3dAllowed(requester.email) : !await this.directory().nanoAllowed(requester.email)) return { error: model3d ? '3D generation isn’t available for your account. Ask a site admin for access.' : `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
     const busy = () => this.nanoStarting.has(nodeId) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run));
     if (busy()) return { error: 'This prompt is already generating.', status: 409 };
-    let request;
-    try { request = model3d ? model3dRequest(graph, nodeId) : isUpscale(node) ? upscaleRequest(graph, nodeId) : gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); }
+    // `inputs` lists the images the run is given, for its results' details; it is read before anything is reserved.
+    let request, inputs;
+    try { request = model3d ? model3dRequest(graph, nodeId) : isUpscale(node) ? upscaleRequest(graph, nodeId) : gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); inputs = runInputRecord(graph, nodeId); }
     catch (cause) { return { error: cause.message, status: 400 }; }
     // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
     // image per connected image, each reserved at the largest size it could come out.
@@ -401,7 +402,7 @@ export class BoardRoom extends YServer {
         reservations.push(reserved.reservation);
       }
       const task = model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...(variants && calls > variantLanes ? { variantsStarted: variantLanes } : {}), ...task };
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), inputs, provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...(variants && calls > variantLanes ? { variantsStarted: variantLanes } : {}), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {

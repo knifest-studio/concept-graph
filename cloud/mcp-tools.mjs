@@ -101,7 +101,7 @@ function setGenerator(data, value) { if (Object.values(generators).includes(valu
 function setVariants(data, value) { if (value > 1) data.variants = value; else delete data.variants; }
 // What the agent reads: every item with its page, and nodes with the size the canvas gives them before measuring.
 const shownNode = (item, pages) => ({ ...item, page: nodePage(item, pages), size: sizeOf(item) });
-const runBrief = ({ snapshot, prompt, images, target, diagnostics, ...run }) => run;
+const runBrief = ({ snapshot, prompt, images, inputs, target, diagnostics, ...run }) => run;
 const onPage = ({ page, ...item }) => ({ ...item, ...(page === undefined ? {} : pageField(page)) });
 
 // Deleted nodes take their attached stamps along; arrows that held on to them keep that end where it was.

@@ -155,6 +155,19 @@ test('a teammate generates through the owner helper and the images are credited 
   ownerDoc.destroy(); requesterDoc.destroy();
 });
 
+test('a teammate’s run records its images, and the owner’s helper refreshes them from the board it reads', async () => {
+  const { ownerDoc, requesterDoc, helper, ownerJobs, requesterJobs, grant, settled } = board();
+  grant(); await requesterJobs.start('p', ownerDoc.clientID);
+  assert.deepEqual(readCloudGraph(ownerDoc).runs[0].inputs, [{ nodeId: 'i', asset, label: 'Reference' }]);
+  // Renamed before the owner's helper takes the run: the record follows what was sent.
+  requesterDoc.getMap('nodes').get('i').get('data').set('caption', 'Front view');
+  await ownerJobs.tick(); await settled();
+  assert.equal(helper.calls.filter(call => call[1] === 'POST' && call[0] === '/api/cloud-jobs').length, 1);
+  const run = readCloudGraph(requesterDoc).runs[0];
+  assert.deepEqual(run.inputs, [{ nodeId: 'i', asset, label: 'Front view' }]); assert.equal(run.delegate.started, true);
+  ownerDoc.destroy(); requesterDoc.destroy();
+});
+
 test('the requester cancels on the board and the owner helper stops the job', async () => {
   const { ownerDoc, requesterDoc, helper, ownerJobs, requesterJobs, grant, settled } = board();
   grant(); await requesterJobs.start('p', ownerDoc.clientID);
