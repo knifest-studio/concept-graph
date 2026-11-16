@@ -51,6 +51,107 @@ export const clampVariants = value => Math.min(maxVariants, Math.max(1, Math.rou
 export const promptVariants = node => Number.isInteger(node?.data?.variants) && node.data.variants >= 2 && node.data.variants <= maxVariants ? node.data.variants : 1;
 export const nanoModel = 'gemini-nano-banana-2.1';
 export const gptImageModel = 'gpt-image-2.5-flare';
+
+// Generation settings on an image prompt. Each is its own optional top-level data field, so teammates changing different
+// settings both keep their change (cloud nodes store every data field as one Yjs value), and an absent field is the
+// generator's own default, exactly as prompts generated before settings existed. Switching generator keeps every value;
+// one the new generator cannot use stays stored, is shown dimmed and is never sent.
+// Shapes as width:height. Nano Banana 2.1 draws all of them (https://aistudio.google.com/docs/image-generation, read
+// 2026-11-16); GPT Image keeps to 1:3–3:1 (https://developers.openai.com/api/reference/resources/images).
+export const aspectRatios = Object.freeze(['1:1', '3:4', '4:3', '9:16', '16:9', '2:3', '3:2', '4:5', '5:4', '21:9', '1:4', '4:1', '1:8', '8:1']);
+export const nanoOnlyRatios = Object.freeze(['1:4', '4:1', '1:8', '8:1']);
+export const imageSizes = Object.freeze(['1K', '2K', '4K']);
+// Absent is each provider's middle level: Nano Banana thinks at medium, GPT Image renders at medium quality.
+export const nanoThinkingLevels = Object.freeze(['minimal', 'high']);
+export const gptQualities = Object.freeze(['low', 'high']);
+export const imageBackgrounds = Object.freeze(['transparent']);
+export const generationFields = Object.freeze({ aspectRatio: aspectRatios, imageSize: imageSizes, nanoThinking: nanoThinkingLevels, gptQuality: gptQualities, background: imageBackgrounds });
+const generationErrors = { aspectRatio: 'Invalid aspect ratio.', imageSize: 'Invalid output size.', nanoThinking: 'Invalid thinking level.', gptQuality: 'Invalid image quality.', background: 'Invalid image background.' };
+export const codexGenerator = 'codex';
+export const generatorOf = node => isSiteGenerator(node?.data?.generator) ? node.data.generator : codexGenerator;
+// Only image prompts have settings: describe, upscale and 3D nodes keep their own controls.
+export const takesGenerationSettings = node => node?.type === 'text' && node.data?.task === undefined;
+export const requestedGeneration = data => Object.fromEntries(Object.entries(generationFields).filter(([key, values]) => values.includes(data?.[key])).map(([key]) => [key, data[key]]));
+// A ratio as an image node's aspect (height / width).
+export const ratioAspect = ratio => { const [width, height] = String(ratio ?? '').split(':').map(Number); return width > 0 && height > 0 ? height / width : undefined; };
+// What each generator does with each setting. `shown` lists the rows its settings offer, in order; a stored value in a
+// row it does not show (GPT Image's quality on a Nano Banana prompt) is kept and ignored.
+const gptRatios = aspectRatios.filter(ratio => !nanoOnlyRatios.includes(ratio));
+export const generationCapabilities = Object.freeze({
+  [generators.nanoBanana]: Object.freeze({ shown: ['aspectRatio', 'imageSize', 'nanoThinking', 'background'], aspectRatio: aspectRatios, imageSize: imageSizes, nanoThinking: nanoThinkingLevels, gptQuality: [], background: [] }),
+  // OpenAI calls sizes above 2560×1440 experimental.
+  [generators.gptImage]: Object.freeze({ shown: ['aspectRatio', 'imageSize', 'gptQuality', 'background'], aspectRatio: gptRatios, imageSize: imageSizes, experimental: ['4K'], nanoThinking: [], gptQuality: gptQualities, background: imageBackgrounds }),
+  // Codex's image tool takes only a prompt and a transparent-background flag (openai/codex rust-v0.163.0,
+  // codex-rs/ext/image-generation/src/tool.rs): the shape is a request in the prompt, and the size is its own (~1.5 MP).
+  [codexGenerator]: Object.freeze({ shown: ['aspectRatio', 'imageSize', 'background'], guidance: true, aspectRatio: gptRatios, imageSize: [], nanoThinking: [], gptQuality: [], background: imageBackgrounds }),
+});
+// Why a stored setting is not used; the interface translates these.
+export const generationReasons = Object.freeze({
+  nanoOnly: 'Only Nano Banana makes this shape.',
+  masked: 'A masked edit keeps the shape of the image it changes.',
+  codexSize: 'Codex picks the size (~1.5 MP). Add an Upscale node for 2K/4K.',
+  nanoBackground: 'Nano Banana makes JPEG images, which cannot be transparent.',
+  thinking: 'Only Nano Banana has a thinking setting.',
+  quality: 'Only GPT Image has a quality setting.',
+});
+const unsupportedReasons = { aspectRatio: generationReasons.nanoOnly, imageSize: generationReasons.codexSize, nanoThinking: generationReasons.thinking, gptQuality: generationReasons.quality, background: generationReasons.nanoBackground };
+
+// GPT Image 2.5 Flare takes any width × height in multiples of 16, 1:3 to 3:1, edges up to 3840 and 655,360 to 8,294,400
+// pixels (https://developers.openai.com/api/docs/guides/image-generation, read 2026-11-16). 1K and 2K aim at the square's
+// pixel count; 4K is the largest the limits allow.
+export const gptSizeLimits = Object.freeze({ step: 16, maxRatio: 3, maxEdge: 3840, minPixels: 655360, maxPixels: 8294400 });
+export function gptImagePixels(aspect, imageSize) {
+  const { step, maxRatio, maxEdge, minPixels, maxPixels } = gptSizeLimits;
+  const ratio = Math.min(maxRatio, Math.max(1 / maxRatio, Number.isFinite(aspect) && aspect > 0 ? 1 / aspect : 1));
+  const target = imageSize === '4K' ? maxPixels : imageSize === '2K' ? 2048 * 2048 : 1024 * 1024;
+  let width = Math.sqrt(target * ratio), height = width / ratio;
+  const fit = Math.min(1, maxEdge / Math.max(width, height));
+  width = Math.min(maxEdge, Math.round(width * fit / step) * step); height = Math.min(maxEdge, Math.round(height * fit / step) * step);
+  // Rounding may pass a limit by one step; take it back from the side that passed it.
+  while (width * height > maxPixels) { if (width >= height) width -= step; else height -= step; }
+  while (width / height > maxRatio) width -= step;
+  while (height / width > maxRatio) height -= step;
+  while (width * height < minPixels) { if (width <= height) width += step; else height += step; }
+  return { width, height };
+}
+
+/**
+ * What one generator does with a prompt's settings: `requested` (what is stored), `applied` (what is used) and, for each
+ * stored value not used, `unsupported[field]`, the reason. The board room, the Codex prompt, MCP and the interface all
+ * read this, so they agree. `referenceSize` is the edited image's pixel size (the shape GPT Image keeps by default) and
+ * `mask` whether a masked edit is sent.
+ */
+export function resolveGeneration(node, generator = generatorOf(node), { referenceSize, mask = false } = {}) {
+  const requested = takesGenerationSettings(node) ? requestedGeneration(node.data) : {}, capabilities = generationCapabilities[generator] || generationCapabilities[codexGenerator];
+  const applied = {}, unsupported = {};
+  for (const [key, value] of Object.entries(requested)) {
+    // GPT Image edits a masked image in place, so its output keeps that image's shape.
+    const reason = !capabilities[key].includes(value) ? unsupportedReasons[key] : key === 'aspectRatio' && mask && generator === generators.gptImage ? generationReasons.masked : null;
+    if (reason) unsupported[key] = reason; else applied[key] = value;
+  }
+  const result = { generator, requested, applied, unsupported, ...(applied.aspectRatio ? { aspect: ratioAspect(applied.aspectRatio) } : {}) };
+  if (generator === generators.nanoBanana) {
+    const format = { ...(applied.aspectRatio ? { aspect_ratio: applied.aspectRatio } : {}), ...(applied.imageSize ? { image_size: applied.imageSize } : {}) };
+    result.nano = { ...(Object.keys(format).length ? { format: { type: 'image', ...format } } : {}), ...(applied.nanoThinking ? { config: { thinking_level: applied.nanoThinking } } : {}) };
+  } else if (generator === generators.gptImage) {
+    // Without a chosen shape or size the request keeps today's three preset sizes (cloud/gpt-image.mjs).
+    const shape = result.aspect ?? (referenceSize?.width > 0 && referenceSize?.height > 0 ? referenceSize.height / referenceSize.width : undefined);
+    const pixels = applied.aspectRatio || applied.imageSize ? gptImagePixels(shape, applied.imageSize) : undefined;
+    result.gpt = { quality: applied.gptQuality || 'medium', ...(pixels ? { size: `${pixels.width}x${pixels.height}`, megapixels: pixels.width * pixels.height / 1e6 } : {}), ...(applied.background ? { background: applied.background } : {}) };
+  } else result.codex = { lines: codexSettingLines(applied) };
+  return result;
+}
+
+// A run keeps the settings its prompt asked for and those its generator used, for history and for the shape of its
+// pending cards; a prompt without settings adds nothing, as before settings existed.
+export const runSettings = generation => generation && Object.keys(generation.requested).length ? { settings: { requested: generation.requested, applied: generation.applied } } : {};
+
+const orientation = aspect => aspect === 1 ? 'square' : aspect < 1 ? 'landscape, wider than tall' : 'portrait, taller than wide';
+// Codex hears its settings as part of the request; the image tool itself takes only the transparent-background flag.
+export const codexSettingLines = applied => [
+  applied.aspectRatio ? `Aspect ratio: make each image ${applied.aspectRatio} (${orientation(ratioAspect(applied.aspectRatio))}).` : '',
+  applied.background === 'transparent' ? 'Background: make each image with a transparent background (call the image tool with transparent_background).' : '',
+].filter(Boolean);
 // Describe nodes without Codex use a small Gemini model with image input on the same site key.
 export const describeModel = 'gemini-3.5-flash-lite';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
@@ -136,6 +237,7 @@ export function validateGraph(value) {
     }
     if (node.type === 'text' && node.data.scale !== undefined && ![2, 4].includes(node.data.scale)) throw new Error('Invalid upscale size.');
     if (node.type === 'text' && node.data.variants !== undefined && (!Number.isInteger(node.data.variants) || node.data.variants < 2 || node.data.variants > maxVariants)) throw new Error('Invalid number of variants.');
+    if (node.type === 'text') for (const [key, values] of Object.entries(generationFields)) if (node.data[key] !== undefined && !values.includes(node.data[key])) throw new Error(generationErrors[key]);
     if (node.type === 'text' && node.data.height !== undefined && (!Number.isFinite(node.data.height) || node.data.height < 60 || node.data.height > 4000)) throw new Error('Invalid prompt height.');
     if (node.type === 'image' && !assetPattern.test(node.data?.asset || '')) throw new Error('Invalid image asset.');
     if (node.type === 'image') validateImageEdits(node.data);
@@ -331,6 +433,8 @@ export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
     imageAttachments(attachments),
     `FINAL REQUEST:\n${promptText(target)}`,
     maskInstruction(images, maskInput),
+    // The prompt's own settings, as Codex can follow them; a plain-text block, so helpers of any version pass it on.
+    resolveGeneration(target, codexGenerator).codex.lines.join('\n'),
     'Return actual images with the built-in image tool. If multiple images are requested, generate each separately. Do not use a paid API fallback.',
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
@@ -415,12 +519,14 @@ export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node
   : node.type === 'model' ? { width: 310, height: 386 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
-// Shared with the canvas, so a server can reserve a prompt's text and Inputs row without browser measurements.
+// An image prompt shows its settings row (with the variants on site generators) under the text.
+export const promptRowHeight = node => takesGenerationSettings(node) ? 28 : 0;
+// Shared with the canvas, so a server can reserve a prompt's text, settings row and Inputs row without browser measurements.
 export function textNodeSize(node, inputs = false) {
   if (isModel3d(node)) return { width: 310, height: 180 };
   if (node.data?.height) return { width: 310, height: node.data.height };
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);
-  return { width: 310, height: Math.min(310, Math.round(58 + 22.1 * Math.min(lines, 400) + (inputs ? 21.4 : 0))) };
+  return { width: 310, height: Math.min(310, Math.round(58 + 22.1 * Math.min(lines, 400) + promptRowHeight({ type: 'text', ...node }) + (inputs ? 21.4 : 0))) };
 }
 
 // Outputs stay on the page frozen when the run was submitted, or the first page if it is gone.

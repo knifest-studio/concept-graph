@@ -18,6 +18,9 @@ test('run details show recorded agent activity and handle older or malformed boa
     assert.match(html, /Text sent to agent/);
     assert.match(html, /Attached reference images are sent separately/);
     assert.match(render({ id: 'queued', status: 'queued' }), /Waiting for this run to start/);
+    // The generation settings the run used, when it had any.
+    assert.match(render({ ...run, settings: { requested: { aspectRatio: '16:9', imageSize: '4K' }, applied: { aspectRatio: '16:9' } } }), /Generation settings<\/dt><dd>16:9<\/dd>/);
+    assert.doesNotMatch(html, /Generation settings/);
     assert.match(render({ id: 'old', status: 'error', target: { data: { model: 'old-model' } } }), /old-model/);
     assert.match(render({ id: 'old', status: 'error' }), /Diagnostics were not recorded for this run/);
     assert.doesNotThrow(() => render({ id: 'bad', status: 'error', diagnostics: { model: {}, events: [{ type: 'constructor', text: {} }, null], usage: [] } }));

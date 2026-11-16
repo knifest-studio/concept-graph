@@ -1,4 +1,4 @@
-import { captionHeight, isSiteGenerator, maxDescription, model3dTask, nodeSize, runOutputPage, textNodeSize } from '../graph.mjs';
+import { captionHeight, isSiteGenerator, maxDescription, model3dTask, nodeSize, ratioAspect, runOutputPage, textNodeSize } from '../graph.mjs';
 import { canAttachStamp } from './annotations.mjs';
 import { frameBox, groupBounds } from './canvas.mjs';
 import { nextLayer } from './layers.mjs';
@@ -39,8 +39,10 @@ export function expectedOutputs(graph, run, prompt = graph.nodes.find(node => no
   const count = describe ? 1 : upscale ? run.images?.length || run.snapshot?.filter(node => node.type === 'image').length || sources().length || 1
     : isSiteGenerator(run.provider) ? run.variants || 1 : codexImageActive(run) ? outputIds.length + 1 : 1;
   const target = run.target || prompt, inputs = run.snapshot ? run.snapshot.filter(node => node.type === 'image') : sources();
+  // A shape the run asked for and its generator uses (run.settings, written when it started) is the shape it will have.
+  const chosen = ratioAspect(run.settings?.applied?.aspectRatio);
   return Array.from({ length: count }, (_, slot) => ({ type: describe ? 'text' : model3d ? 'model' : 'image',
-    aspect: model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1 }));
+    aspect: model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : chosen || knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1 }));
 }
 
 // A prompt's text and Inputs row are estimated as the canvas draws them, so a server without browser measurements agrees.

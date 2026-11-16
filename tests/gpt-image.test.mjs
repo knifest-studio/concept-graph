@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { transformWithEsbuild } from 'vite';
 import { signSession } from '../cloud/auth.mjs';
 import { gptImageCost, gptImageError, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from '../cloud/gpt-image.mjs';
-import { clampVariants, generators, imageSize, maxVariants, modelNames, validateGraph, variantPresets } from '../graph.mjs';
+import { clampVariants, generators, gptImagePixels, imageSize, maxVariants, modelNames, validateGraph, variantPresets } from '../graph.mjs';
 import { NanoError, nanoPrompt } from '../cloud/nano-banana.mjs';
 import { nanoState, usesSiteGenerator } from '../src/generator.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
@@ -420,4 +420,26 @@ test('cloud start/cancel uses the shared server route and never a helper', async
   doc.getMap('runs').set('run', { id: 'run', nodeId: 'p', provider: generators.gptImage, status: 'running', by: user });
   assert.equal(jobs.remote('run'), true); await jobs.cancel('run');
   assert.equal(calls[0][0], '/api/boards/board/nano'); assert.equal(calls[1][0], '/api/boards/board/nano/run/cancel'); doc.destroy();
+});
+
+runtimeTest('the room sends GPT Image the chosen size, quality and background, and keeps a masked image’s shape', async t => {
+  const app = setup(t, {}, { aspectRatio: '16:9', imageSize: '2K', gptQuality: 'high', background: 'transparent' }), calls = fake(t), path = `/api/boards/${app.board.id}/nano`;
+  // A page from before settings would start a run it cannot show, so it is asked to reload; nothing is reserved or sent.
+  const stale = await app.start();
+  assert.equal(stale.status, 409); assert.equal((await stale.json()).error, 'Reload the page to use generation settings.');
+  assert.equal(calls.length, 0); assert.deepEqual(app.directory.nanoUsage(user.email), { usedToday: 0, teamSpentUsd: 0 });
+  assert.equal((await app.request(path, { method: 'POST', data: { nodeId: 'p', settings: 1 } })).status, 202); await app.settle();
+  assert.deepEqual([calls[0].body.size, calls[0].body.quality, calls[0].body.background, calls[0].body.output_format], ['2736x1536', 'high', 'transparent', 'png']);
+  let run = readCloudGraph(app.room.document).runs[0];
+  assert.deepEqual(run.settings, { requested: { aspectRatio: '16:9', imageSize: '2K', gptQuality: 'high', background: 'transparent' }, applied: { aspectRatio: '16:9', imageSize: '2K', gptQuality: 'high', background: 'transparent' } });
+  // With a mask the edit keeps its image's shape (640 × 480 here) at the chosen size.
+  const before = readCloudGraph(app.room.document), next = structuredClone(before);
+  next.nodes.find(node => node.id === 'i').data.mask = imageMask(reference);
+  applyLocalGraph(app.room.document, next, before, 'test');
+  app.files.set(`assets/${baseId}`, png(640, 480)); app.files.set(`assets/${maskId}`, png(640, 480));
+  assert.equal((await app.request(path, { method: 'POST', data: { nodeId: 'p', settings: 1 } })).status, 202); await app.settle();
+  const { width, height } = gptImagePixels(480 / 640, '2K');
+  assert.equal(calls[1].body.size, `${width}x${height}`); assert.ok(calls[1].body.mask);
+  run = readCloudGraph(app.room.document).runs.find(item => item.id !== run.id);
+  assert.deepEqual(run.settings.applied, { imageSize: '2K', gptQuality: 'high', background: 'transparent' });
 });

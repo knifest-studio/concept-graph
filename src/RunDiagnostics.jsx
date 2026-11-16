@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import './run-diagnostics.css';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { t } from './i18n.mjs';
+import { appliedSummary } from './generation-settings.mjs';
 
 const eventLabels = {
   worker_context: 'Generation context',
@@ -59,6 +60,7 @@ export function RunDiagnostics({ run, loadRun, onClose, returnFocus }) {
         <div><dt>{t('Requested effort')}</dt><dd>{requested(diagnostics, 'requestedEffort', run.target?.data?.effort ?? snapshot?.target?.data?.effort)}</dd></div>
         <div><dt>{t('Initial thread model')}</dt><dd>{text(diagnostics?.model) || t('Unavailable')}</dd></div>
         <div><dt>{t('Initial thread effort')}</dt><dd>{text(diagnostics?.effort) || t('Unavailable')}</dd></div>
+        {appliedSummary(run.settings) && <div><dt>{t('Generation settings')}</dt><dd>{appliedSummary(run.settings)}</dd></div>}
       </dl>
       <p className="run-diagnostics-note">{t('Thread values are reported when the thread starts. The requested values may override them for the generation.')}</p>
       {userText && <><h3>{t('Your request')}</h3><p className="run-diagnostics-user-text">{userText}</p></>}

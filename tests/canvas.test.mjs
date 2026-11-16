@@ -344,15 +344,18 @@ test('unmeasured cards get estimated sizes and handles; measured ones keep their
   const output = { id: 'o', type: 'image', position: { x: 800, y: 0 }, data: { asset: 'b.png', runId: 'r', aspect: .5 } };
   const note = { id: 's', type: 'sticky', position: { x: 0, y: 400 }, data: { text: '', color: '#fff3ad' } };
   const cache = createViewCache(), view = canvasView([prompt, upload, output, note], [], [], cache), byId = new Map(view.nodes.map(node => [node.id, node]));
-  assert.deepEqual(byId.get('p').measured, { width: 310, height: 124 });
-  assert.deepEqual(byId.get('p').handles.map(({ type, position, x, y }) => [type, position, x, y]), [['target', 'left', -9, 57], ['source', 'right', 309, 57]]);
+  // An image prompt's card includes its 28px settings row under the text.
+  assert.deepEqual(byId.get('p').measured, { width: 310, height: 152 });
+  assert.deepEqual(byId.get('p').handles.map(({ type, position, x, y }) => [type, position, x, y]), [['target', 'left', -9, 71], ['source', 'right', 309, 71]]);
   assert.deepEqual(byId.get('u').handles.map(handle => handle.type), ['source']);
   assert.deepEqual(byId.get('o').measured, { width: 310, height: 155 });
   assert.deepEqual(byId.get('o').handles.map(handle => handle.type), ['target', 'source']);
   assert.deepEqual(byId.get('s').handles, []);
-  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 80 });
-  // A fed prompt also shows its "Inputs" row (the card measures 101.5 px with one line of text).
-  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: 'one line' } }, true), { width: 310, height: 102 });
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 108 });
+  // A fed prompt also shows its "Inputs" row (the card measures 129.5 px with one line of text and its settings row).
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: 'one line' } }, true), { width: 310, height: 130 });
+  // Describe nodes have no settings row.
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '', task: 'describe' } }), { width: 310, height: 80 });
   assert.deepEqual(nodeHandles({ type: 'text', data: { template: { name: 'T' } } }, { width: 310, height: 100 }).map(handle => handle.x), [-8, 308]);
   // Once measured, a node keeps that size even when undo hands back a copy without it.
   const measured = { ...prompt, measured: { width: 310, height: 210 } };
@@ -452,7 +455,7 @@ test('a prompt is drawn at most as a square unless its bottom edge was dragged t
   const long = { id: 'long', type: 'text', position: { x: 0, y: 0 }, data: { text: 'word '.repeat(2000) } };
   assert.deepEqual(estimatedSize(long), { width: 310, height: 310 });
   assert.deepEqual(estimatedSize({ ...long, data: { ...long.data, height: 520 } }), { width: 310, height: 520 });
-  assert.equal(estimatedSize({ ...long, data: { text: 'Short' } }).height, 80);
+  assert.equal(estimatedSize({ ...long, data: { text: 'Short' } }).height, 108);
   validateGraph({ nodes: [{ ...long, data: { ...long.data, height: 520 } }], edges: [] });
   for (const height of [10, 5000, '400']) assert.throws(() => validateGraph({ nodes: [{ ...long, data: { ...long.data, height } }], edges: [] }), /Invalid prompt height/);
 });

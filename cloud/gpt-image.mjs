@@ -20,14 +20,15 @@ export function gptImagePrompt(graph, nodeId) {
   return request;
 }
 
-// As on image nodes, aspect is height / width. There is no prompt size picker yet.
+// A prompt without a chosen shape or size gets the preset nearest the edited image's shape (as on image nodes, aspect is
+// height / width); a chosen one gets the size graph.mjs works out (resolveGeneration), passed in as `size`.
 export function gptImageSize(aspect = 1) {
   const ratio = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
   return [[1, '1024x1024'], [2 / 3, '1536x1024'], [1.5, '1024x1536']]
     .sort((a, b) => Math.abs(Math.log(ratio / a[0])) - Math.abs(Math.log(ratio / b[0])))[0][1];
 }
 
-export function gptImageRequest(prompt, references, { key, endpoint: base = endpoint, aspect, mask } = {}) {
+export function gptImageRequest(prompt, references, { key, endpoint: base = endpoint, aspect, mask, size, quality = 'medium', background } = {}) {
   // Without a chosen size the output keeps the shape of the image being edited, as Nano Banana does.
   const edited = references[0]?.size;
   if (!(aspect > 0) && edited?.width > 0 && edited?.height > 0) aspect = edited.height / edited.width;
@@ -43,7 +44,7 @@ export function gptImageRequest(prompt, references, { key, endpoint: base = endp
     || !mask.size?.width || mask.size.width !== references[0].size?.width || mask.size.height !== references[0].size?.height)) throw new NanoError('bad_request', 'The mask and its image must be PNGs with the same dimensions. Paint the mask again.');
   return { url: `${base}/v1/images/${images.length ? 'edits' : 'generations'}`, init: {
     method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: gptImageModel, prompt, n: 1, size: gptImageSize(aspect), quality: 'medium', output_format: 'png', moderation: 'auto', ...(images.length ? { images } : {}), ...(mask ? { mask: imageUrl(mask) } : {}) }),
+    body: JSON.stringify({ model: gptImageModel, prompt, n: 1, size: size || gptImageSize(aspect), quality, output_format: 'png', ...(background ? { background } : {}), moderation: 'auto', ...(images.length ? { images } : {}), ...(mask ? { mask: imageUrl(mask) } : {}) }),
   } };
 }
 
@@ -69,9 +70,15 @@ export function gptImageResult(status, body) {
 }
 
 const tokens = value => Number.isFinite(value) && value >= 0 ? value : 0;
-export function gptImageEstimate({ promptLength = 0, references = 0, images = 1 } = {}) {
-  // Hold more than a typical medium image costs, including generously sized reference inputs.
-  return images * .25 + (Math.ceil(promptLength / 3) * gptImagePrices.textInput + references * 16000 * gptImagePrices.imageInput) / 1e6;
+// OpenAI publishes no per-image figures for 2.5 Flare. These follow gpt-image-2's at 1024² (low $0.006, medium $0.053,
+// high $0.211: about a ninth and four times medium) until logged usage calibrates them; a larger chosen size holds more
+// in proportion to its pixels beyond the 1536×1024 preset that the flat medium figure already covers.
+export const gptQualityFactors = Object.freeze({ low: .25, medium: 1, high: 4 });
+const presetMegapixels = 1536 * 1024 / 1e6;
+export function gptImageEstimate({ promptLength = 0, references = 0, images = 1, quality = 'medium', megapixels } = {}) {
+  // Hold more than a typical image of that quality and size costs, including generously sized reference inputs.
+  const scale = (gptQualityFactors[quality] ?? 1) * Math.max(1, (Number(megapixels) || 0) / presetMegapixels);
+  return images * .25 * scale + (Math.ceil(promptLength / 3) * gptImagePrices.textInput + references * 16000 * gptImagePrices.imageInput) / 1e6;
 }
 export function gptImageCost(usage, fallback) {
   if (!Number.isFinite(usage?.input_tokens) || !Number.isFinite(usage?.output_tokens)) return gptImageEstimate(fallback);

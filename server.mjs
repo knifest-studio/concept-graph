@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, uniqueImageName } from './graph.mjs';
+import { collectInputs, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, codexGenerator, resolveGeneration, runSettings, uniqueImageName } from './graph.mjs';
 import { positionRunOutput } from './src/output-placement.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
@@ -517,7 +517,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || (inputs.task ? 'Describe image' : '');
-  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
+  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, ...runSettings(resolveGeneration(inputs.target, codexGenerator)), status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
   graph.runs.push(run);
   try { await persist(); } catch (error) { graph.runs.splice(graph.runs.indexOf(run), 1); throw error; }
   publish('run', publicRun(run), board.id);

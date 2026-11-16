@@ -256,7 +256,8 @@ test('Nano Banana prompts start and cancel through the board API, never through 
   doc.getMap('nodes').get('p').get('data').set('text', 'Edited just now');
   await generation.startNano('p');
   assert.equal(calls[0][0], '/api/boards/board/nano'); assert.equal(calls[0][1].method, 'POST');
-  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID) });
+  // settings: 1 tells the room this page shows generation settings.
+  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID), settings: 1 });
   assert.deepEqual(started, ['nano-run']);
   doc.getMap('runs').set('nano-run', { id: 'nano-run', nodeId: 'p', status: 'running', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: user, startedAt: '2026-11-04T10:00:00.000Z' });
   await generation.startNano('p');
@@ -1055,4 +1056,34 @@ runtimeTest('a 3D thumbnail that fails to store falls back to the source poster'
   });
   const started = await app.boardRoom.startNano({ nodeId: '3d', requester: { ...user, email: 'lead@studio.example' } }); await app.settle();
   const graph = readCloudGraph(app.boardRoom.document); assert.equal(graph.runs.find(run => run.id === started.run.id).status, 'completed'); assert.equal(graph.nodes.find(node => node.data.runId === started.run.id).data.poster, reference);
+});
+
+runtimeTest('Nano Banana gets the chosen shape, size and thinking, reserves for them, and stale pages are asked to reload', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t), lead = await cookie('lead@studio.example'), path = `/api/boards/${board.id}/nano`;
+  const set = changes => { const before = readCloudGraph(boardRoom.document), next = structuredClone(before); Object.assign(next.nodes.find(node => node.id === 'p').data, changes); applyLocalGraph(boardRoom.document, next, before, 'edit'); };
+  // A setting Nano Banana cannot use changes nothing it sends, so even a page from before settings may start the run.
+  set({ background: 'transparent' });
+  const calls = fakeGemini(t, async () => Response.json(interaction([png(100, 100)])));
+  assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 202); await settle();
+  assert.equal(calls[0].body.response_format, undefined); assert.equal(calls[0].body.generation_config, undefined);
+  assert.deepEqual(readCloudGraph(boardRoom.document).runs[0].settings, { requested: { background: 'transparent' }, applied: {} });
+  set({ aspectRatio: '9:16', imageSize: '4K', nanoThinking: 'minimal', variants: 2 });
+  const stale = await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } });
+  assert.equal(stale.status, 409); assert.equal((await stale.json()).error, 'Reload the page to use generation settings.');
+  assert.equal(calls.length, 1);
+  t.mock.restoreAll();
+  const held = gate(), waiting = fakeGemini(t, async () => { await held.promise; return Response.json(interaction([png(100, 100)])); });
+  const spentBefore = directory.nanoUsage('lead@studio.example').teamSpentUsd;
+  assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p', settings: 1 } })).status, 202);
+  await new Promise(resolve => setImmediate(resolve));
+  // Both variants are held at the 4K, minimal-thinking estimate while they run.
+  const estimate = nanoEstimate({ promptLength: nanoPrompt(readCloudGraph(boardRoom.document), 'p').prompt.length, references: 1, imageSize: '4K', thinking: 'minimal' });
+  assert.equal(Math.round((directory.nanoUsage('lead@studio.example').teamSpentUsd - spentBefore) * 1e6), Math.round(2 * estimate * 1e6));
+  held.open(); await settle();
+  assert.equal(waiting.length, 2);
+  for (const call of waiting) { assert.deepEqual(call.body.response_format, { type: 'image', aspect_ratio: '9:16', image_size: '4K' }); assert.deepEqual(call.body.generation_config, { thinking_level: 'minimal' }); }
+  const run = readCloudGraph(boardRoom.document).runs.find(item => item.variants === 2);
+  assert.deepEqual(run.settings.applied, { aspectRatio: '9:16', imageSize: '4K', nanoThinking: 'minimal' });
+  // Agents never come from an old page, so their runs use the settings too.
+  assert.equal((await boardRoom.mcp({ tool: 'start_run', args: { nodeId: 'p' }, user: { name: 'Lead', email: 'lead@studio.example' } })).error, undefined);
 });

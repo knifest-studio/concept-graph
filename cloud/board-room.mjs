@@ -4,7 +4,7 @@ import { boardStats } from './board-stats.mjs';
 import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
 import { base64, describeCost, describeEstimate, describeModel, describeResult, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, variantLanes, variantRunTimeout } from './nano-banana.mjs';
 import { gptImageCost, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from './gpt-image.mjs';
-import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
+import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, resolveGeneration, runSettings, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { boardAuthor } from '../src/annotations.mjs';
 import { placeRunOutput, placeRunText, runSummary, terminalRun } from '../src/run-outputs.mjs';
@@ -356,8 +356,9 @@ export class BoardRoom extends YServer {
   }
 
   // Worker RPC for a signed-in person on the allowed list. Reserves their quota, puts the run on the board and returns;
-  // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes).
-  async startNano({ nodeId, client, clock, requester }) {
+  // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes). `settings` says the
+  // request comes from a page that shows generation settings (agents always do).
+  async startNano({ nodeId, client, clock, requester, settings: knowsSettings = false }) {
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
     const graph = readCloudGraph(this.document), node = graph.nodes.find(item => item.id === nodeId);
     const gpt = !isUpscale(node) && !isModel3d(node) && node?.data.generator === generators.gptImage, name = isModel3d(node) ? '3D generation' : gpt ? 'GPT Image' : 'Nano Banana';
@@ -373,12 +374,18 @@ export class BoardRoom extends YServer {
     catch (cause) { return { error: cause.message, status: 400 }; }
     // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
     // image per connected image, each reserved at the largest size it could come out.
-    const describe = !!request.describe, measure = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
+    const describe = !!request.describe, variants = variantRun(request);
+    // A prompt's settings, as this provider uses them. A page opened before settings existed would start a run it cannot
+    // show (a 4K or 16:9 one, say), so a request that does not know them is refused once any of them applies.
+    const generation = variants ? resolveGeneration(request.target, gpt ? generators.gptImage : generators.nanoBanana, { mask: !!request.mask }) : null;
+    if (generation && Object.keys(generation.applied).length && !knowsSettings) return { error: 'Reload the page to use generation settings.', status: 409 };
+    const measure = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0),
+      ...(generation ? gpt ? { quality: generation.gpt.quality, megapixels: generation.gpt.megapixels } : { imageSize: generation.applied.imageSize, thinking: generation.applied.nanoThinking } : {}) };
     const sources = request.upscale ? await this.imageSizes(request.images) : [];
     const calls = request.upscale || model3d ? request.images.length : describe ? 1 : promptVariants(request.target);
     const estimates = Array.from({ length: calls }, (_, index) => model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
     this.nanoStarting.add(nodeId);
-    const variants = variantRun(request), reservations = [], release = async () => {
+    const reservations = [], release = async () => {
       if (variants) await this.directory().settleNanoMany(reservations.map(id => ({ id, images: 0, usd: 0 })));
       else for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 });
     };
@@ -401,7 +408,8 @@ export class BoardRoom extends YServer {
         reservations.push(reserved.reservation);
       }
       const task = model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...(variants && calls > variantLanes ? { variantsStarted: variantLanes } : {}), ...task };
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...(variants && calls > variantLanes ? { variantsStarted: variantLanes } : {}),
+        ...runSettings(generation), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {
@@ -409,7 +417,7 @@ export class BoardRoom extends YServer {
         return { error: 'This prompt was deleted.', status: 404 };
       }
       this.document.transact(() => this.document.getMap('runs').set(run.id, run), origin);
-      const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, controller: new AbortController(), next: 0 };
+      const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, measure, controller: new AbortController(), next: 0 };
       this.nanoJobs.set(run.id, job);
       if (variants) this.trackVariants(run.id, { reservations, started: 0 });
       this.ctx.waitUntil(this.runNano(job));
@@ -478,7 +486,7 @@ export class BoardRoom extends YServer {
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
     }
-    const result = await this.startNano({ nodeId, requester: user });
+    const result = await this.startNano({ nodeId, requester: user, settings: true });
     return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: this.document.getMap('runs').get(result.run.id).provider, status: 'running' } };
   }
 
@@ -814,8 +822,10 @@ export class BoardRoom extends YServer {
   // a call that never started settles at nothing. Unstarted calls come back as failures with no reason of their own.
   async runVariants(job, references, fallback, results, mask) {
     const gpt = job.run.provider === generators.gptImage, outcomes = results.map(() => ({ status: 'rejected', reason: undefined }));
-    const call = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, aspect: job.request.target.data.aspect, mask })
-      : nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint });
+    // Settings are read from the prompt as it was when the run started; GPT Image's size also needs the edited image's shape.
+    const generation = resolveGeneration(job.request.target, gpt ? generators.gptImage : generators.nanoBanana, { referenceSize: references[0]?.size, mask: !!mask });
+    const call = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, mask, ...generation.gpt })
+      : nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint }, nanoModel, generation.nano.format, generation.nano.config);
     const runs = this.document.getMap('runs'), stopped = () => job.cancelled || job.controller.signal.aborted || terminalRun(runs.get(job.run.id)?.status);
     let next = 0;
     const lane = async () => {
@@ -875,7 +885,7 @@ export class BoardRoom extends YServer {
   // One request per variant, a few side by side, never retried automatically: a retry could be billed twice. Images join
   // the run as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
-    const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
+    const { run, request, controller } = job, fallback = job.measure || { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const name = request.model3d ? '3D generation' : request.upscale ? 'The upscale' : run.provider === generators.gptImage ? 'GPT Image' : 'Nano Banana';
     const variants = variantRun(request), limit = request.model3d ? 14 * 60 * 1000 : variants ? variantRunTimeout(job.reservations.length) : nanoTimeout;
     const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, limit), late = `${name} took longer than ${Math.round(limit / 60000)} minutes. Try again.`;
