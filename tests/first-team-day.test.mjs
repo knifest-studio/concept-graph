@@ -107,7 +107,7 @@ test('a team-key option this person cannot use says why and who gives access, in
   setLanguage('en');
   const named = nanoState({ configured: true, allowed: false, admins: ['Olena', 'Taras'] });
   assert.deepEqual([named.selectable, named.short, named.note], [false, 'no access', 'Not available for your account yet. Ask Olena, Taras: site admins give access in Team access.']);
-  assert.equal(nanoState({ configured: true, allowed: false }, 'model3d', ['Olena']).note, '3D generation isn’t available for your account yet. Ask Olena: site admins give access in Team access.');
+  assert.equal(nanoState({ configured: true, allowed: false }, 'model3d', { admins: ['Olena'] }).note, '3D generation isn’t available for your account yet. Ask Olena: site admins give access in Team access.');
   assert.equal(nanoState({ configured: false }).short, 'not set up');
   assert.equal(noAccess.note, 'Not available for your account. Ask a site admin for access.', 'no names known: the old wording');
   setLanguage('uk');
@@ -121,7 +121,7 @@ test('a team-key option this person cannot use says why and who gives access, in
   assert.match(html, /<option value="nano-banana">Nano Banana · no access<\/option>/);
   assert.match(html, /data-tooltip="Nano Banana \/ GPT Image · Not available for your account yet\. Ask Olena, Taras/);
   // The editor hands each prompt's picker the short reason as well as the note.
-  assert.match(editor, /nano=\{\{ selectable: view\.nanoSelectable, note: view\.nanoNote, short: view\.nanoShort, budget: view\.nanoBudget \}\} gpt=\{\{ selectable: view\.gptSelectable, note: view\.gptNote, short: view\.gptShort,/);
+  assert.match(editor, /nano=\{\{ selectable: view\.nanoSelectable, note: view\.nanoNote, short: view\.nanoShort, requestable: view\.nanoRequestable, budget: view\.nanoBudget \}\} request=\{canvas\.requestAccess\} gpt=\{\{ selectable: view\.gptSelectable, note: view\.gptNote, short: view\.gptShort,/);
   assert.match(editor, /nanoShort: nano\.short,/); assert.match(editor, /gptShort: gpt\.short,/);
   // Choosing it explains and keeps the prompt as it is.
   const source = part('  const setGenerator = (nodeId, generator) => {', '  const toggleNodeCollapsed = ');
@@ -161,7 +161,7 @@ if (nodeModule.registerHooks) {
   } });
   try { ({ default: worker, Directory } = await import('../cloud/worker.mjs')); } finally { hooks.deregister(); }
 }
-(nodeModule.registerHooks ? test : test.skip)('GET /api/nano names who gives access to people without it, and nobody to people with it', async t => {
+function site(t) {
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
@@ -173,10 +173,65 @@ if (nodeModule.registerHooks) {
   directory.openBoard(board.id, { email: 'admin@studio.example', name: 'Taras' });
   directory.changeTeamAccess('owner@studio.example', { admin: { email: 'admin@studio.example', admin: true } });
   directory.changeTeamAccess('owner@studio.example', { admin: { email: 'quiet@studio.example', admin: true } });
-  const status = async email => (await worker.fetch(new Request('http://localhost:8787/api/nano', { headers: { Cookie: `cg_session=${await signSession({ name: 'Someone', email }, env.SESSION_SECRET)}` } }), env)).json();
+  const call = async (email, path, { method = 'GET', data, name = 'Someone' } = {}) => (await worker.fetch(new Request(`http://localhost:8787${path}`, { method, headers: { Cookie: `cg_session=${await signSession({ name, email }, env.SESSION_SECRET)}`, Origin: 'http://localhost:8787', ...(data ? { 'Content-Type': 'application/json' } : {}) }, ...(data ? { body: JSON.stringify(data) } : {}) }), env));
+  return { directory, call, status: async email => (await call(email, '/api/nano')).json() };
+}
+(nodeModule.registerHooks ? test : test.skip)('GET /api/nano names who gives access to people without it, and nobody to people with it', async t => {
+  const { status } = site(t);
   const newcomer = await status('new@studio.example');
   assert.deepEqual([newcomer.allowed, newcomer.admins], [false, ['Olena', 'Taras']], 'an admin who never opened a board has no name to show, and no email is shown instead');
   assert.equal(JSON.stringify(newcomer).includes('@'), false);
   const artist = await status('artist@studio.example');
   assert.deepEqual([artist.allowed, artist.admins], [true, undefined]);
+});
+
+(nodeModule.registerHooks ? test : test.skip)('someone without access asks for it; admins see the request in Team access and answer it there', async t => {
+  const { call, status } = site(t);
+  const ask = async (email, name) => (await call(email, '/api/nano/request', { method: 'POST', data: {}, name })).json();
+  const team = async email => (await call(email, '/api/cloud/team')).json();
+  const me = async email => (await call(email, '/api/cloud/me')).json();
+  assert.equal((await status('nadia@gmail.com')).requested, false);
+  assert.deepEqual(await ask('nadia@gmail.com', 'Nadia'), { requested: true });
+  assert.deepEqual(await ask('nadia@gmail.com', 'Nadia K.'), { requested: true }, 'asking again keeps one request');
+  assert.deepEqual(await ask('max@gmail.com', 'Max'), { requested: true });
+  assert.deepEqual(await ask('artist@studio.example', 'Artist'), { allowed: true }, 'nothing to ask for with access');
+  assert.deepEqual([(await status('nadia@gmail.com')).requested, (await status('nadia@gmail.com')).allowed], [true, false], 'access is still manual');
+  // Admins see who asked, beside Team access and in it; nobody else does.
+  assert.equal((await me('owner@studio.example')).accessRequests, 2); assert.equal((await me('admin@studio.example')).accessRequests, 2);
+  assert.equal((await me('nadia@gmail.com')).accessRequests, undefined);
+  assert.equal((await call('nadia@gmail.com', '/api/cloud/team')).status, 403);
+  assert.deepEqual((await team('admin@studio.example')).access.requests.map(item => [item.email, item.name]), [['nadia@gmail.com', 'Nadia K.'], ['max@gmail.com', 'Max']]);
+  // Giving access answers the request; dismissing removes it without access.
+  let answer = await (await call('admin@studio.example', '/api/cloud/team', { method: 'PATCH', data: { nano: { entry: 'nadia@gmail.com', allowed: true } } })).json();
+  assert.deepEqual(answer.access.requests.map(item => item.email), ['max@gmail.com']);
+  assert.equal((await status('nadia@gmail.com')).allowed, true);
+  assert.equal((await call('max@gmail.com', '/api/cloud/team', { method: 'PATCH', data: { request: { email: 'max@gmail.com', dismiss: true } } })).status, 403, 'only admins answer requests');
+  answer = await (await call('owner@studio.example', '/api/cloud/team', { method: 'PATCH', data: { request: { email: 'max@gmail.com', dismiss: true } } })).json();
+  assert.deepEqual([answer.access.requests, (await status('max@gmail.com')).allowed, (await me('owner@studio.example')).accessRequests], [[], false, 0]);
+});
+
+test('the picker and the Codex setup dialog let someone without access ask for it, once', async () => {
+  setLanguage('en');
+  const open = nanoState({ configured: true, allowed: false, admins: ['Olena'], requested: false }), asked = nanoState({ configured: true, allowed: false, admins: ['Olena'], requested: true });
+  assert.deepEqual([open.requestable, asked.requestable, asked.short, asked.note], [true, false, 'requested', 'Access requested. Olena will see it in Team access.']);
+  assert.equal(nanoState({ configured: true, allowed: false }, 'model3d').requestable, false, '3D access is given per person in Team access, not asked for here');
+  const vite = await createServer({ configFile: false, appType: 'custom', server: { middlewareMode: true, ws: false }, optimizeDeps: { noDiscovery: true, include: [] } });
+  let render;
+  try { const { GeneratorPicker } = await vite.ssrLoadModule('/src/GeneratorPicker.jsx'); render = props => renderToStaticMarkup(React.createElement(GeneratorPicker, { id: 'p', choose() {}, request() {}, ...props })); }
+  finally { await vite.close(); }
+  assert.match(render({ nano: open, gpt: open }), /<option value="request">Request access…<\/option>/);
+  assert.doesNotMatch(render({ nano: asked, gpt: asked }), /value="request"/);
+  assert.match(render({ nano: asked, gpt: asked }), /Nano Banana · requested/);
+  // Generate without the helper and without access: the setup dialog offers the request, then says it was sent.
+  const source = part('  const run = async (nodeId, resumeIntent = null, event) => {', '  runAction.current = run;'), calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot' } };
+  const env = { alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
+    notify() {}, inform() {}, starting: null, generationStarting: ref(false), nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
+    model3dRef: ref(open), gptRef: ref(open), nanoRef: ref(open), readinessRef: ref({ key: 'helper' }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t, nanoState,
+    fixReadiness: () => calls.push(['fix']), cloudSession: { nano: { configured: true, allowed: false, admins: ['Olena'] }, openPair: (...args) => calls.push(['pair', ...args]), requestAccess: async () => { calls.push(['request']); return { requested: true }; } },
+    track() {}, promptAnalytics: () => ({}), setGenerator() {}, runAction: ref(() => {}) };
+  await new Function(...Object.keys(env), `${source}; return run;`)(...Object.values(env))('p');
+  const [, , , card] = calls[0];
+  assert.deepEqual([card.title, card.note, card.label, card.stay], ['Or ask for the team’s API key', 'Olena can let you generate with Nano Banana on the team’s key, without Codex.', 'Request access', true]);
+  assert.deepEqual(await card.run(), { title: 'Or ask for the team’s API key', note: 'Access requested. Olena will see it in Team access.' });
+  assert.deepEqual(calls.map(([kind]) => kind), ['pair', 'request']);
 });

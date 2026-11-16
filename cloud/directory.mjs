@@ -4,7 +4,7 @@ import { accessModes, boardRole, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxModel3dEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
+const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxModel3dEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role });
@@ -43,6 +43,8 @@ export class Directory extends DurableObject {
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS model3d_access (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_admins (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
+    // People without image access who asked for it, shown to admins in Team access until access is given or the request dismissed.
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS access_requests (email TEXT PRIMARY KEY, name TEXT, requestedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     // Only the owner keeps 3D on deploy; record the seed so a later revocation survives room restarts.
     if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'model3dImported'").toArray().length) {
@@ -86,6 +88,32 @@ export class Directory extends DurableObject {
     return [...new Set([owner, ...admins].filter(Boolean))].map(name).filter(Boolean).slice(0, 3);
   }
 
+  // What someone without access is told: whom to ask, and whether they already asked.
+  accessHelp(person) {
+    const address = email(person);
+    return { admins: this.adminNames(), requested: !!address && !!this.ctx.storage.sql.exec('SELECT 1 FROM access_requests WHERE email = ?', address).toArray().length };
+  }
+
+  // Access stays manual (the owner's choice, Nov 17 2026): asking only puts the person in front of the admins. Asking again
+  // keeps the first request; anyone already allowed, by email or domain, has nothing to ask.
+  requestAccess(user) {
+    const address = email(user?.email);
+    if (!address) return { error: 'Sign in to ask for access.', status: 401 };
+    if (this.nanoAllowed(address)) return { allowed: true };
+    const known = this.ctx.storage.sql.exec('SELECT 1 FROM access_requests WHERE email = ?', address).toArray().length;
+    if (!known && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM access_requests').toArray()[0].count >= maxAccessRequests) return { error: 'Too many open access requests. Ask a site admin directly.', status: 429 };
+    const name = typeof user.name === 'string' ? user.name.trim().slice(0, 80) || null : null;
+    this.ctx.storage.sql.exec('INSERT INTO access_requests (email, name, requestedAt) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET name = excluded.name', address, name, new Date().toISOString());
+    return { requested: true };
+  }
+
+  // Open requests, oldest first; a request from someone who has since been given access no longer counts.
+  accessRequests() {
+    const list = this.nanoEntries().map(row => row.entry).join(',');
+    return this.ctx.storage.sql.exec('SELECT email, name, requestedAt FROM access_requests ORDER BY requestedAt').toArray().map(row => ({ ...row })).filter(row => !nanoAllowed(row.email, list));
+  }
+  accessRequestCount(person) { return this.siteRole(person) ? this.accessRequests().length : 0; }
+
   // What admins see: separate image and 3D access, who the admins are, and each person's shared usage today.
   teamAccess(person, now = Date.now()) {
     const role = this.siteRole(person);
@@ -93,11 +121,11 @@ export class Directory extends DurableObject {
     const day = new Date(now).toISOString().slice(0, 10), imported = JSON.parse(this.ctx.storage.sql.exec("SELECT value FROM site_settings WHERE key = 'nanoImported'").toArray()[0]?.value || '{}');
     const usage = this.ctx.storage.sql.exec('SELECT email, SUM(images) AS images FROM nano_usage WHERE day = ? AND (open = 0 OR createdAt > ?) GROUP BY email', day, now - nanoReservationTtl).toArray();
     return { role, owner: email(this.env?.SITE_OWNER_EMAIL), admins: this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM site_admins ORDER BY email').toArray().map(row => ({ ...row })),
-      nano: this.nanoEntries(), model3d: this.model3dEntries(), usedToday: Object.fromEntries(usage.map(row => [row.email, row.images])), imported };
+      nano: this.nanoEntries(), model3d: this.model3dEntries(), usedToday: Object.fromEntries(usage.map(row => [row.email, row.images])), imported, requests: this.accessRequests() };
   }
 
   // Admins grant and revoke image and 3D access; only the owner appoints and removes admins.
-  changeTeamAccess(person, { nano, model3d, admin } = {}) {
+  changeTeamAccess(person, { nano, model3d, admin, request } = {}) {
     const role = this.siteRole(person), now = new Date().toISOString();
     if (!role) return { error: 'Only site admins can change generation access.', status: 403 };
     if (nano !== undefined) {
@@ -106,6 +134,8 @@ export class Directory extends DurableObject {
       if (nano.allowed && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM nano_access').toArray()[0].count >= maxNanoEntries) return { error: `At most ${maxNanoEntries} people and domains can use Nano Banana.`, status: 400 };
       if (nano.allowed) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO nano_access (entry, addedBy, addedAt) VALUES (?, ?, ?)', entry, email(person), now);
       else this.ctx.storage.sql.exec('DELETE FROM nano_access WHERE entry = ?', entry);
+      // Access given answers the requests it covers.
+      if (nano.allowed) for (const row of this.ctx.storage.sql.exec('SELECT email FROM access_requests').toArray()) if (nanoAllowed(row.email, entry)) this.ctx.storage.sql.exec('DELETE FROM access_requests WHERE email = ?', row.email);
     }
     if (model3d !== undefined) {
       const address = email(model3d?.email);
@@ -113,6 +143,11 @@ export class Directory extends DurableObject {
       if (model3d.allowed && !this.model3dAllowed(address) && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM model3d_access').toArray()[0].count >= maxModel3dEntries) return { error: `At most ${maxModel3dEntries} people can use 3D generation.`, status: 400 };
       if (model3d.allowed) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO model3d_access (email, addedBy, addedAt) VALUES (?, ?, ?)', address, email(person), now);
       else this.ctx.storage.sql.exec('DELETE FROM model3d_access WHERE email = ?', address);
+    }
+    if (request !== undefined) {
+      const address = email(request?.email);
+      if (!address || request.dismiss !== true) return { error: 'Choose a request to dismiss.', status: 400 };
+      this.ctx.storage.sql.exec('DELETE FROM access_requests WHERE email = ?', address);
     }
     if (admin !== undefined) {
       const address = email(admin?.email);

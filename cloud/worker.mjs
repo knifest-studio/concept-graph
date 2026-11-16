@@ -83,7 +83,7 @@ async function teamRoute(request, env, user, url) {
   if (request.method !== 'PATCH') return error('Method not allowed.', 405);
   const origin = request.headers.get('Origin');
   if (origin && origin !== url.origin) return error('Invalid origin.', 403);
-  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, admin: input.admin });
+  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, admin: input.admin, request: input.request });
   return result.error ? error(result.error, result.status) : shown(result.access);
 }
 
@@ -187,15 +187,26 @@ async function route(request, env) {
   const user = protectedPath ? await sessionUser(request, env.SESSION_SECRET) : null;
   if (protectedPath && !user) return error('Sign in required.', 401);
   if (path === '/api/cloud/logout' && method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', url) });
-  if (path === '/api/cloud/me' && method === 'GET') return json({ user, siteRole: await directory(env).siteRole(user.email) });
+  if (path === '/api/cloud/me' && method === 'GET') {
+    const store = directory(env), siteRole = await store.siteRole(user.email);
+    // Admins see how many people are waiting for access beside Team access.
+    return json({ user, siteRole, ...(siteRole ? { accessRequests: await store.accessRequestCount(user.email) } : {}) });
+  }
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/nano') {
     if (method !== 'GET') return error('Method not allowed.', 405);
     const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store) };
-    // Someone without access learns whom to ask.
-    if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed)) status.admins = await store.adminNames();
+    // Someone without access learns whom to ask, and whether they already asked.
+    if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed)) Object.assign(status, await store.accessHelp(user.email));
     return json(status);
+  }
+  if (path === '/api/nano/request') {
+    if (method !== 'POST') return error('Method not allowed.', 405);
+    const origin = request.headers.get('Origin');
+    if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+    const result = await directory(env).requestAccess(user);
+    return result.error ? error(result.error, result.status) : json(result);
   }
   const voiceMatch = path.match(/^\/api\/boards\/([^/]+)\/voice\/ice$/);
   if (voiceMatch) {

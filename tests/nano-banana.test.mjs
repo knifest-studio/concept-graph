@@ -241,7 +241,7 @@ test('prompts may choose site generators; unknown generator values are rejected'
 test('the generator menu says what Nano Banana can do for this person', () => {
   assert.deepEqual(nanoState(undefined), { selectable: true, ready: true, note: 'Uses the site’s Gemini key', budget: '', fal: true });
   assert.deepEqual(nanoState({ configured: false, allowed: true }), { selectable: false, ready: false, short: 'not set up', note: 'Nano Banana isn’t set up on this site', budget: '', fal: true });
-  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, short: 'no access', note: 'Not available for your account. Ask a site admin for access.', budget: '', fal: true });
+  assert.deepEqual(nanoState({ configured: true, allowed: false }), { selectable: false, ready: false, short: 'no access', requestable: true, requested: false, note: 'Not available for your account. Ask a site admin for access.', budget: '', fal: true });
   const status = { configured: true, allowed: true, dailyImages: 50, usedToday: 12, monthlyUsd: 50, teamSpentUsd: 3.2 };
   assert.deepEqual(nanoState(status), { selectable: true, ready: true, note: '38 of 50 left today', budget: 'Team: $3.20 of $50 this month', fal: true });
   // Topaz and SeedVR2 need the site's fal.ai key; the status says when it is missing.
@@ -401,7 +401,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
   assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 100, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
-  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false }, admins: [] });
+  assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false }, admins: [], requested: false });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
   assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { Origin: 'https://other.example' } })).status, 403);

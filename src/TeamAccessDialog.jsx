@@ -7,19 +7,19 @@ const domainOf = address => `@${address.split('@').pop()}`;
 
 // Site admins choose image and per-person 3D access; the site owner also chooses the admins.
 // People are listed once they sign in or get access; image access can also be granted to a whole @domain.
-export function TeamAccessDialog({ services, onClose }) {
+export function TeamAccessDialog({ services, onClose, onRequests }) {
   const [access, setAccess] = useState(null), [entry, setEntry] = useState(''), [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const first = useRef(null), list = useRef(null), [more, setMore] = useState(false);
   useEffect(() => {
     first.current?.focus();
     let active = true;
-    services.api('/api/cloud/team').then(result => { if (active) setAccess(result.access); }).catch(failure => { if (active) setError(failure.message); });
+    services.api('/api/cloud/team').then(result => { if (active) { setAccess(result.access); onRequests?.(result.access.requests?.length || 0); } }).catch(failure => { if (active) setError(failure.message); });
     return () => { active = false; };
   }, []);
   const change = async (update, done) => {
     setBusy(true); setError('');
-    try { setAccess((await services.api('/api/cloud/team', json('PATCH', update))).access); done?.(); }
+    try { const next = (await services.api('/api/cloud/team', json('PATCH', update))).access; setAccess(next); onRequests?.(next.requests?.length || 0); done?.(); }
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
@@ -56,6 +56,11 @@ export function TeamAccessDialog({ services, onClose }) {
       </form>
       {error && <p className="cloud-error share-error" role="alert">{error}</p>}
       {!access && !error && <p className="share-note" role="status">{t('Loading…')}</p>}
+      {/* People who asked for the team's image key, oldest first. Access stays manual: an admin gives it here or dismisses the request. */}
+      {access?.requests?.length > 0 && <><h3>{t('Access requests')}</h3><ul className="share-people team-requests">{access.requests.map(item => <li key={item.email}>
+        <span><b>{item.name || item.email}</b><small>{[item.name && item.email, t('Asked {date}', { date: new Date(item.requestedAt).toLocaleDateString() })].filter(Boolean).join(' · ')}</small></span>
+        <span><button type="button" className="primary-button" data-analytics-name="Give requested access" disabled={busy} onClick={() => change({ nano: { entry: item.email, allowed: true } })}>{t('Give access')}</button>
+          <button type="button" className="share-remove" aria-label={t('Dismiss request from {name}', { name: item.name || item.email })} disabled={busy} onClick={() => change({ request: { email: item.email, dismiss: true } })}>{t('Dismiss')}</button></span></li>)}</ul></>}
       {domains.length > 0 && <><h3>{t('Domains')}</h3><ul className="share-people">{domains.map(domain => <li key={domain}><span><b>{t('Everyone at {domain}', { domain })}</b></span>
         <span><button type="button" className="share-remove" aria-label={t('Remove {email}', { email: domain })} disabled={busy} onClick={() => change({ nano: { entry: domain, allowed: false } })}>{t('Remove')}</button></span></li>)}</ul></>}
       {access && !access.people && <p className="share-note" role="status">{t('Couldn’t load who has signed in, so only people given access or admin rights are listed. Try again later.')}</p>}

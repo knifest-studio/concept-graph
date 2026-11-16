@@ -63,7 +63,7 @@ function BoardAccess({ board }) {
     {board.role !== 'owner' && <span>{t(roleNames[board.role] || roleNames.view)}{board.ownerName ? ` · ${board.ownerName}` : ''}</span>}</span>;
 }
 
-function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLogout, theme, setTheme, error }) {
+function BoardsHome({ user, siteRole, accessRequests, setAccessRequests, boards, setBoards, services, onOpen, onLogout, theme, setTheme, error }) {
   const [teamOpen, setTeamOpen] = useState(false);
   const waiting = useWaitingVideos(`cloud:${user.name}`), soundKey = soundPreferenceKey(`cloud:${user.name}`);
   const [sounds, setSounds] = useState(() => readSoundPreference(localStorage, soundKey));
@@ -141,9 +141,9 @@ function BoardsHome({ user, siteRole, boards, setBoards, services, onOpen, onLog
   return <div className="cloud-home" data-analytics-area="boards">
     <header className="app-header cloud-home-header" data-analytics-area="top-bar"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
       <Preferences analytics theme={theme} setTheme={setTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
-      <AccountMenu user={user} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
+      <AccountMenu user={user} siteRole={siteRole} requests={accessRequests} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
     </div></header>
-    {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
+    {teamOpen && <TeamAccessDialog services={services} onRequests={setAccessRequests} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
     <main className="cloud-home-main"><div className="cloud-home-heading"><div><h1>{t('Boards')}</h1><p>{t('New boards are private. Share each one by link or with the people you invite.')}</p></div><button ref={createButton} type="button" className="primary-button" onClick={start}><span aria-hidden="true">+</span> {t('New board')}</button></div>
       {(error || loadError) && <p role="alert" className="cloud-error cloud-home-error">{error || loadError}{loadError && <button type="button" onClick={() => refresh.current?.()}>{t('Try again')}</button>}</p>}
       {loading && !boards.length && !editing ? <p role="status" className="cloud-home-status">{t('Loading boards…')}</p> : <>
@@ -184,7 +184,7 @@ function Cursors({ cursors, pings, visible }) {
 const emptySharing = { ready: false, teammates: [], outgoing: null, incoming: [], shared: [] };
 
 // Remounted (with a fresh document) whenever the person's role changes, so edits the room ignored never linger.
-function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, onDeleted, user: account, siteRole, paired, pairing, pairCancel, helperStatus, openPair, unpair, pairDialog, finishPair, onBack, onLogout, services, Editor, ...editorProps }) {
+function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, onDeleted, user: account, siteRole, accessRequests, setAccessRequests, paired, pairing, pairCancel, helperStatus, openPair, unpair, pairDialog, finishPair, onBack, onLogout, services, Editor, ...editorProps }) {
   const helperRef = useRef(helperStatus); helperRef.current = helperStatus;
   const user = boardAuthor(account) || { name: 'Teammate' }, editable = role !== 'view';
   const [session, setSession] = useState(null), [connection, setConnection] = useState('connecting'), [peers, setPeers] = useState([]), [error, setError] = useState(''), [sharingView, setSharingView] = useState(emptySharing);
@@ -416,7 +416,9 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     onRequest: owner => { session.sharing.request(owner); session.share(); }, onWithdraw: () => { session.sharing.withdraw(); session.share(); },
     onAllow: id => { session.sharing.allow(id); session.share(); }, onDecline: id => { session.sharing.decline(id); session.share(); },
   };
-  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
+  // Asking for the team's key only puts this person in front of the admins (Team access); the status then says so.
+  const requestAccess = async () => { const result = await services.api('/api/nano/request', json('POST', {})); nanoSoon.current(); return result; };
+  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), requestAccess, role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
   session.cursors = visible => <Cursors cursors={session.cursorStore} pings={session.pingStore} visible={visible}/>;
   session.toolbar = <>
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
@@ -427,13 +429,13 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   session.generationSharing = editable ? <CodexSharingDetails view={sharingView} {...sharingActions}/> : null;
   session.boardMenuButton = historyButton;
   session.openHistory = () => setHistoryOpen(true);
-  session.account = <AccountMenu user={account} siteRole={siteRole} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
+  session.account = <AccountMenu user={account} siteRole={siteRole} requests={accessRequests} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
   session.panels = <>{chatOpen && <BoardChatPanel session={session} onClose={() => { setChatOpen(false); chatButton.current?.focus(); }}/>}<VoiceAudio session={session}/></>;
   return <>
     <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>
     {editable && <CodexRequests requests={sharingView.incoming} onAllow={sharingActions.onAllow} onDecline={sharingActions.onDecline}/>}
     {pairDialog(editable && !sharingView.ready && <TeammateCodex view={sharingView} onRequest={sharingActions.onRequest} onWithdraw={sharingActions.onWithdraw}/>)}
-    {teamOpen && <TeamAccessDialog services={services} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
+    {teamOpen && <TeamAccessDialog services={services} onRequests={setAccessRequests} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
     {call && (caller => <AttentionCard key={call.id} call={call} color={caller?.user.color || '#6b6e89'} pageName={presencePages(session.doc).length > 1 ? presencePages(session.doc).find(page => page.id === (caller?.page ?? call.page))?.name : ''}
       onGo={() => { session.answerCall(call.id, 'coming'); const arrived = session.follow?.(call.from.clientId, { ...call, name: call.from.name }); if (arrived) session.ping({ ...arrived.spot, page: arrived.page, color: caller?.user.color || '#6b6e89' }); return arrived; }}
       onLater={() => { session.answerCall(call.id, 'later'); setCall(null); }} onBack={previous => session.returnTo?.(previous)} onClose={() => setCall(null)}/>)(peers.find(peer => peer.id === call.from.clientId))}
@@ -462,7 +464,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   ]).get(new URLSearchParams(window.location.search).get('auth_error')) || ''), [busy, setBusy] = useState(false);
   const [helperCode, setHelperCode] = useState(() => sessionStorage.getItem('concept-graph-helper-token') || '');
   const [pairing, setPairing] = useState(false), [paired, setPaired] = useState(false), [pairBusy, setPairBusy] = useState(false), [pairError, setPairError] = useState(''), [helperStatus, setHelperStatus] = useState({});
-  const [pairCancel, setPairCancel] = useState(0), [siteRole, setSiteRole] = useState(null);
+  const [pairCancel, setPairCancel] = useState(0), [siteRole, setSiteRole] = useState(null), [accessRequests, setAccessRequests] = useState(0);
   useEffect(() => { if (user) analyticsView(boardId ? 'board' : location.pathname === '/admin/analytics' ? 'admin' : 'boards', boardId || ''); // Watching a recording must not record the admin page again.
     if (location.pathname !== '/admin/analytics') return startAnalytics(user?.email || null); }, [user?.email]);
   useEffect(() => { if (user && !boardId) analyticsView(location.pathname === '/admin/analytics' ? 'admin' : 'boards'); }, [user, boardId]);
@@ -470,7 +472,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   const [theme, setTheme] = useThemePreference();
   const pendingRun = useRef(null);
   useEffect(() => {
-    services.api('/api/cloud/me').then(result => { setUser(result.user); setSiteRole(result.siteRole || null); }).catch(failure => { setUser(null); if (failure.status !== 401) setError(failure.message); });
+    services.api('/api/cloud/me').then(result => { setUser(result.user); setSiteRole(result.siteRole || null); setAccessRequests(result.accessRequests || 0); }).catch(failure => { setUser(null); if (failure.status !== 401) setError(failure.message); });
     services.api('/api/auth/config').then(result => setDevLogin(result.devLogin === true)).catch(() => {});
     const url = new URL(window.location.href);
     if (url.searchParams.has('auth_error')) { url.searchParams.delete('auth_error'); window.history.replaceState(null, '', url.href); }
@@ -487,11 +489,12 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
     if (paired && pendingRun.current) { const run = pendingRun.current; pendingRun.current = null; run(); }
   }, [paired]);
   // `alternative` offers the team key instead when the prompt that asked for Codex could run on it: { title, note, label, run }.
+  // With `stay` the dialog stays open and `run` returns the card to show next (asking for access, say).
   const openPair = (callback, downloads = false, alternative = null) => { pendingRun.current = callback || null; setShowAllBuilds(downloads); setPairAlternative(alternative); setPairing(true); };
   const cancelPair = () => { setPairing(false); pendingRun.current = null; setPairAlternative(null); setPairCancel(value => value + 1); };
   // A teammate's Codex was granted instead: close setup but keep the pending generation, which then starts.
   const finishPair = () => { setPairing(false); pendingRun.current = null; setPairAlternative(null); };
-  const pairDialog = teammates => pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Pair local helper')} onKeyDown={keepDialogFocus}><button className="cloud-pair-close" autoFocus onClick={cancelPair}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg>{t('Back to board')}</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair} teammates={<>{pairAlternative && <section className="codex-teammates pair-alternative" aria-label={pairAlternative.title}><strong>{pairAlternative.title}</strong><p>{pairAlternative.note}</p><button type="button" className="primary-button" data-analytics-name="Use team key instead" onClick={() => { const { run } = pairAlternative; cancelPair(); setTimeout(run); }}>{pairAlternative.label}</button></section>}{teammates}</>} onClose={cancelPair}/></div>;
+  const pairDialog = teammates => pairing && <div className="cloud-pair-overlay" role="dialog" aria-modal="true" aria-label={t('Pair local helper')} onKeyDown={keepDialogFocus}><button className="cloud-pair-close" autoFocus onClick={cancelPair}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg>{t('Back to board')}</button><HelperSetup cloudMode showAllBuilds={showAllBuilds} code={helperCode} setCode={setHelperCode} connecting={pairBusy} error={pairError} connect={pair} teammates={<>{pairAlternative && <section className="codex-teammates pair-alternative" aria-label={pairAlternative.title}><strong>{pairAlternative.title}</strong><p role="status">{pairAlternative.note}</p>{pairAlternative.label && <button type="button" className="primary-button" data-analytics-name={pairAlternative.stay ? 'Request access' : 'Use team key instead'} onClick={async () => { const { run, stay } = pairAlternative; if (!stay) { cancelPair(); setTimeout(run); return; } const next = await run(); if (next) setPairAlternative(next); }}>{pairAlternative.label}</button>}</section>}{teammates}</>} onClose={cancelPair}/></div>;
   const unpair = (rejected = true) => {
     services.unpair(); setHelperCode(''); setPaired(false); setHelperStatus({});
     if (!rejected) { pendingRun.current = null; setPairCancel(value => value + 1); }
@@ -552,8 +555,8 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   if (location.pathname === '/admin/analytics') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AnalyticsAdmin services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can view analytics.')}</main>;
   const current = boardId && opened?.id === boardId ? opened : null;
   return <>
-    {!boardId ? <BoardsHome user={user} siteRole={siteRole} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} setTheme={setTheme} error={error}/>
-      : current?.role ? <CloudBoard key={`${boardId}:${current.role}`} boardId={boardId} boardName={current.board.name} role={current.role} siteRole={siteRole} sharing={current.sharing} onSharing={changeSharing} onAccess={role => { if (role !== current.role) setAccessCheck(value => value + 1); }} onDeleted={notice => { setBoards(list => list.filter(board => board.id !== boardId)); openBoard(null); if (notice) setError(t('The owner deleted this board.')); }} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => openBoard(null)} onLogout={() => signOut()} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={openBoard} theme={theme} setTheme={setTheme} waitForPreferences={async () => {}}/>
+    {!boardId ? <BoardsHome user={user} siteRole={siteRole} accessRequests={accessRequests} setAccessRequests={setAccessRequests} boards={boards} setBoards={setBoards} services={services} onOpen={openBoard} onLogout={() => signOut()} theme={theme} setTheme={setTheme} error={error}/>
+      : current?.role ? <CloudBoard key={`${boardId}:${current.role}`} boardId={boardId} boardName={current.board.name} role={current.role} siteRole={siteRole} accessRequests={accessRequests} setAccessRequests={setAccessRequests} sharing={current.sharing} onSharing={changeSharing} onAccess={role => { if (role !== current.role) setAccessCheck(value => value + 1); }} onDeleted={notice => { setBoards(list => list.filter(board => board.id !== boardId)); openBoard(null); if (notice) setError(t('The owner deleted this board.')); }} user={user} paired={paired} pairing={pairing} pairCancel={pairCancel} helperStatus={helperStatus} openPair={openPair} unpair={unpair} pairDialog={pairDialog} finishPair={finishPair} onBack={() => openBoard(null)} onLogout={() => signOut()} services={services} Editor={Editor} boards={boards} updateBoards={setBoards} selectBoard={openBoard} theme={theme} setTheme={setTheme} waitForPreferences={async () => {}}/>
       : current ? <BoardUnavailable state={current} user={user} onBack={() => openBoard(null)} onRetry={() => setAccessCheck(value => value + 1)} onSwitch={() => signOut(true)}/>
       : <div className="startup">{t('Opening board…')}</div>}
     {!boardId && pairDialog()}

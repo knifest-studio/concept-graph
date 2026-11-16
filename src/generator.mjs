@@ -32,13 +32,16 @@ export function rememberGenerator(data, generator, storage = globalThis.localSto
 }
 
 // What a site provider can do for this person, from GET /api/nano. Until it answers, Generate is left to the server.
-// `admins` names who gives access (GET /api/nano lists them for people without it); `short` labels an option that can't be chosen.
-export function nanoState(status, generator = generators.nanoBanana, admins = status?.admins) {
-  const names = Array.isArray(admins) ? admins.filter(name => typeof name === 'string' && name).join(', ') : '';
+// `access` says who gives access and whether this person asked for it (GET /api/nano adds both for people without it);
+// `short` labels an option that can't be chosen, and `requestable` offers Request access for the team's image key.
+export function nanoState(status, generator = generators.nanoBanana, access = status) {
+  const names = Array.isArray(access?.admins) ? access.admins.filter(name => typeof name === 'string' && name).join(', ') : '', requested = !!access?.requested;
   const fal = status?.fal !== false, gpt = generator === generators.gptImage, model3d = generator === model3dTask;
   if (!status) return { selectable: true, ready: true, note: model3d ? t('3D generation runs on the site, not in Codex.') : gpt ? t('Uses the site’s OpenAI key') : t('Uses the site’s Gemini key'), budget: '', fal };
   if (!status.configured) return { selectable: false, ready: false, short: t('not set up'), note: model3d ? t('3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.') : gpt ? t('GPT Image isn’t set up on this site') : t('Nano Banana isn’t set up on this site'), budget: '', fal };
-  if (!status.allowed) return { selectable: false, ready: false, short: t('no access'), note: names ? model3d ? t('3D generation isn’t available for your account yet. Ask {names}: site admins give access in Team access.', { names }) : t('Not available for your account yet. Ask {names}: site admins give access in Team access.', { names })
+  if (!status.allowed && requested && !model3d) return { selectable: false, ready: false, short: t('requested'), requestable: false, requested, budget: '', fal,
+    note: names ? t('Access requested. {names} will see it in Team access.', { names }) : t('Access requested. A site admin will see it in Team access.') };
+  if (!status.allowed) return { selectable: false, ready: false, short: t('no access'), requestable: !model3d, requested: false, note: names ? model3d ? t('3D generation isn’t available for your account yet. Ask {names}: site admins give access in Team access.', { names }) : t('Not available for your account yet. Ask {names}: site admins give access in Team access.', { names })
     : model3d ? t('3D generation isn’t available for your account. Ask a site admin for access.') : t('Not available for your account. Ask a site admin for access.'), budget: '', fal };
   const left = Math.max(0, status.dailyImages - status.usedToday), budget = t('Team: {spent} of {limit} this month', { spent: dollars(status.teamSpentUsd), limit: dollars(status.monthlyUsd) });
   if (!left) return { selectable: true, ready: false, note: t('Daily limit reached ({used}/{limit})', { used: Math.min(status.usedToday, status.dailyImages), limit: status.dailyImages }), budget, fal };
