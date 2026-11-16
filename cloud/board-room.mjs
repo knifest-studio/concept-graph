@@ -28,6 +28,9 @@ const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', time
 const active = run => ['running', 'queued'].includes(run?.status);
 // A prompt's image run: its calls are variants of one request (not images to upscale or turn into 3D, nor a description).
 const variantRun = request => !request.upscale && !request.model3d && !request.describe;
+// A run of variants sends only a few of its reserved calls at a time. Its reservations, and how many calls it has sent,
+// stay in the room's storage until they are settled, so a room that stops mid-run can refund the calls it never sent.
+const variantsKey = 'variants:reserved';
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
@@ -73,6 +76,8 @@ export class BoardRoom extends YServer {
     for (const run of [...this.document.getMap('runs').values()]) {
       if (isSiteGenerator(run?.provider) && active(run) && !this.nanoJobs.has(run.id)) this.writeRun(run.id, { status: 'failed', error: 'Generation was interrupted. Run the prompt again.', count: run.outputIds?.length || 0 });
     }
+    // Found from storage rather than the board, which may have been saved before the run began.
+    for (const id of Object.keys(kv.get(variantsKey) || {})) if (!this.nanoJobs.has(id)) this.ctx.waitUntil(this.releaseUnsent(id));
     // A board made before custom nodes belonged to boards copies the old team library the first time it opens.
     if (!libraryCopied(this.document)) {
       try { copyLibrary(this.document, await this.directory().libraryFor(this.name), 'library'); }
@@ -302,6 +307,25 @@ export class BoardRoom extends YServer {
 
   directory() { return this.env.Directory.get(this.env.Directory.idFromName('boards')); }
 
+  // Records a run of variants' reservations and how many of its calls have been sent; null forgets the run.
+  trackVariants(id, fields) {
+    const kv = this.ctx.storage.kv, open = { ...kv.get(variantsKey) };
+    if (fields) open[id] = { ...open[id], ...fields }; else delete open[id];
+    if (Object.keys(open).length) kv.put(variantsKey, open); else kv.delete(variantsKey);
+  }
+
+  // For a run of variants this room no longer runs: calls it never sent settle at nothing; sent calls keep their estimate,
+  // since the provider may have billed them.
+  async releaseUnsent(id) {
+    const tracked = this.ctx.storage.kv.get(variantsKey)?.[id];
+    if (!tracked) return;
+    try {
+      const unsent = tracked.reservations.slice(tracked.started || 0);
+      if (unsent.length) await this.directory().settleNanoMany(unsent.map(reservation => ({ id: reservation, images: 0, usd: 0 })));
+      this.trackVariants(id, null);
+    } catch (cause) { console.error('Could not refund the variants an interrupted run never sent:', cause); }
+  }
+
   // Only an active run changes, so a cancellation or failure written by someone else is never undone.
   writeRun(id, fields) {
     const runs = this.document.getMap('runs'), run = runs.get(id);
@@ -373,6 +397,7 @@ export class BoardRoom extends YServer {
       this.document.transact(() => this.document.getMap('runs').set(run.id, run), origin);
       const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, controller: new AbortController(), next: 0 };
       this.nanoJobs.set(run.id, job);
+      if (variants) this.trackVariants(run.id, { reservations, started: 0 });
       this.ctx.waitUntil(this.runNano(job));
       return { run: { id: run.id } };
     } finally { this.nanoStarting.delete(nodeId); }
@@ -569,6 +594,7 @@ export class BoardRoom extends YServer {
     if (!job) {
       if (!isSiteGenerator(run?.provider)) return { error: 'Generation not found.', status: 404 };
       if (active(run)) this.writeRun(runId, { status: 'failed', error: 'Generation was interrupted. Run the prompt again.', count: run.outputIds?.length || 0 });
+      this.ctx.waitUntil(this.releaseUnsent(runId));
       return { ok: true };
     }
     if (job.email !== email) return { error: 'Only the person who started this generation can cancel it.', status: 403 };
@@ -703,6 +729,8 @@ export class BoardRoom extends YServer {
     const lane = async () => {
       while (next < results.length && !stopped()) {
         const index = next++, run = runs.get(job.run.id);
+        // Stored before the call goes out, so after a restart no call that was sent is refunded.
+        this.trackVariants(job.run.id, { started: next });
         // Placeholders past the first lanes say Queued until their call starts.
         if (index >= variantLanes && run) this.document.transact(() => runs.set(job.run.id, { ...run, variantsStarted: index + 1 }), origin);
         try { await this.callNano(job, call, fallback, results[index]); outcomes[index] = { status: 'fulfilled' }; }
@@ -790,7 +818,8 @@ export class BoardRoom extends YServer {
       this.writeRun(run.id, { ...(job.cancelled ? { status: 'cancelled' } : outcome), count: current?.outputIds?.length || 0 });
       const settled = job.reservations.map((id, index) => ({ id, images: results[index].placed, usd: results[index].usd }));
       const failed = cause => console.error(`Could not record ${name} usage:`, cause);
-      if (variants) { try { await this.directory().settleNanoMany(settled); } catch (cause) { failed(cause); } }
+      // If settling fails, the stored reservations let a restarted room still refund the calls that were never sent.
+      if (variants) { try { await this.directory().settleNanoMany(settled); this.trackVariants(run.id, null); } catch (cause) { failed(cause); } }
       else for (const { id, ...usage } of settled) { try { await this.directory().settleNano(id, usage); } catch (cause) { failed(cause); } }
       // Paid results are saved before the room may sleep, even when nobody is connected to flush them.
       await this.onSave().catch(cause => console.error(`Could not save the board after ${name}:`, cause));

@@ -35,7 +35,7 @@ export function VariantRow({ id, variants = 1, choose, disabled }) {
     cancelled.current = false; setDraft(null);
     if (count !== null && count !== variants) choose(id, count);
   };
-  return <div className="variant-row nodrag" role="group" aria-label={t('Number of variants')} data-tooltip={t('Variants: separate images generated at the same time. Type any number up to {max}.', { max: maxVariants })}>
+  return <div className="variant-row nodrag" role="group" aria-label={t('Number of variants')} data-tooltip={t('Variants: separate images from one Generate. Type any number up to {max}.', { max: maxVariants })}>
     <span>{t('Variants')}</span>{variantPresets.map(count => <button type="button" key={count} aria-pressed={variants === count} disabled={disabled} onClick={() => choose(id, count)}>{count}</button>)}
     <input className={`variant-custom${custom ? ' chosen' : ''}`} type="text" inputMode="numeric" maxLength={2} placeholder="…" aria-label={t('Custom number of variants, 1–{max}', { max: maxVariants })} disabled={disabled}
       value={draft ?? custom} onFocus={event => { setDraft(custom); event.currentTarget.select(); }} onChange={event => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit}

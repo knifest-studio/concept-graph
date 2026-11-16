@@ -623,6 +623,36 @@ runtimeTest('cancelling many variants sends no further calls and refunds the one
   assert.equal(spent.usedToday, 0); assert.equal(Math.round(spent.teamSpentUsd * 1e6), Math.round(4 * variantEstimate(boardRoom) * 1e6));
 });
 
+runtimeTest('a run of variants cut off by a room restart refunds the calls it never sent and sends none again', async t => {
+  const { room, board, directory, waits } = cloudSetup(t);
+  const calls = fakeGemini(t, hanging), values = new Map(), name = `${board.id}-first`, lead = 'lead@studio.example';
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const first = room(name, values, { save: true });
+  applyLocalGraph(first.document, seed, empty, 'seed'); setVariants(first, 10);
+  await first.setName(name);
+  const { run: { id } } = await first.startNano({ nodeId: 'p', requester: { name: 'Lead', email: lead, color: user.color } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 4);
+  const estimate = variantEstimate(first), spent = () => Math.round(directory.nanoUsage(lead).teamSpentUsd * 1e6);
+  assert.equal(spent(), Math.round(10 * estimate * 1e6));
+  await first.saveSnapshot();
+  // The room stops with four calls sent; a new instance of it loads what was saved.
+  const restarted = room(name, values), before = waits.length;
+  await restarted.setName(name);
+  await Promise.all(waits.slice(before));
+  assert.equal(restarted.document.getMap('runs').get(id).status, 'failed');
+  // The four sent calls may have been billed; the six never sent cost nothing.
+  assert.equal(spent(), Math.round(4 * estimate * 1e6));
+  assert.equal(values.get('variants:reserved'), undefined); assert.equal(calls.length, 4);
+  // Cancelling the interrupted run later finds nothing more to refund.
+  assert.deepEqual(restarted.cancelNano({ runId: id, email: lead }), { ok: true });
+  await Promise.all(waits.slice(before));
+  assert.equal(spent(), Math.round(4 * estimate * 1e6));
+  // The stopped instance's own calls end here only because this test shares one process with the new one.
+  first.cancelNano({ runId: id, email: lead }); await Promise.all(waits);
+  assert.equal(calls.length, 4); assert.equal(spent(), Math.round(4 * estimate * 1e6));
+});
+
 runtimeTest('slow variants time out one by one and then as a run; calls the run never started cost nothing', async t => {
   const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t);
   setVariants(boardRoom, 12);

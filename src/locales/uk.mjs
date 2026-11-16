@@ -985,7 +985,7 @@ export default {
   'Fit canvas': 'Умістити полотно',
   'All boards': 'Усі дошки',
   'Concept Graph: all boards': 'Concept Graph: усі дошки',
-  'Variants: separate images generated at the same time. Type any number up to {max}.': 'Варіанти: окремі зображення, що генеруються одночасно. Можна ввести будь-яке число до {max}.',
+  'Variants: separate images from one Generate. Type any number up to {max}.': 'Варіанти: окремі зображення за одне натискання «Згенерувати». Можна ввести будь-яке число до {max}.',
   'Number of variants': 'Кількість варіантів',
   'Custom number of variants, 1–{max}': 'Своя кількість варіантів, 1–{max}',
   '{count} variant': ['{count} варіант', '{count} варіанти', '{count} варіантів', '{count} варіанта'],
