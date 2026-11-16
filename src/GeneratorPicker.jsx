@@ -23,22 +23,26 @@ export function GeneratorPicker({ id, generator, nano, gpt, choose, describe = f
   </label>;
 }
 
-// With a site API key one Generate starts several images at once; they arrive as one slideshow. The row sits under the
-// prompt, where there is room for one-click counts plus a small field for any other count up to maxVariants; a light
-// card keeps an empty row of the same height. A typed count is saved on Enter or when the field is left, so teammates
-// and undo never see a half-typed number; Escape, an empty field or 0 keeps the count as it was.
+// With a site API key one Generate starts several images at once; they arrive as one slideshow. The counts sit under the
+// prompt, in the row that ends with the generation settings chip: one-click counts plus a small field for any other count
+// up to maxVariants. With the chip beside them there is no room for the field, so it waits as a narrow … button (or the
+// typed count) that turns into the field when clicked. A typed count is saved on Enter or when the field is left, so
+// teammates and undo never see a half-typed number; Escape, an empty field or 0 keeps the count as it was.
 export const typedVariants = text => /^\d+$/.test(text) && Number(text) >= 1 ? clampVariants(Number(text)) : null;
-export function VariantRow({ id, variants = 1, choose, disabled }) {
-  const custom = variantPresets.includes(variants) ? '' : String(variants), [draft, setDraft] = React.useState(null), cancelled = React.useRef(false);
+export function VariantRow({ id, variants = 1, choose, disabled, compact = false }) {
+  const custom = variantPresets.includes(variants) ? '' : String(variants), [draft, setDraft] = React.useState(null), [editing, setEditing] = React.useState(false), cancelled = React.useRef(false), refocus = React.useRef(false);
   const commit = () => {
     const count = cancelled.current || draft === null ? null : typedVariants(draft);
-    cancelled.current = false; setDraft(null);
+    cancelled.current = false; setDraft(null); setEditing(false);
     if (count !== null && count !== variants) choose(id, count);
   };
-  return <div className="variant-row nodrag" role="group" aria-label={t('Number of variants')} data-tooltip={t('Variants: separate images from one Generate. Type any number up to {max}.', { max: maxVariants })}>
+  const label = t('Custom number of variants, 1–{max}', { max: maxVariants });
+  return <div className={`variant-group${compact ? ' compact' : ''}`} role="group" aria-label={t('Number of variants')} data-tooltip={t('Variants: separate images from one Generate. Type any number up to {max}.', { max: maxVariants })}>
     <span>{t('Variants')}</span>{variantPresets.map(count => <button type="button" key={count} aria-pressed={variants === count} disabled={disabled} onClick={() => choose(id, count)}>{count}</button>)}
-    <input className={`variant-custom${custom ? ' chosen' : ''}`} type="text" inputMode="numeric" maxLength={2} placeholder="…" aria-label={t('Custom number of variants, 1–{max}', { max: maxVariants })} disabled={disabled}
-      value={draft ?? custom} onFocus={event => { setDraft(custom); event.currentTarget.select(); }} onChange={event => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit}
-      onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.blur(); } else if (event.key === 'Escape') { cancelled.current = true; event.currentTarget.blur(); } }}/>
+    {/* Enter or Escape in the field hands focus back to the button that replaces it, so the keyboard does not lose its place. */}
+    {compact && !editing ? <button ref={element => { if (element && refocus.current) { refocus.current = false; element.focus({ preventScroll: true }); } }} type="button" className={`variant-custom${custom ? ' chosen' : ''}`} aria-label={label} aria-pressed={!!custom} disabled={disabled} onClick={() => setEditing(true)}>{custom || '…'}</button>
+      : <input className={`variant-custom${custom ? ' chosen' : ''}`} type="text" inputMode="numeric" maxLength={2} placeholder="…" aria-label={label} disabled={disabled} autoFocus={compact}
+        value={draft ?? custom} onFocus={event => { setDraft(custom); event.currentTarget.select(); }} onChange={event => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit}
+        onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); refocus.current = compact; event.currentTarget.blur(); } else if (event.key === 'Escape') { cancelled.current = true; refocus.current = compact; event.currentTarget.blur(); } }}/>}
   </div>;
 }

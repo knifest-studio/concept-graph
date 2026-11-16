@@ -4,7 +4,7 @@ import * as nodeModule from 'node:module';
 import * as Y from 'yjs';
 import { signSession, userColor } from '../cloud/auth.mjs';
 import { readFile } from 'node:fs/promises';
-import { defaultDailyImages, defaultMonthlyUsd, NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, variantLanes, variantRunTimeout } from '../cloud/nano-banana.mjs';
+import { defaultDailyImages, defaultMonthlyUsd, NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, staleSettings, staleSettingsError, variantLanes, variantLanesFor, variantRunTimeout } from '../cloud/nano-banana.mjs';
 import { clampVariants, imageSize, maxVariants, promptVariants, validateGraph, variantPresets } from '../graph.mjs';
 import { runPlaceholders } from '../src/run-placeholders.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -115,6 +115,9 @@ test('variant counts: presets up to 16, any whole number up to 32, and a run lim
   for (const bad of [0, 1, 33, 2.5]) assert.throws(() => validateGraph({ nodes: [node(bad)], edges: [] }), /Invalid number of variants/);
   assert.deepEqual([1, 4, 5, 8, 16, 20, 32].map(count => variantRunTimeout(count) / 60000), [5, 5, 7, 7, 11, 13, 14]);
   assert.equal(variantRunTimeout(1), nanoTimeout);
+  // Large images go fewer at a time, and the run's limit grows with the waves that makes (still under 15 minutes).
+  assert.deepEqual([{}, { imageSize: '2K' }, { imageSize: '4K' }, { gpt: true }, { gpt: true, imageSize: '2K' }, { gpt: true, imageSize: '4K' }].map(variantLanesFor), [4, 4, 2, 4, 2, 1]);
+  assert.deepEqual([[4, 1], [6, 1], [8, 2], [16, 2], [32, 1]].map(([count, lanes]) => variantRunTimeout(count, lanes) / 60000), [11, 14, 11, 14, 14]);
 });
 
 test('the request sends the prompt, connected context and labelled references, without Codex tool instructions', () => {
@@ -256,7 +259,8 @@ test('Nano Banana prompts start and cancel through the board API, never through 
   doc.getMap('nodes').get('p').get('data').set('text', 'Edited just now');
   await generation.startNano('p');
   assert.equal(calls[0][0], '/api/boards/board/nano'); assert.equal(calls[0][1].method, 'POST');
-  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID) });
+  // settings: 1 tells the room this page shows generation settings.
+  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID), settings: 1 });
   assert.deepEqual(started, ['nano-run']);
   doc.getMap('runs').set('nano-run', { id: 'nano-run', nodeId: 'p', status: 'running', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: user, startedAt: '2026-11-04T10:00:00.000Z' });
   await generation.startNano('p');
@@ -1055,6 +1059,47 @@ runtimeTest('a 3D thumbnail that fails to store falls back to the source poster'
   });
   const started = await app.boardRoom.startNano({ nodeId: '3d', requester: { ...user, email: 'lead@studio.example' } }); await app.settle();
   const graph = readCloudGraph(app.boardRoom.document); assert.equal(graph.runs.find(run => run.id === started.run.id).status, 'completed'); assert.equal(graph.nodes.find(node => node.data.runId === started.run.id).data.poster, reference);
+});
+
+test('a stale page’s refusal follows the browser’s language, preferring Ukrainian or English by weight, and matches the translation', async () => {
+  const { default: uk } = await import('../src/locales/uk.mjs');
+  assert.equal(uk[staleSettings.en], staleSettings.uk);
+  const both = `${staleSettings.en} ${staleSettings.uk}`;
+  for (const [header, expected] of [['uk', staleSettings.uk], ['uk-UA,uk;q=0.9,en;q=0.8', staleSettings.uk], ['ru-RU,ru;q=0.9,uk;q=0.8,en;q=0.7', staleSettings.uk],
+    ['en-US,en;q=0.9,uk;q=0.8', both], ['en;q=0.5,uk;q=0.8', staleSettings.uk], ['uk;q=0,en', both], ['de-DE', both], ['', both], [null, both], ['*', both]]) assert.equal(staleSettingsError(header), expected, String(header));
+});
+
+runtimeTest('Nano Banana gets the chosen shape, size and thinking, reserves for them, and stale pages are asked to reload', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t), lead = await cookie('lead@studio.example'), path = `/api/boards/${board.id}/nano`;
+  const set = changes => { const before = readCloudGraph(boardRoom.document), next = structuredClone(before); Object.assign(next.nodes.find(node => node.id === 'p').data, changes); applyLocalGraph(boardRoom.document, next, before, 'edit'); };
+  // A setting Nano Banana cannot use changes nothing it sends, so even a page from before settings may start the run.
+  set({ background: 'transparent' });
+  const calls = fakeGemini(t, async () => Response.json(interaction([png(100, 100)])));
+  assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).status, 202); await settle();
+  assert.equal(calls[0].body.response_format, undefined); assert.equal(calls[0].body.generation_config, undefined);
+  assert.deepEqual(readCloudGraph(boardRoom.document).runs[0].settings, { requested: { background: 'transparent' }, applied: {} });
+  set({ aspectRatio: '9:16', imageSize: '4K', nanoThinking: 'minimal', variants: 2 });
+  const stale = await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' } });
+  // Such a page cannot translate the refusal, so it comes in the browser's language, or in both without a clear choice.
+  assert.equal(stale.status, 409); assert.equal((await stale.json()).error, `${staleSettings.en} ${staleSettings.uk}`);
+  const ukrainian = await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p' }, headers: { 'Accept-Language': 'uk-UA,uk;q=0.9,en-US;q=0.8' } });
+  assert.equal(ukrainian.status, 409); assert.equal((await ukrainian.json()).error, staleSettings.uk);
+  assert.equal(calls.length, 1);
+  t.mock.restoreAll();
+  const held = gate(), waiting = fakeGemini(t, async () => { await held.promise; return Response.json(interaction([png(100, 100)])); });
+  const spentBefore = directory.nanoUsage('lead@studio.example').teamSpentUsd;
+  assert.equal((await request(path, { method: 'POST', cookie: lead, data: { nodeId: 'p', settings: 1 } })).status, 202);
+  await new Promise(resolve => setImmediate(resolve));
+  // Both variants are held at the 4K, minimal-thinking estimate while they run.
+  const estimate = nanoEstimate({ promptLength: nanoPrompt(readCloudGraph(boardRoom.document), 'p').prompt.length, references: 1, imageSize: '4K', thinking: 'minimal' });
+  assert.equal(Math.round((directory.nanoUsage('lead@studio.example').teamSpentUsd - spentBefore) * 1e6), Math.round(2 * estimate * 1e6));
+  held.open(); await settle();
+  assert.equal(waiting.length, 2);
+  for (const call of waiting) { assert.deepEqual(call.body.response_format, { type: 'image', aspect_ratio: '9:16', image_size: '4K' }); assert.deepEqual(call.body.generation_config, { thinking_level: 'minimal' }); }
+  const run = readCloudGraph(boardRoom.document).runs.find(item => item.variants === 2);
+  assert.deepEqual(run.settings.applied, { aspectRatio: '9:16', imageSize: '4K', nanoThinking: 'minimal' });
+  // Agents never come from an old page, so their runs use the settings too.
+  assert.equal((await boardRoom.mcp({ tool: 'start_run', args: { nodeId: 'p' }, user: { name: 'Lead', email: 'lead@studio.example' } })).error, undefined);
 });
 
 runtimeTest('site runs record the images they were given: prompts with masks and custom node references, descriptions, upscales and 3D', async t => {

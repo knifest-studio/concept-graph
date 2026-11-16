@@ -8,7 +8,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
+import { codexGenerator, generationFields, generatorOf, takesGenerationSettings, generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
@@ -29,6 +29,8 @@ import { CustomNodeActions } from './CustomNodeActions.jsx';
 import { CopyCustomNodes } from './CopyCustomNodes.jsx';
 import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDiscovery } from './custom-node-discovery.mjs';
 import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
+import { GenerationSettings } from './GenerationSettings.jsx';
+import { appliedSummary } from './generation-settings.mjs';
 import { ZoomableImage } from './ImageZoom.jsx';
 import { RunInputs } from './RunInputs.jsx';
 import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
@@ -236,7 +238,9 @@ function ExpandedTextNode({ id, data, selected }) {
       {dictation.active && <span className="sr-only" role="status">{dictation.stopping ? t('Finishing dictation') : dictation.listening ? t('Recording {language}', { language: dictation.language }) : t('Starting dictation')}</span>}
     </div>
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
-    {nano && !describe && <VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly}/>}
+    {/* The variant counts (site generators) and the generation settings chip; Codex prompts have the chip alone. */}
+    {!describe && <div className="variant-row nodrag">{nano && <VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly} compact/>}
+      <GenerationSettings id={id} data={data} generator={cloud ? generatorOf({ data }) : codexGenerator} readOnly={view.readOnly} references={view.images} cloud={cloud} change={canvas.setGenerationSettings}/></div>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && blocked && !pending && (nano ? <NanoReadiness note={site.note}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
     {failedRun(view) && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}
@@ -451,7 +455,7 @@ function LightNode({ id, type, data, selected }) {
   const siteReady = gpt ? view.gptReady : view.nanoReady, siteNote = gpt ? view.gptNote : view.nanoNote;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
     <PromptInputs data={data} light/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
-    {nano && !describe && <div className="variant-row" aria-hidden="true"/>}
+    {!describe && <div className="variant-row" aria-hidden="true"/>}
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
     {selected && (nano ? !siteReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={siteNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
     {view.failed && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}<LodHandle type="source"/>
@@ -582,7 +586,7 @@ const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge };
 const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
 // One generation in the History tab. Memoized: a board can hold thousands, and only active runs need the 1 s timer.
 const HistoryItem = React.memo(function HistoryItem({ run, now, page, canCancel, canvas }) {
-  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : run.task === model3dTask ? `${modelNames[run.model] || t('3D model')} · ${plural(run.outputIds.length, '{count} model', '{count} models')}` : plural(run.outputIds.length, '{count} image', '{count} images')}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
+  return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : run.task === model3dTask ? `${modelNames[run.model] || t('3D model')} · ${plural(run.outputIds.length, '{count} model', '{count} models')}` : plural(run.outputIds.length, '{count} image', '{count} images')}{appliedSummary(run.settings) && ` · ${appliedSummary(run.settings)}`}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
 });
 const noSections = Object.freeze([]);
 
@@ -2051,6 +2055,15 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (count > 1) data.variants = count; else delete data.variants; return { ...item, data }; }));
     markDirty();
   };
+  // One undo step per choice in a prompt's generation settings; an undefined value clears that setting back to the
+  // generator's default, so the stored data stays as it was before settings existed.
+  const setGenerationSettings = (nodeId, change) => {
+    const node = nodeRef.current.find(item => item.id === nodeId), keys = Object.keys(change).filter(key => Object.hasOwn(generationFields, key));
+    if (mcpLocked.current || readOnlyRef.current || !takesGenerationSettings(node) || keys.every(key => node.data[key] === (generationFields[key].includes(change[key]) ? change[key] : undefined))) return;
+    checkpoint();
+    putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; for (const key of keys) { if (generationFields[key].includes(change[key])) data[key] = change[key]; else delete data[key]; } return { ...item, data }; }));
+    markDirty();
+  };
   const setUpscale = (nodeId, change) => {
     const node = nodeRef.current.find(item => item.id === nodeId);
     if (mcpLocked.current || node?.data.task !== upscaleTask || Object.entries(change).every(([key, value]) => node.data[key] === value)) return;
@@ -2851,7 +2864,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, setGenerationSettings, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode, focusNode, copyNodeLink,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },

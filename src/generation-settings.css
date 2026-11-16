@@ -1,0 +1,38 @@
+/* The chip at the right end of an image prompt's variants row. Its summary may be cut short; the tooltip has all of it. */
+.gen-settings-chip{display:inline-flex;align-items:center;gap:4px;flex:0 1 auto;min-width:0;height:20px;margin-left:auto;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--muted);font-size:10px;font-weight:650;white-space:nowrap}
+.gen-settings-chip-text{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.gen-settings-chip.set{color:var(--text)}
+.gen-settings-chip:hover,.gen-settings-chip[aria-expanded=true]{border-color:var(--blue);color:var(--blue)}
+.gen-settings-chip:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+/* A stored value the current generator cannot use is dimmed, never hidden: switching back uses it again. */
+.gen-settings-chip .off{opacity:.45}
+
+/* Screen-space, like the app's other panels: above the board and its floating bars, below dialogs (30) and toasts (50). */
+.gen-settings-popover{position:fixed;z-index:29;width:310px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;padding:12px 14px 10px;border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text);box-shadow:var(--shadow);font-size:11px;cursor:default}
+.gen-settings-popover:focus{outline:none}
+.gen-settings-popover header{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}
+.gen-settings-popover header strong{font-size:12px;font-weight:650}
+.gen-settings-popover header span{color:var(--muted);font-size:10px;white-space:nowrap}
+/* A label column and the choices beside it, the choices wrapping onto further lines. */
+.gen-settings-row{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:8px;padding:4px 0}
+.gen-settings-label{color:var(--muted)}
+.gen-settings-row p{margin:3px 0 0 4px;color:var(--muted);font-size:10px;line-height:1.45}
+.gen-settings-options{display:flex;flex-wrap:wrap;gap:3px 4px}
+.gen-settings-options button{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 7px;border-radius:5px;color:var(--text);font-size:11px;white-space:nowrap}
+.gen-settings-options button:hover:not(:disabled){background:var(--bg)}
+.gen-settings-options button:focus-visible{outline:2px solid var(--blue);outline-offset:0}
+/* The chosen value is filled with the generator's colour: banana for Nano Banana (and Codex), teal for GPT Image. */
+.gen-settings-options button[aria-pressed=true]{background:#fbefc6;color:#6b4800}
+.gen-settings-popover.gpt .gen-settings-options button[aria-pressed=true]{background:color-mix(in srgb,var(--teal) 16%,var(--card));color:color-mix(in srgb,var(--teal) 75%,var(--text))}
+:root[data-theme=dark] .gen-settings-options button[aria-pressed=true]{background:#4a4128;color:#f3e3b0}
+:root[data-theme=dark] .gen-settings-popover.gpt .gen-settings-options button[aria-pressed=true]{background:color-mix(in srgb,var(--teal) 24%,var(--card));color:#d8f3ee}
+.gen-settings-options button:disabled{opacity:.4}
+.gen-settings-options button.off{opacity:.5;outline:1px dashed currentColor;outline-offset:-1px}
+.gen-settings-options button svg{color:var(--muted)}
+.gen-settings-options button[aria-pressed=true] svg{color:currentColor}
+.gen-settings-options sup{margin-left:-2px;font-size:9px;line-height:1;color:var(--warning)}
+.gen-settings-options .gen-settings-more{color:var(--muted)}
+.gen-settings-popover footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;padding-top:9px;border-top:1px solid var(--border)}
+.gen-settings-cost{min-width:0;color:var(--muted);font-size:10px;line-height:1.4}
+.gen-settings-reset{flex-shrink:0;padding:3px 6px;border-radius:5px;color:var(--muted);font-size:11px}
+.gen-settings-reset:hover:not(:disabled){background:var(--bg);color:var(--text)}

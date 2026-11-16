@@ -1,4 +1,4 @@
-import { nodeSize, captionHeight, textNodeSize, isGptImage } from '../graph.mjs';
+import { nodeSize, captionHeight, textNodeSize, isGptImage, promptRowHeight } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, canAttachArrow, arrowPad, arrowPosition, reconcileStampAttachments } from './annotations.mjs';
 import { layerIndex, sameShape } from './layers.mjs';
 import { sectionMinimum, sectionPadding } from './sections.mjs';
@@ -199,11 +199,12 @@ export const foldedShift = (group, byId, aspects) => {
 // side from data-handlepos; without it the links would leave from the bottom and enter from the top.
 export const lodHandleProps = type => ({ className: `lod-handle ${type}`, 'data-handlepos': type === 'source' ? 'right' : 'left' });
 
-// A prompt not drawn yet: header, text lines and, when something feeds it, the "Inputs" row, as the card will lay them out,
+// A prompt not drawn yet: header, text lines, an image prompt's settings row and, when something feeds it, the "Inputs" row,
+// as the card will lay them out,
 // up to a square (the card scrolls past that), or the height its bottom edge was dragged to.
 export const promptSquare = 310;
 // Whether a prompt's text runs past its card, judged as estimatedSize lays it out (light cards cannot measure).
-export const promptOverflows = node => 58 + 22.1 * String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0) > (node.data?.height || promptSquare) + 4;
+export const promptOverflows = node => 58 + promptRowHeight({ type: 'text', data: node.data }) + 22.1 * String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0) > (node.data?.height || promptSquare) + 4;
 export function estimatedSize(node, inputs = false) {
   if (node.type !== 'text' || node.measured || node.data?.collapsed) return size(node);
   return textNodeSize(node, inputs);

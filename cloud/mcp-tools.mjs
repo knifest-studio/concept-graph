@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { describeTask, duplicateNodes, generators, isGptImage, imageSize, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName, uniqueModelName } from '../graph.mjs';
+import { aspectRatios, describeTask, duplicateNodes, generationFields, generators, isGptImage, imageSize, imageSizes, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, nanoOnlyRatios, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName, uniqueModelName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -34,6 +34,20 @@ const hex = (description, palette) => text(`${description} as #rrggbb${palette ?
 const layer = number('Layer order on its page; higher draws in front', { minimum: -maxLayer, maximum: maxLayer });
 const generator = choice('Who makes the images: codex (the person\'s own Codex), nano-banana (the team\'s Gemini key), or gpt-image (the team\'s OpenAI key). Describe nodes use codex or nano-banana (Gemini) only.', ['codex', generators.nanoBanana, generators.gptImage]);
 const variants = integer(`How many images one nano-banana or gpt-image run makes, 1–${maxVariants}; each uses one of the person's daily images, and a run that does not fit starts nothing`, { minimum: 1, maximum: maxVariants });
+// Generation settings of an image prompt; each is a field of its own, and its default value clears it. A generator that
+// cannot use a value keeps it stored and ignores it (shown dimmed on the board).
+const generationArgs = {
+  aspectRatio: choice(`Image shape, width:height. nano-banana draws all of them; gpt-image and codex not ${nanoOnlyRatios.join(', ')}; codex takes it as a request in the prompt. default lets the generator choose (the edited image's shape, else square)`, ['default', ...aspectRatios]),
+  imageSize: choice('Output size for nano-banana and gpt-image (codex picks its own, about 1.5 MP). nano-banana costs about $0.03 at 1K, $0.05 at 2K and $0.11 at 4K per image; gpt-image costs grow with size and quality, and its 4K is experimental. A 4K image still counts as one daily image. default is about 1K', ['default', ...imageSizes]),
+  nanoThinking: choice('How long nano-banana thinks before drawing: minimal is fastest, high is most careful (a little more thinking cost); medium is the default', ['minimal', 'medium', 'high']),
+  gptQuality: choice('gpt-image render quality: low is cheapest, high costs about four times medium; medium is the default', ['low', 'medium', 'high']),
+  background: choice('transparent asks gpt-image or codex for a transparent background (nano-banana makes JPEGs and cannot); normal is the default', ['normal', 'transparent']),
+};
+function setGeneration(data, args) {
+  const given = Object.keys(generationFields).filter(key => args[key] !== undefined);
+  if (given.length && data.task !== undefined) fail(`${given[0]} applies to image prompts only.`);
+  for (const key of given) { if (generationFields[key].includes(args[key])) data[key] = args[key]; else delete data[key]; }
+}
 const end = object({ x: number('Canvas x of a free end'), y: number('Canvas y of a free end'), nodeId: text('Node this end holds on to: a prompt, image, sticky or shape', { minLength: 1, maxLength: 120 }) }, [], { description: 'An arrow end: a node to hold on to, or a point' });
 const templateFields = { name: text('Custom node name', { minLength: 1, maxLength: 80 }), instructions: text('Instructions added to every prompt made from it', { maxLength: 100000 }),
   assets: array('Reference image asset IDs, in order', assetId, { maxItems: 10 }), color: hex('Tag colour', templatePalette) };
@@ -148,9 +162,9 @@ define('get_run', 'Get one generation in full: its prompt, input images, setting
 define('list_templates', 'List the board’s custom nodes: reusable prompts with instructions and reference images.', {}, [], { access: 'view', run: ctx => ({ templates: ctx.templates }) });
 
 define('add_text_node', 'Add a prompt. Connect images or other prompts into it with connect_nodes, then generate with start_run. With describe, it writes a description of the images connected to it instead.',
-  { text: text('Prompt text; for a describe node, an optional focus', { maxLength: 100000 }), position: at, pageId, generator, variants, describe: boolean('Make a describe (image-to-text) node') }, ['text'], { run: ctx => {
+  { text: text('Prompt text; for a describe node, an optional focus', { maxLength: 100000 }), position: at, pageId, generator, variants, ...generationArgs, describe: boolean('Make a describe (image-to-text) node') }, ['text'], { run: ctx => {
     const { args } = ctx, data = { text: args.text, ...(args.describe ? { task: describeTask } : {}) };
-    setGenerator(data, args.generator); setVariants(data, args.variants);
+    setGenerator(data, args.generator); setVariants(data, args.variants); setGeneration(data, args);
     return addNode(ctx, 'text', data, targetPage(ctx.graph, args.pageId), args.position, { author: false });
   } });
 define('add_upscale_node', 'Add an upscale node fed by images on the board, then run it with start_run: each image comes back larger, beside the node, labelled with its new size. nano-banana redraws it at 2K or 4K (about $0.05 or $0.11); when the site has them on, topaz keeps the image as it is (about $0.08 an image, as in Krea) and seedvr restores detail (about $0.02). scale is 2 or 4 (for nano-banana, 2K or 4K). It runs on the team’s keys within the person’s daily images.',
@@ -191,9 +205,9 @@ define('add_image_node', 'Put an uploaded image on the board, e.g. as a referenc
     const { args } = ctx, { aspect, pixels } = ctx.prepared;
     return addNode(ctx, 'image', { asset: args.asset, label: args.label || 'Reference image', caption: uniqueImageName(ctx.graph.nodes, args.caption?.trim() || imageName({ data: { label: args.label } })), ...(aspect ? { aspect } : {}), ...(pixels ? { pixels } : {}) }, targetPage(ctx.graph, args.pageId), args.position);
   } });
-define('add_template_node', 'Add a prompt made from one of the board’s custom nodes, optionally with extra text.', { templateId, text: text('Extra prompt text', { maxLength: 100000 }), position: at, pageId, generator }, ['templateId'], { run: ctx => {
+define('add_template_node', 'Add a prompt made from one of the board’s custom nodes, optionally with extra text.', { templateId, text: text('Extra prompt text', { maxLength: 100000 }), position: at, pageId, generator, ...generationArgs }, ['templateId'], { run: ctx => {
   const { args } = ctx, data = { text: args.text || '', template: templateSnapshot(templateOf(ctx, args.templateId)) };
-  setGenerator(data, args.generator);
+  setGenerator(data, args.generator); setGeneration(data, args);
   return addNode(ctx, 'text', data, targetPage(ctx.graph, args.pageId), args.position, { author: false });
 } });
 define('add_sticky', 'Add a sticky note.', { text: text('Note text', { maxLength: 10000 }), color: hex('Colour', stickyPalette), position: at, pageId }, ['text'],
@@ -226,8 +240,8 @@ define('add_drawing', 'Draw a freehand line through points on the canvas.', { po
   return addNode(ctx, 'drawing', drawing.data, targetPage(ctx.graph, args.pageId), drawing.position, { author: false });
 } });
 
-define('update_node', 'Change a node: move it, restack it, fold it, or edit what its type has (prompt text, generator and variants; image caption and label; sticky, shape and arrow text, colour and style; stamp kind).',
-  { nodeId: itemId, pageId, position, z: layer, collapsed: boolean('Folded'), text: text('Prompt, sticky or shape text', { maxLength: 100000 }), generator, variants, describe: boolean('Prompt describes its images instead of making new ones'),
+define('update_node', 'Change a node: move it, restack it, fold it, or edit what its type has (prompt text, generator, variants and generation settings; image caption and label; sticky, shape and arrow text, colour and style; stamp kind).',
+  { nodeId: itemId, pageId, position, z: layer, collapsed: boolean('Folded'), text: text('Prompt, sticky or shape text', { maxLength: 100000 }), generator, variants, ...generationArgs, describe: boolean('Prompt describes its images instead of making new ones'),
     caption: text('Image caption; empty clears it', { maxLength: 120 }), label: text('Image label', { maxLength: 100000 }), color: hex('Sticky, shape, arrow or drawing colour'), shape: choice('Shape', shapeKinds),
     width: number('Shape width', { minimum: 20, maximum: 4000 }), height: number('Shape height', { minimum: 20, maximum: 4000 }), dashed: boolean('Dashed arrow'), startArrow: boolean('Arrowhead at the start'), endArrow: boolean('Arrowhead at the end'), kind: choice('Stamp', Object.keys(stamps)) }, ['nodeId'], { run: ctx => {
     const { args, graph } = ctx, item = node(ctx, args.nodeId), data = item.data, type = item.type;
@@ -243,6 +257,8 @@ define('update_node', 'Change a node: move it, restack it, fold it, or edit what
     if (only('generator', ['text'])) setGenerator(item.data, args.generator);
     if (only('variants', ['text'])) setVariants(item.data, args.variants);
     if (only('describe', ['text'])) { if (args.describe) item.data.task = describeTask; else delete item.data.task; }
+    for (const key of Object.keys(generationArgs)) only(key, ['text']);
+    setGeneration(item.data, args);
     if (args.generator !== undefined) { const main = mainImageFor(graph.nodes, graph.edges, item); if (main) item.data.mainImage = main; }
     if (only('caption', ['image'])) { if (args.caption) item.data.caption = args.caption; else delete item.data.caption; }
     if (only('label', ['image'])) item.data.label = args.label;

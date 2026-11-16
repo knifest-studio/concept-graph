@@ -102,7 +102,9 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
   // The room checks setup and the image or 3D allowed list for the saved node.
   const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
-  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user });
+  // `settings: 1` comes from pages that show generation settings; the room refuses older pages a run that uses them, in
+  // the browser's language, since those pages cannot translate the refusal.
+  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
   return result.error ? error(result.error, result.status) : json({ run: result.run }, 202);
 }
 

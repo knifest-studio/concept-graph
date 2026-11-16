@@ -11,6 +11,11 @@ const apiRevision = '2026-05-20', googleEndpoint = 'https://generativelanguage.g
 // Standard paid tier of gemini-nano-banana-2.1 in USD per 1M tokens, read 2026-11-04 from https://aistudio.google.com/docs/pricing.
 // A 1K output image is 1120 tokens ($0.0336); thinking is billed as text output; there is no free tier for image output.
 export const nanoPrices = Object.freeze({ readOn: '2026-11-04', input: 1.5, textOutput: 7.5, imageOutput: 30, imageTokens: 1120 });
+// Output tokens per image by size: 1K and 2K from the image-generation guide, 4K the pricing page's higher figure ($0.113,
+// where the guide says 2520) so a reserve never falls short. Thinking is a generous allowance per level (medium, the
+// default, is the 4000 every estimate has always held); Google bills the thinking a call really used.
+export const nanoImageTokens = Object.freeze({ '1K': 1120, '2K': 1680, '4K': 3780 });
+export const nanoThinkingTokens = Object.freeze({ minimal: 1000, medium: 4000, high: 10000 });
 // Standard paid tier of gemini-3.5-flash-lite, same page and day: text and image input, then text and thinking output.
 export const describePrices = Object.freeze({ readOn: '2026-11-04', input: .3, output: 2.5 });
 export const nanoTimeout = 5 * 60 * 1000;
@@ -18,8 +23,24 @@ export const nanoTimeout = 5 * 60 * 1000;
 // some for storage, and one body per variant would not fit its memory. Each wave of lanes adds time to the run's limit,
 // which stays under the 15 minutes waitUntil keeps a room alive.
 export const variantLanes = 4;
-export const variantRunTimeout = count => Math.min(14 * 60 * 1000, nanoTimeout + (Math.ceil(Math.max(1, count) / variantLanes) - 1) * 2 * 60 * 1000);
+// Large images go fewer at a time: while a call's answer is read the room holds it several times over (the body, its
+// base64 text, the decoded bytes), and a 4K PNG from GPT Image is 15–20 MB, so four at once could pass a room's 128 MB.
+// Nano Banana's JPEGs are several times smaller at the same size.
+export const variantLanesFor = ({ gpt = false, imageSize } = {}) => imageSize === '4K' ? gpt ? 1 : 2 : imageSize === '2K' && gpt ? 2 : variantLanes;
+export const variantRunTimeout = (count, lanes = variantLanes) => Math.min(14 * 60 * 1000, nanoTimeout + (Math.ceil(Math.max(1, count) / lanes) - 1) * 2 * 60 * 1000);
 export const maxReferenceBytes = 20 * 1024 * 1024;
+
+// Only a page built before generation settings existed is refused for them, and its translations lack this message, so
+// the room words it: in Ukrainian when the browser prefers Ukrainian to English (as such a page picks its language when
+// nobody chose one), otherwise in English followed by Ukrainian, for someone who chose Ukrainian in an English browser.
+export const staleSettings = Object.freeze({ en: 'Reload the page to use generation settings.', uk: 'Перезавантажте сторінку, щоб використати налаштування генерації.' });
+export function staleSettingsError(acceptLanguage) {
+  const preferred = String(acceptLanguage || '').split(',').map((part, index) => {
+    const [tag, ...parameters] = part.trim().split(';'), q = parameters.map(value => /^\s*q=([\d.]+)\s*$/i.exec(value)?.[1]).find(Boolean);
+    return { base: tag.trim().toLowerCase().split('-')[0], q: q === undefined ? 1 : Number(q), index };
+  }).filter(entry => entry.q > 0).sort((a, b) => b.q - a.q || a.index - b.index).find(entry => entry.base === 'uk' || entry.base === 'en');
+  return preferred?.base === 'uk' ? staleSettings.uk : `${staleSettings.en} ${staleSettings.uk}`;
+}
 
 export class NanoError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
@@ -99,12 +120,13 @@ export function base64(bytes) {
 }
 
 // One request per Generate. `references` are { mimeType, data (base64), label? } in prompt order.
-// `format` is a response_format, such as the 2K or 4K size an upscale asks for.
-export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel, format) {
+// `format` is a response_format, such as the 2K or 4K size an upscale asks for, and `config` a generation_config (the
+// thinking level); a prompt without settings sends neither, so Google's defaults apply as before.
+export function nanoRequest(prompt, references, { key, endpoint }, model = nanoModel, format, config) {
   return { url: `${endpoint}/v1beta/interactions`, init: {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, 'Api-Revision': apiRevision },
     // Nothing needs a follow-up turn, so the interaction is not kept in Google's interaction history.
-    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.flatMap((image, index) => [...(image.label ? [{ type: 'text', text: imageAttachment(image, index) }] : []), { type: 'image', mime_type: image.mimeType, data: image.data }])], ...(format ? { response_format: format } : {}), store: false }),
+    body: JSON.stringify({ model, input: [{ type: 'text', text: prompt }, ...references.flatMap((image, index) => [...(image.label ? [{ type: 'text', text: imageAttachment(image, index) }] : []), { type: 'image', mime_type: image.mimeType, data: image.data }])], ...(format ? { response_format: format } : {}), ...(config ? { generation_config: config } : {}), store: false }),
   } };
 }
 
@@ -157,11 +179,12 @@ export function nanoResult(status, body) {
 }
 
 const tokens = value => Number.isFinite(value) && value > 0 ? value : 0;
-// A deliberately high guess, used to reserve budget before the call and when Google reports no usage:
-// the prompt at about 3 characters per token, each reference at full resolution, and a generous thinking allowance.
-export function nanoEstimate({ promptLength = 0, references = 0, images = 1 } = {}) {
+// A deliberately high guess, used to reserve budget before the call and when Google reports no usage: the prompt at about
+// 3 characters per token, each reference at full resolution, the chosen size's image and a generous thinking allowance.
+const outputTokens = imageSize => nanoImageTokens[imageSize] || nanoPrices.imageTokens;
+export function nanoEstimate({ promptLength = 0, references = 0, images = 1, imageSize, thinking } = {}) {
   const input = Math.ceil(promptLength / 3) + references * nanoPrices.imageTokens;
-  return (input * nanoPrices.input + images * nanoPrices.imageTokens * nanoPrices.imageOutput + 4000 * nanoPrices.textOutput) / 1e6;
+  return (input * nanoPrices.input + images * outputTokens(imageSize) * nanoPrices.imageOutput + (nanoThinkingTokens[thinking] || nanoThinkingTokens.medium) * nanoPrices.textOutput) / 1e6;
 }
 
 // A description's reserve: the prompt, each reference as a full tile set, and a generous answer with thinking.
@@ -195,6 +218,6 @@ export function describeResult(status, body) {
 export function nanoCost(usage, fallback) {
   if (!usage || typeof usage !== 'object' || !(Number.isFinite(usage.total_input_tokens) || Number.isFinite(usage.total_output_tokens))) return nanoEstimate(fallback);
   const image = (Array.isArray(usage.output_tokens_by_modality) ? usage.output_tokens_by_modality : []).find(entry => String(entry?.modality).toLowerCase() === 'image');
-  const imageTokens = image ? tokens(image.tokens) : (fallback?.images ?? 1) * nanoPrices.imageTokens, text = Math.max(0, tokens(usage.total_output_tokens) - imageTokens);
+  const imageTokens = image ? tokens(image.tokens) : (fallback?.images ?? 1) * outputTokens(fallback?.imageSize), text = Math.max(0, tokens(usage.total_output_tokens) - imageTokens);
   return (tokens(usage.total_input_tokens) * nanoPrices.input + imageTokens * nanoPrices.imageOutput + (text + tokens(usage.total_thought_tokens)) * nanoPrices.textOutput) / 1e6;
 }

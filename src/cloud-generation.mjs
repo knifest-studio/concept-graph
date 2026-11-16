@@ -1,5 +1,5 @@
 import { getState } from 'yjs';
-import { collectInputs, generationSettings, imageSize, isSiteGenerator, runInputRecord } from '../graph.mjs';
+import { codexGenerator, collectInputs, generationSettings, imageSize, isSiteGenerator, resolveGeneration, runInputRecord, runSettings } from '../graph.mjs';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { t } from './i18n.mjs';
@@ -64,7 +64,7 @@ export class CloudGeneration {
     if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
     if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
     // The images the run is given, for its results' details (a teammate's helper refreshes them when it takes the run).
-    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), inputs: runInputRecord(graph, nodeId), ...generationSettings, ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
+    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), inputs: runInputRecord(graph, nodeId), ...generationSettings, ...runSettings(resolveGeneration(target, codexGenerator)), ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
     run.createdAt = run.startedAt;
     if (owner !== undefined) {
       if (this.sharing?.using()?.to !== owner) throw new Error(t('Your teammate’s Codex is no longer available. Ask for access again.'));
@@ -96,7 +96,7 @@ export class CloudGeneration {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
     if ([...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
     const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nodeId, client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID) }) });
+      body: JSON.stringify({ nodeId, client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID), settings: 1 }) });
     this.onStart?.(run);
   }
   // Runs that need no local helper to start or cancel.
