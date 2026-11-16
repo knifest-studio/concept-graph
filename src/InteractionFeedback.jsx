@@ -99,18 +99,25 @@ export function useInteractionFeedback(viewer) {
     dragMove: (event, node) => {
       const previous = drag.current;
       if (!previous) return;
-      // Found once per drag: a document-wide attribute lookup on every pointer move is costly on a full board.
-      if (previous.element === undefined || (previous.element && !previous.element.isConnected)) previous.element = nodeElement(node.id)?.querySelector('.feel-inner') || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
+      // Found once per drag: a document-wide attribute lookup on every pointer move is costly on a full board. A card that
+      // is not drawn yet (an Alt-drag copy) is looked for a few more times; a section, which never tilts, soon stops.
+      if (!previous.element?.isConnected && (previous.misses || 0) < 8) {
+        previous.element = nodeElement(node.id)?.querySelector('.feel-inner') || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
+        if (!previous.element) previous.misses = (previous.misses || 0) + 1;
+      }
       const element = previous.element;
       if (!element) return;
       const time = performance.now(), x = event.clientX ?? event.touches?.[0]?.clientX ?? previous.x, tilt = previous.tilt * .6 + dragTilt(x - previous.x, time - previous.time) * .4;
       element.style.setProperty('--drag-tilt', `${tilt}deg`); drag.current = { id: node.id, x, time, tilt, element };
     },
-    dragStop: (_, node) => {
+    // `drop: false` settles the card without the drop feedback, for a drag whose copy was cancelled.
+    dragStop: (_, node, { drop = true } = {}) => {
       drag.current = null; const element = nodeElement(node.id) || document.querySelector(`.react-flow__node[data-id="${CSS.escape(node.id)}"] .group-frame`);
       element?.querySelector('.feel-inner')?.style.removeProperty('--drag-tilt');
-      element?.style.removeProperty('--drag-tilt'); fire('drop', { element });
+      element?.style.removeProperty('--drag-tilt'); if (drop) fire('drop', { element });
     },
+    // Cards this person made without the creation feedback (an Alt-drag copy); a later remote update must not flash them as a teammate's.
+    seenNodes: ids => { for (const id of ids) seen.current.add(id); },
     createNodes: ids => {
       for (const id of ids) { seen.current.add(id); animate(id, 'created'); }
       if (ids.length) { lastCreate.current = Date.now(); sound(presets.create.sound, ids[0]); }

@@ -11,6 +11,8 @@ import { formatDuration, runElapsed } from '../timing.mjs';
 import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, model3dModels, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
+import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
+import './duplicate-drag.css';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, ungroupTargets, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
 import { detectPlatform, loopbackBlocked } from './platform-detection.mjs';
@@ -2180,6 +2182,16 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // Shift-click in a text field extends its text selection; it must not also add or remove the card.
   const shiftTextClick = event => { if (event.shiftKey && event.target.closest?.('textarea,input,[contenteditable="true"]')) event.stopPropagation(); };
   const nodesChanged = changes => {
+    const session = dragSession.current;
+    if (session) {
+      // React Flow skips onNodeDragStop when a drag is aborted (someone deleted the card it holds); its last moves end it.
+      if (changes.some(change => change.type === 'position' && change.dragging === false)) queueMicrotask(() => {
+        if (dragSession.current !== session) return;
+        effects.dragStop(session.event, { id: session.copies?.map.get(session.grabbed) || session.grabbed }, { drop: false }); moving.current = false; sectionMoves.current.clear(); endDrag(session);
+      });
+      if (session.cancelled) changes = dropDrag(changes, session.start);
+      else if (session.copies) changes = retargetDrag(changes, session.copies.map);
+    }
     changes = changes.filter(change => flow.getNode(change.id)?.type !== 'pending');
     if (!changes.length) return;
     if (mcpLocked.current && changes.some(change => ['position', 'remove', 'add', 'replace', 'select'].includes(change.type) || (change.type === 'dimensions' && change.resizing !== undefined))) return;
@@ -2232,15 +2244,144 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   };
 
   const nodeDragStopped = (event, node) => {
-    effects.dragStop(event, node); moving.current = false; sectionMoves.current.clear();
-    if (mcpLocked.current) return;
-    if (node.type === 'stamp') {
-      const pointer = 'changedTouches' in event ? event.changedTouches[0] : event;
-      const point = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
-      putNodes(attachStampAt(nodeRef.current, node.id, point, flow.getNodes())); markDirty();
+    const session = dragSession.current, copy = session?.copies?.map.get(node.id);
+    if (copy) node = { ...node, id: copy };
+    effects.dragStop(event, node, { drop: !session?.cancelled }); moving.current = false; sectionMoves.current.clear();
+    if (!mcpLocked.current) {
+      if (node.type === 'stamp' && !session?.cancelled) {
+        const pointer = 'changedTouches' in event ? event.changedTouches[0] : event;
+        const point = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
+        putNodes(attachStampAt(nodeRef.current, node.id, point, flow.getNodes())); markDirty();
+      }
+      if (cloudSession) syncCloud();
     }
-    if (cloudSession) syncCloud();
+    endDrag(session);
   };
+
+  // Alt (Option) drag duplicates, as in Figma: React Flow keeps dragging the originals it picked up, and while copies
+  // exist each move goes to them instead (retargetDrag), so the originals never leave their place. Pressing or releasing
+  // Alt mid-drag adds or removes the copies; Escape removes them for the rest of the drag. The whole drag is one undo step.
+  const dragSession = useRef(null), dragCopies = useRef(null), altDragged = useRef(false), [dragCopy, setDragCopy] = useState(null);
+  const duplicating = value => { const element = canvasElement.current; if (!element) return; if (value) element.dataset.duplicating = value; else delete element.dataset.duplicating; };
+  const beginDrag = (event, node, dragged, snapshot) => {
+    endDrag(dragSession.current);
+    const undo = cloudSession?.undo;
+    dragSession.current = { grabbed: node.id, start: new Map(dragged.map(item => [item.id, item.position])), last: null, event, copies: null, cancelled: false, snapshot,
+      undo, timeout: undo?.captureTimeout, depth: undo?.undoStack.length,
+      // Only the card under the pointer looks picked up (React Flow's .dragging); a drag of the selection box lifts none.
+      lifted: event.target?.closest?.('.react-flow__node')?.dataset.id === node.id };
+    // However long the drag pauses it stays one undo step, so a copy made mid-drag undoes together with the move before it.
+    if (undo) undo.captureTimeout = Infinity;
+    if (duplicateGesture(event)) startCopies();
+  };
+  const startCopies = () => {
+    const session = dragSession.current;
+    if (!session || session.copies || session.cancelled || session.empty || readOnlyRef.current || mcpLocked.current) return;
+    const page = pageGraph();
+    let plan;
+    // What the drag moves (React Flow takes the selection), plus selected cards it cannot pick up, such as attached arrows.
+    try { plan = planDragDuplicate(boardContent(), new Set([...session.start.keys(), ...page.nodes.filter(node => node.selected).map(node => node.id)]), { page, measure: measureView(viewCache.current), captures: sectionMoves.current }); }
+    catch (error) { notify(error.message); cancelCopies(); return; }
+    // Nothing a drag picks up can change mid-drag, so a drag with nothing to copy (a generating placeholder) stops trying.
+    if (!plan.nodes.length && !plan.sections.length) { session.empty = true; return; }
+    if (sectionRef.current.length + plan.sections.length > maxSections) { notify(t('A board can have at most {count} sections.', { count: maxSections })); cancelCopies(); return; }
+    if (nodeRef.current.length + plan.nodes.length > maxNodes) { notify(t('Canvas is too large.')); cancelCopies(); return; }
+    // The copies appear where the originals are now, and the originals go back to where the drag picked them up.
+    if (session.last) nodesChanged(positionChanges(session.start));
+    // The selection moves to the copies; an original that moved before Alt was pressed has stopped moving.
+    // Connections give up their selection too, as Cmd+D makes them, so a Delete after the drop removes only the copies.
+    const copies = stackOnTop(nodeRef.current, plan.nodes).map(placeOnPage);
+    putNodes(current => [...current.map(node => plan.map.has(node.id) && (node.selected || node.dragging) ? { ...node, selected: false, dragging: false } : node), ...copies]);
+    if (plan.edges.length || plan.selectedEdges.size) putEdges(current => [...handOverSelection(current, plan.selectedEdges), ...plan.edges]);
+    putGroups(current => [...handOverSelection(current, plan.selected), ...plan.groups]);
+    putSections(current => [...handOverSelection(current, plan.selected), ...plan.sections.map(placeOnPage)]);
+    for (const [id, capture] of plan.captures) sectionMoves.current.set(id, capture);
+    effects.seenNodes(copies.map(node => node.id));
+    session.copies = plan; altDragged.current = true;
+    const grabbed = plan.map.get(session.grabbed);
+    setDragCopy(session.lifted && grabbed || null); duplicating('copy');
+    markDirty();
+    if (grabbed) effects.dragStart(session.event, { id: grabbed });
+  };
+  const removeCopies = plan => {
+    const nodes = new Set(plan.nodes.map(node => node.id)), edges = new Set(plan.edges.map(edge => edge.id)), groups = new Set(plan.groups.map(group => group.id)), sections = new Set(plan.sections.map(section => section.id));
+    putNodes(current => handBackSelection(current.filter(node => !nodes.has(node.id)), plan.selected));
+    putEdges(current => handBackSelection(current.filter(edge => !edges.has(edge.id) && !nodes.has(edge.source) && !nodes.has(edge.target)), plan.selectedEdges));
+    putGroups(current => handBackSelection(current.filter(group => !groups.has(group.id)), plan.selected));
+    putSections(current => handBackSelection(current.filter(section => !sections.has(section.id)), plan.selected));
+    for (const id of plan.captures.keys()) sectionMoves.current.delete(id);
+    setDragCopy(null);
+  };
+  const stopCopies = () => {
+    const session = dragSession.current, plan = session?.copies;
+    if (!plan) return;
+    session.copies = null; removeCopies(plan); duplicating(null);
+    // The originals jump to where their copies were and follow the pointer from there.
+    if (session.last) nodesChanged(positionChanges(session.last));
+    markDirty();
+    effects.dragStart(session.event, { id: session.grabbed });
+  };
+  const cancelCopies = () => {
+    const session = dragSession.current;
+    if (!session || session.cancelled || mcpLocked.current) return;
+    const plan = session.copies;
+    session.copies = null;
+    if (plan) removeCopies(plan); else if (session.last) nodesChanged(positionChanges(session.start));
+    session.cancelled = true; duplicating('cancelled');
+    markDirty();
+    effects.dragStop(session.event, { id: session.grabbed }, { drop: false });
+  };
+  const toggleCopies = held => { const session = dragSession.current; if (session && !session.cancelled && !mcpLocked.current && held !== !!session.copies) { if (held) startCopies(); else stopCopies(); } };
+  const endDrag = session => {
+    if (!session || dragSession.current !== session) return;
+    dragSession.current = null; setDragCopy(null); duplicating(null);
+    if (session.cancelled) {
+      // A cancelled copy leaves no undo step behind.
+      if (session.undo) while (session.undo.undoStack.length > session.depth) session.undo.undoStack.pop();
+      else if (session.snapshot && history.current.at(-1) === session.snapshot && historySignature(boardContent()) === snapshotSignature(JSON.parse(session.snapshot))) {
+        history.current.pop();
+        const previous = history.current.at(-1) && JSON.parse(history.current.at(-1));
+        lastHistory.current = previous ? snapshotSignature(previous) : '';
+      }
+    } else if (session.copies) {
+      const present = new Set(nodeRef.current.map(node => node.id)), copies = session.copies.nodes.filter(node => present.has(node.id));
+      if (cloud) for (const node of copies) track('node_created', { nodeType: node.type, via: 'alt-drag' });
+      const seen = { ...discoveryRef.current, ...readDiscovery() };
+      if (!seen.used && !seen.duplicateSeen) {
+        const reusable = copies.find(node => reusableDuplicate(node, nodeRef.current, edgeRef.current));
+        if (reusable) { recordDiscovery({ duplicateSeen: true }); setTemplateInvitation(false); setTemplateTip({ id: reusable.id }); }
+      }
+    }
+    if (session.undo) { session.undo.captureTimeout = session.timeout; session.undo.stopCapturing(); }
+  };
+  dragCopies.current = { toggle: toggleCopies, cancel: cancelCopies };
+  // The key toggles the copy mid-drag and, over a card, shows the copy pointer (duplicate-drag.css); viewers get neither.
+  useEffect(() => {
+    let held = false;
+    const show = next => {
+      next = next && !readOnlyRef.current;
+      const element = canvasElement.current;
+      if (next === held || !element) return;
+      held = next;
+      if (next) element.dataset.altCopy = ''; else delete element.dataset.altCopy;
+    };
+    const key = event => {
+      const session = dragSession.current;
+      if (event.key === 'Escape') { if (session?.copies) { event.preventDefault(); event.stopPropagation(); dragCopies.current.cancel(); } return; }
+      if (!['Alt', 'AltGraph', 'Control'].includes(event.key)) return;
+      const next = duplicateGesture(event);
+      show(next);
+      // Releasing Alt alone would otherwise focus the browser menu on Windows.
+      if (event.key === 'Alt' && (session || (event.type === 'keyup' && altDragged.current))) { event.preventDefault(); if (!session && event.type === 'keyup') altDragged.current = false; }
+      if (session && !event.repeat) dragCopies.current.toggle(next);
+    };
+    const pointer = event => show(duplicateGesture(event)), hide = () => show(false);
+    window.addEventListener('keydown', key, true); window.addEventListener('keyup', key, true); window.addEventListener('pointermove', pointer, { passive: true }); window.addEventListener('blur', hide); document.addEventListener('visibilitychange', hide);
+    return () => {
+      window.removeEventListener('keydown', key, true); window.removeEventListener('keyup', key, true); window.removeEventListener('pointermove', pointer); window.removeEventListener('blur', hide); document.removeEventListener('visibilitychange', hide);
+      const session = dragSession.current; if (session?.undo) session.undo.captureTimeout = session.timeout;
+    };
+  }, []);
 
   const copyImage = nodeId => {
     const node = nodeRef.current.find(item => item.id === nodeId && item.type === 'image');
@@ -2616,6 +2757,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   }, [displayed]);
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
   const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
+  // An Alt-drag copy looks picked up, as the card under the pointer does in a plain drag (duplicate-drag.css).
+  const flowNodes = useMemo(() => dragCopy ? view.nodes.map(node => node.id === dragCopy ? { ...node, className: node.className ? `${node.className} dragging drag-copy` : 'dragging drag-copy' } : node) : view.nodes, [view.nodes, dragCopy]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
   useEffect(() => { if (loaded && modelView && !nodes.some(node => node.id === modelView.id && node.type === 'model')) setModelView(null); }, [loaded, nodes, modelView]);
   const viewNode = viewId ? nodes.find(node => node.id === viewId && node.type === 'image') : undefined;
@@ -2640,12 +2783,26 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (mcpLocked.current) return;
     nodeDragged.current = true;
     if (shiftGrab.current === node.id) flowStore.getState().addSelectedNodes([node.id]);
-    effects.dragStart(event, node); moving.current = true; checkpoint();
+    effects.dragStart(event, node); moving.current = true; const snapshot = checkpoint();
     const sectionIds = dragged.filter(item => item.type === 'section').map(item => item.id);
     sectionMoves.current.clear();
     if (sectionIds.length) captureMove(sectionIds);
+    beginDrag(event, node, dragged, snapshot);
   };
-  const nodeDrag = (event, node) => { if (!mcpLocked.current) effects.dragMove(event, node); };
+  const nodeDrag = (event, node, dragged = [node]) => {
+    if (mcpLocked.current) return;
+    const session = dragSession.current;
+    if (session) {
+      session.last = new Map(dragged.map(item => [item.id, item.position]));
+      // A pointer event carries the keys held, so an Alt press or release the window missed still counts. Auto-pan repeats
+      // the last event, whose keys may be older than a key press since.
+      if (event !== session.event) { session.event = event; toggleCopies(duplicateGesture(event)); }
+      if (session.cancelled) return;
+      const copy = session.copies?.map.get(node.id);
+      if (copy) node = { ...node, id: copy };
+    }
+    effects.dragMove(event, node);
+  };
   const moveStart = event => {
     moving.current = true;
     if (event) viewerMoved.current = true;
@@ -2765,7 +2922,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addFiles([...event.dataTransfer.files], position); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} viewer={viewer} onCancel={cancel} onFocus={showRun} onHistory={() => setTab('history')}/>}</div>
-      <ReactFlow nodes={view.nodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
+      <ReactFlow nodes={flowNodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
         {!readOnly && !modalOpen.current && <CustomNodeActions node={selectedCount === 1 ? view.nodes.find(node => node.selected && !node.hidden && plainPrompt(node)) : null} tip={!discovery.used && templateTip && selectedCount === 1 ? view.nodes.find(node => node.id === templateTip.id && node.selected && !node.hidden) : null} actions={canvas} onDismiss={() => { if (cloud) track('tip_event', { tip: 'duplicate_to_custom_node', action: 'dismissed' }); setTemplateTip(null); }}/>}
         <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
