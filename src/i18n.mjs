@@ -37,6 +37,13 @@ export function t(text, values) {
     if (match) return t('The 3D generator failed ({status}). Try again.', { status: match[1] });
     match = /^(\d+) of (\d+) images failed: (.*)$/s.exec(text);
     if (match) return t('{count} of {total} images failed: {error}', { count: match[1], total: match[2], error: t(match[3]) });
+    // Reference size errors from the board room (cloud/reference-prep.mjs) name the image and the provider.
+    match = /^Reference images are (still )?too large for (.+?) (after reducing them )?\(20 MB in total\)\. (Use fewer or smaller images|Use fewer images)\.$/.exec(text);
+    if (match) return t(match[1] ? 'Reference images are still too large for {name} after reducing them (20 MB in total). Use fewer images.' : 'Reference images are too large for {name} (20 MB in total). Use fewer or smaller images.', { name: t(match[2]) });
+    match = /^“(.*)” is too large to reduce automatically \(([\d.]+) MB; the limit is 20 MB\)\. Right-click it, choose Resize…, then try again\.$/s.exec(text);
+    if (match) return t('“{name}” is too large to reduce automatically ({size} MB; the limit is 20 MB). Right-click it, choose Resize…, then try again.', { name: match[1], size: match[2] });
+    match = /^Could not reduce “(.*)” to send it\. Right-click it, choose Resize…, then try again\.$/s.exec(text);
+    if (match) return t('Could not reduce “{name}” to send it. Right-click it, choose Resize…, then try again.', { name: match[1] });
   }
   const translated = dictionaries[current]?.[text];
   return fill(typeof translated === 'string' ? translated : text, values);

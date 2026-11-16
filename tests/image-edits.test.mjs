@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { transformWithEsbuild } from 'vite';
-import { cropRect, croppedImageData, dragCrop, fullRect, generationReferences, hasGenerationPrompt, hasSelection, imageAssets, maskFromSelection, maskPlacement, resetImageData, selectionFromMask, validCropRect } from '../src/image-edits.mjs';
+import { cropRect, croppedImageData, dragCrop, fullRect, generationReferences, hasGenerationPrompt, hasSelection, imageAssets, maskFromSelection, maskPlacement, originalAsset, resetImageData, resizedImageData, restoreSizeData, selectionFromMask, validateImageEdits, validCropRect } from '../src/image-edits.mjs';
+import { estimatedBytes, halfSide, resizedType, resizeTarget, uploadSizes } from '../src/image-resize.mjs';
 
 const asset = '11111111-1111-1111-1111-111111111111.png', cropped = '22222222-2222-2222-2222-222222222222.jpg';
 const pixels = { width: 1200, height: 800 }, rect = { x: 200, y: 100, width: 600, height: 400 };
@@ -52,6 +53,38 @@ test('generation references and asset inventories keep all edit assets, in provi
   assert.deepEqual(imageAssets({ type: 'text', data: { template: { assets: [asset] } } }), [asset]);
 });
 
+test('Resize keeps the image before it, one level deep with its crop, and Restore brings it back', () => {
+  const small = '33333333-3333-3333-3333-333333333333.jpg', smaller = '44444444-4444-4444-4444-444444444444.jpg';
+  const croppedData = croppedImageData({ asset, pixels, caption: 'Storm' }, cropped, pixels, rect);
+  const resized = resizedImageData(croppedData, small, { width: 300, height: 200 }, { width: 600, height: 400 });
+  assert.deepEqual(resized, { asset: small, pixels: { width: 300, height: 200 }, aspect: 200 / 300, caption: 'Storm', unresized: { asset: cropped, pixels: { width: 600, height: 400 }, uncropped: croppedData.uncropped } });
+  assert.doesNotThrow(() => validateImageEdits(resized));
+  assert.deepEqual(imageAssets({ type: 'image', data: resized }), [small, cropped, asset]);
+  assert.equal(originalAsset(resized), asset); assert.equal(originalAsset({ asset: small, unresized: { asset: cropped, pixels } }), cropped); assert.equal(originalAsset(croppedData), asset);
+  // Resizing again keeps the first original; restoring returns the image and its crop as they were.
+  const again = resizedImageData(resized, smaller, { width: 150, height: 100 }, { width: 300, height: 200 });
+  assert.deepEqual(again.unresized, resized.unresized);
+  assert.deepEqual(restoreSizeData(again), { ...croppedData, caption: 'Storm' });
+  assert.equal(restoreSizeData(croppedData), croppedData);
+  // A crop made after a resize starts from the resized image and still restores the original.
+  const recropped = croppedImageData(resized, smaller, { width: 300, height: 200 }, { x: 0, y: 0, width: 150, height: 100 });
+  assert.equal(recropped.uncropped.asset, small); assert.equal(restoreSizeData(recropped).asset, cropped); assert.equal(restoreSizeData(recropped).uncropped.asset, asset);
+  for (const unresized of [{ asset: 'x.png', pixels }, { asset, pixels: { width: 0, height: 1 } }, { asset, pixels, extra: true }, { asset, pixels, uncropped: { asset, pixels, rect: { x: 0, y: 0, width: 2000, height: 1 } } }, 'original'])
+    assert.throws(() => validateImageEdits({ asset: small, unresized }), /Invalid original image size/);
+});
+
+test('Resize offers only smaller sizes and estimates the file from its pixels; large uploads try smaller sizes in turn', () => {
+  const photo = { width: 7680, height: 4320 };
+  assert.deepEqual(resizeTarget(photo, 3072), { width: 3072, height: 1728 }); assert.equal(resizeTarget(photo, 7680), null); assert.equal(resizeTarget(photo, 9000), null); assert.equal(resizeTarget(photo, 0), null);
+  assert.deepEqual(resizeTarget(photo, halfSide(photo)), { width: 3840, height: 2160 }); assert.equal(resizeTarget({ width: 1, height: 1 }, halfSide({ width: 1, height: 1 })), null);
+  assert.equal(estimatedBytes(40e6, photo, { width: 3840, height: 2160 }), 10e6);
+  assert.deepEqual(['a.jpg', 'a.webp', 'a.png', 'a.gif'].map(resizedType), ['image/jpeg', 'image/webp', 'image/png', 'image/png']);
+  // 8K stays 8K when it fits a working canvas; far larger images start at the largest size that does.
+  assert.deepEqual(uploadSizes(photo)[0], photo); assert.deepEqual(uploadSizes(photo).map(size => size.width), [7680, 6144, 4096, 3072, 2048]);
+  const huge = uploadSizes({ width: 20000, height: 15000 });
+  assert.ok(huge[0].width * huge[0].height <= 50e6 && huge[0].width < 16384); assert.ok(huge.every((size, index) => !index || size.width < huge[index - 1].width));
+});
+
 test('only outgoing image-generation prompts suppress automatic prompt creation', () => {
   const image = { id: 'i', type: 'image', data: {} }, text = { id: 'p', type: 'text', data: { text: '' } }, edge = { source: 'i', target: 'p' };
   for (const task of ['describe', 'upscale']) assert.equal(hasGenerationPrompt({ nodes: [image, { ...text, data: { task } }], edges: [edge] }, 'i'), false);
@@ -60,7 +93,7 @@ test('only outgoing image-generation prompts suppress automatic prompt creation'
 });
 
 test('image editor, menu and integration JSX compile without running a server or browser', async () => {
-  for (const name of ['ImageEditor', 'NodeContextMenu', 'main']) {
+  for (const name of ['ImageEditor', 'ResizeDialog', 'NodeContextMenu', 'main']) {
     const source = await readFile(new URL(`../src/${name}.jsx`, import.meta.url), 'utf8');
     assert.ok((await transformWithEsbuild(source, `${name}.jsx`, { loader: 'jsx' })).code.length);
   }

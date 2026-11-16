@@ -1,0 +1,20 @@
+.board-modal form.resize-dialog { width: 400px; }
+.resize-dialog h2 { margin-bottom: 8px; }
+.resize-intro { margin: 0 0 18px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.resize-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.resize-presets button { min-width: 46px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 11px; color: var(--text); background: var(--bg); }
+.resize-presets button:hover:not(:disabled) { border-color: var(--purple); }
+.resize-presets button[aria-pressed="true"] { border-color: var(--purple); background: var(--soft-purple); color: var(--purple); }
+.resize-presets button:disabled { opacity: .45; cursor: default; }
+.board-modal .resize-custom { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; }
+.resize-custom input { font-variant-numeric: tabular-nums; }
+.resize-sizes { display: grid; gap: 8px; margin: 18px 0 0; font-size: 12px; }
+.resize-sizes > div { display: flex; justify-content: space-between; gap: 12px; }
+.resize-sizes dt { color: var(--muted); }
+.resize-sizes dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.resize-sizes small { display: block; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.resize-error { margin: 14px 0 0; font-size: 11px; line-height: 1.5; color: var(--error); }
+.board-modal form > .resize-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 24px; }
+.resize-actions > button:not(.primary-button) { font-size: 11px; }
+.resize-actions .resize-restore { margin-right: auto; color: var(--purple); }
+@media (max-width: 480px) { .board-modal form.resize-dialog { width: 100%; } .board-modal form > .resize-actions { flex-wrap: wrap; } }

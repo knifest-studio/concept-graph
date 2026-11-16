@@ -2,7 +2,7 @@ import { YServer } from 'y-partyserver';
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
 import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
-import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
+import { base64, describeCost, describeEstimate, describeModel, describeResult, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
 import { gptImageCost, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from './gpt-image.mjs';
 import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -14,6 +14,7 @@ import { BoardChat } from './chat.mjs';
 import { voiceHasSpace, voiceSignal } from './voice.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 import { reframePng } from './png-frame.mjs';
+import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, inspectImage, planReferences, referenceLimits, referenceProblem, sniffFormat, stillTooLarge } from './reference-prep.mjs';
 import { falModel3d, model3dFile, model3dInput, model3dPoster, model3dPrices, model3dRequest, storeModelGlb } from './model3d.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
@@ -26,6 +27,9 @@ const presenceIds = connection => connection.state?.__ypsAwarenessIds || [];
 const coordinate = value => Number.isFinite(value) && Math.abs(value) <= 1e7;
 const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
+// Which size rules a run's references follow (cloud/reference-prep.mjs).
+const referencePurpose = (request, gpt) => request.model3d ? 'model3d' : request.upscale ? 'upscale' : request.describe ? 'describe' : gpt ? 'gptImage' : 'nanoBanana';
+const referenceInputs = request => request.model3d ? request.images : [...request.images, ...(request.mask ? [{ asset: request.mask }] : [])];
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
@@ -343,6 +347,9 @@ export class BoardRoom extends YServer {
     this.nanoStarting.add(nodeId);
     const reservations = [], release = async () => { for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 }); };
     try {
+      // Images that are missing, or too large to send and to reduce, fail here, before anything is reserved or run.
+      const problem = await this.referencesProblem(request, gpt, name);
+      if (problem) return { error: problem, status: 400 };
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       for (let index = 0; index < calls; index++) {
         const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1 });
@@ -568,11 +575,82 @@ export class BoardRoom extends YServer {
     return { ok: true };
   }
 
-  async references(images, upscale = false, name = 'Nano Banana') {
-    const objects = await Promise.all(images.map(image => this.env.FILES.get(`assets/${image.asset}`)));
-    if (objects.some(object => !object)) throw new NanoError('bad_request', `${upscale ? 'An image' : 'A reference image'} is missing from storage. Reconnect it and try again.`);
-    if (objects.reduce((total, object) => total + object.size, 0) > maxReferenceBytes) throw new NanoError('bad_request', upscale ? 'Images to upscale can be at most 20 MB in total. Connect fewer.' : `Reference images are too large for ${name} (20 MB in total). Use fewer or smaller images.`);
-    return Promise.all(objects.map(async (object, index) => { const bytes = new Uint8Array(await object.arrayBuffer()); return { mimeType: imageTypes[images[index].asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), ...(upscale ? { bytes } : { label: images[index].label, nodeId: images[index].nodeId, asset: images[index].asset, uploaded: images[index].uploaded }) }; }));
+  // The start of each stored image and its size, or null where it is missing. A ranged read still reports the size of the
+  // whole object (R2Object.size).
+  async inspectReferences(images) {
+    return Promise.all(images.map(async image => {
+      const object = await this.env.FILES.get(`assets/${image.asset}`, { range: { offset: 0, length: headerBytes } });
+      return object ? inspectImage(new Uint8Array(await object.arrayBuffer()), object.size) : null;
+    }));
+  }
+
+  // Checked before a run starts; what was read is kept on the request for the run itself. A 3D run sends each image on
+  // its own, so each is checked on its own.
+  async referencesProblem(request, gpt, name) {
+    const images = referenceInputs(request), purpose = referencePurpose(request, gpt), limits = referenceLimits[purpose];
+    // Storage trouble here leaves the check to the run, which reads the images again.
+    try { request.inspected = await this.inspectReferences(images); }
+    catch (cause) { console.error('Could not read reference images before a run:', cause); return null; }
+    const infos = request.inspected, options = { binding: !!this.env.IMAGES, name, upscale: purpose === 'upscale', model3d: purpose === 'model3d' };
+    // A missing image still fails as a run, the way it always has.
+    if (infos.some(info => !info)) return null;
+    if (purpose !== 'model3d') return referenceProblem(infos, images, limits, options);
+    for (const [index, image] of images.entries()) { const problem = referenceProblem([infos[index]], [image], limits, options); if (problem) return problem; }
+    return null;
+  }
+
+  // References as they are sent. Each original stays on the board untouched; one too large for the provider is sent as
+  // a smaller copy that Cloudflare Images makes once and R2 keeps under derived/. A set still too large is reduced
+  // further before it fails. `pair` holds the GPT Image mask and the image it edits, which must stay the same size.
+  async prepareReferences(images, purpose, { name = 'Nano Banana', pair = [], keepBytes = false, infos } = {}) {
+    const limits = referenceLimits[purpose], upscale = purpose === 'upscale', model3d = purpose === 'model3d';
+    infos ||= await this.inspectReferences(images);
+    const problem = referenceProblem(infos, images, limits, { binding: !!this.env.IMAGES, name, upscale, model3d });
+    if (problem) throw new NanoError('bad_request', problem);
+    let sources = null;
+    for (const side of this.env.IMAGES && !limits.untouched ? [undefined, ...fallbackSides] : [undefined]) {
+      const plan = planReferences(infos, limits, { side, pair }), found = new Array(plan.length);
+      // A few copies at a time, so the room never holds many large images at once.
+      for (let start = 0; start < plan.length; start += 3) await Promise.all(plan.slice(start, start + 3).map(async (step, offset) => {
+        const index = start + offset;
+        found[index] = step.prep ? await this.reducedCopy(images[index], step) : { key: `assets/${images[index].asset}`, bytes: infos[index].bytes };
+      }));
+      if (fitsLimits(found.map(source => source.bytes), limits)) { sources = found; break; }
+    }
+    if (!sources) throw new NanoError('bad_request', stillTooLarge(name));
+    // One image in memory at a time; only its base64 text is kept.
+    const prepared = [];
+    for (const [index, source] of sources.entries()) {
+      let bytes = source.data;
+      if (!bytes) {
+        const object = await this.env.FILES.get(source.key);
+        if (!object) throw new NanoError('bad_request', referenceProblem([null], [], limits, { upscale, model3d }));
+        bytes = new Uint8Array(await object.arrayBuffer());
+      }
+      const image = images[index];
+      prepared.push({ mimeType: imageTypes[sniffFormat(bytes)] || imageTypes[image.asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), byteLength: bytes.length, ...(keepBytes ? { bytes } : {}),
+        ...(upscale || model3d ? {} : { label: image.label, nodeId: image.nodeId, asset: image.asset, uploaded: image.uploaded }) });
+    }
+    return prepared;
+  }
+
+  // A reduced copy of one image, stored once beside the original. Cloudflare Images reads the original as a stream.
+  async reducedCopy(image, step) {
+    const key = derivedKey(image.asset, step), stored = await this.env.FILES.head(key);
+    if (stored) return { key, bytes: stored.size };
+    const original = await this.env.FILES.get(`assets/${image.asset}`);
+    if (!original) throw new NanoError('bad_request', 'A reference image is missing from storage. Reconnect it and try again.');
+    let bytes;
+    try {
+      const result = await this.env.IMAGES.input(original.body).transform(step.transform).output({ format: step.format, ...(step.format === 'image/jpeg' ? { quality: 90 } : {}) });
+      bytes = new Uint8Array(await result.response().arrayBuffer());
+    } catch (cause) { console.error('Could not reduce a reference image:', image.asset, cause); throw new NanoError('bad_request', couldNotReduce(image)); }
+    // Cloudflare Images returns large animations untransformed; only the copy that was asked for is sent.
+    const size = imageSize(bytes);
+    if (!size || Math.max(size.width, size.height) > step.side || imageTypes[sniffFormat(bytes)] !== step.format) throw new NanoError('bad_request', couldNotReduce(image));
+    try { await this.env.FILES.put(key, bytes, { httpMetadata: { contentType: step.format } }); }
+    catch (cause) { console.error('Could not keep a reduced reference image:', cause); return { key, bytes: bytes.length, data: bytes }; }
+    return { key, bytes: bytes.length };
   }
 
   // Pixel sizes from the start of each file, enough to price an upscale before it runs; null where the header is unread.
@@ -592,20 +670,16 @@ export class BoardRoom extends YServer {
     const signal = job.controller.signal;
     try {
       signal.throwIfAborted();
-      const image = job.request.images[index], object = await this.env.FILES.get(`assets/${image.asset}`);
-      if (!object) throw new NanoError('bad_request', 'An image is missing from storage. Reconnect it and try again.');
-      let bytes = new Uint8Array(await object.arrayBuffer()), size = imageSize(bytes), mimeType = imageTypes[image.asset.split('.').pop()];
+      // Hunyuan accepts JPG/PNG/WebP at 128–5000 px and up to 8 MB: over 6 MB or 4096 px, or a GIF (no model gets
+      // animation), the image goes as a 2048 px JPEG (cloud/reference-prep.mjs).
+      const image = job.request.images[index];
+      let [prepared] = await this.prepareReferences([image], 'model3d', { name: '3D generation', infos: job.request.inspected && [job.request.inspected[index]] });
+      const { size, mimeType } = prepared;
       if (!size) throw new NanoError('bad_request', 'Could not read the size of an image to turn into 3D.');
-      // Hunyuan accepts JPG/PNG/WebP at 128–5000 px and up to 8 MB. Re-encode GIFs too; no model gets animation.
-      if (bytes.length > 6 * 1024 * 1024 || Math.max(size.width, size.height) > 4096 || mimeType === 'image/gif') {
-        if (!this.env.IMAGES) throw new NanoError('config', 'This image needs resizing. Ask the site owner to enable Cloudflare Images, or connect a smaller PNG, JPEG or WebP.');
-        bytes = await this.transformImage(bytes, { width: Math.min(2048, size.width), height: Math.min(2048, size.height), fit: 'scale-down' }, 'image/jpeg');
-        size = imageSize(bytes); mimeType = 'image/jpeg';
-      }
-      if (bytes.length > 8 * 1024 * 1024 || !size || (job.request.modeler === 'hunyuan' && Math.min(size.width, size.height) < 128)) throw new NanoError('bad_request', 'Use an image at least 128 px on each side and at most 8 MB for 3D generation.');
+      if (prepared.byteLength > 8 * 1024 * 1024 || (job.request.modeler === 'hunyuan' && Math.min(size.width, size.height) < 128)) throw new NanoError('bad_request', 'Use an image at least 128 px on each side and at most 8 MB for 3D generation.');
       const settings = upscaleSettings(this.env), options = { endpoint: settings.endpoint, signal };
-      const input = model3dInput(job.request.modeler, `data:${mimeType};base64,${base64(bytes)}`);
-      bytes = null;
+      const input = model3dInput(job.request.modeler, `data:${mimeType};base64,${prepared.data}`);
+      prepared = null;
       const model = await falModel3d({ ...options, key: this.env.FAL_KEY, modeler: job.request.modeler, input, onQueued: () => { result.usd = job.estimates[index]; } });
       signal.throwIfAborted();
       const asset = `${crypto.randomUUID()}.glb`;
@@ -721,7 +795,7 @@ export class BoardRoom extends YServer {
     const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
     let outcome = { status: 'completed' };
     try {
-      const references = request.model3d ? [] : await this.references([...request.images, ...(request.mask ? [{ asset: request.mask }] : [])], request.upscale, name), mask = request.mask ? references.pop() : undefined;
+      const references = request.model3d ? [] : await this.prepareReferences(referenceInputs(request), referencePurpose(request, run.provider === generators.gptImage), { name, infos: request.inspected, keepBytes: !!request.upscale, pair: request.mask ? [0, request.images.length] : [] }), mask = request.mask ? references.pop() : undefined;
       if (job.cancelled) return;
       const calls = [];
       // Sequential across the room as well as within a run: model downloads never overlap.

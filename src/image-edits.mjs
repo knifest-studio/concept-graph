@@ -6,13 +6,19 @@ export const fullRect = pixels => ({ x: 0, y: 0, width: pixels.width, height: pi
 export const validCropRect = (rect, pixels) => object(rect) && validPixels(pixels) && ['x', 'y', 'width', 'height'].every(key => Number.isInteger(rect[key]))
   && rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0 && rect.x + rect.width <= pixels.width && rect.y + rect.height <= pixels.height;
 
+const validUncropped = value => object(value) && asset(value.asset) && validCropRect(value.rect, value.pixels);
 export function validateImageEdits(data) {
-  if (data.uncropped !== undefined && (!object(data.uncropped) || !asset(data.uncropped.asset) || !validCropRect(data.uncropped.rect, data.uncropped.pixels))) throw new Error('Invalid original image crop.');
+  if (data.uncropped !== undefined && !validUncropped(data.uncropped)) throw new Error('Invalid original image crop.');
   if (data.mask !== undefined && (!object(data.mask) || !['asset', 'marked', 'base'].every(key => png(data.mask[key])) || !asset(data.mask.source))) throw new Error('Invalid image mask.');
+  // The image as it was before Resize, one level deep: its file, size and crop.
+  if (data.unresized !== undefined && (!object(data.unresized) || Object.keys(data.unresized).some(key => !['asset', 'pixels', 'uncropped'].includes(key)) || !asset(data.unresized.asset) || !validPixels(data.unresized.pixels)
+    || (data.unresized.uncropped !== undefined && !validUncropped(data.unresized.uncropped)))) throw new Error('Invalid original image size.');
 }
 
 // All node assets, including 3D models and their image posters, must survive copies and archives.
-export const imageAssets = node => node?.type === 'model' ? [node.data.asset, node.data.poster].filter(Boolean) : node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key])].filter(Boolean) : node?.data?.template?.assets || [];
+export const imageAssets = node => node?.type === 'model' ? [node.data.asset, node.data.poster].filter(Boolean) : node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key]), node.data.unresized?.asset, node.data.unresized?.uncropped?.asset].filter(Boolean) : node?.data?.template?.assets || [];
+// The file a person thinks of as the original: before any resize, then before any crop.
+export const originalAsset = data => data.unresized?.uncropped?.asset || data.unresized?.asset || data.uncropped?.asset || data.asset;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 export function cropRect(rect, pixels) {
   const x = clamp(Math.round(rect.x), 0, pixels.width - 1), y = clamp(Math.round(rect.y), 0, pixels.height - 1);
@@ -48,6 +54,16 @@ export function resetImageData(data) {
   if (!data.uncropped) return data;
   const { uncropped, ...rest } = data;
   return { ...rest, asset: uncropped.asset, pixels: uncropped.pixels, aspect: imageAspect(uncropped.pixels) };
+}
+// A resized image starts a new crop history; the image before the first resize, with its crop, can be restored.
+export function resizedImageData(data, asset, pixels, before) {
+  const { uncropped, ...rest } = data;
+  return { ...rest, asset, pixels, aspect: imageAspect(pixels), unresized: data.unresized || { asset: data.asset, pixels: validPixels(before) ? before : data.pixels, ...(uncropped ? { uncropped } : {}) } };
+}
+export function restoreSizeData(data) {
+  if (!data.unresized) return data;
+  const { unresized, uncropped, ...rest } = data;
+  return { ...rest, asset: unresized.asset, pixels: unresized.pixels, aspect: imageAspect(unresized.pixels), ...(unresized.uncropped ? { uncropped: unresized.uncropped } : {}) };
 }
 
 export function selectionFromMask(rgba, result = new Uint8ClampedArray(rgba.length)) {

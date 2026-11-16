@@ -71,7 +71,9 @@ runtimeTest('Nano Banana loads the marked copy from R2, includes its bytes in li
   let result = await start(); assert.ok(result.run); await app.settle();
   assert.match(app.boardRoom.document.getMap('runs').get(result.run.id).error, /reference image is missing/); assert.equal(calls.length, 0);
   app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 20 * 1024 * 1024 });
-  result = await start(); await app.settle(); assert.match(app.boardRoom.document.getMap('runs').get(result.run.id).error, /20 MB in total/); assert.equal(calls.length, 0);
+  // Without Cloudflare Images nothing can be reduced, so a set over 20 MB is refused before anything is reserved.
+  result = await start(); assert.equal(result.status, 400); assert.match(result.error, /too large for Nano Banana \(20 MB in total\)/); assert.equal(calls.length, 0);
+  assert.equal(app.directory.nanoUsage('lead@studio.example').usedToday, 0);
   app.files.set(`assets/${marked}`, { bytes: png(640, 480), size: 33 });
   result = await start(); await app.settle(); assert.equal(calls.length, 1); assert.equal(calls[0].input.filter(part => part.type === 'image').length, 2);
   assert.equal(app.boardRoom.document.getMap('runs').get(result.run.id).status, 'completed');
@@ -263,7 +265,7 @@ function cloudSetup(t, extra = {}) {
     BoardRoom: { idFromName: name => name, get: name => rooms.get(name) || room(name) },
     FILES: {
       async put(key, bytes, metadata) { files.set(key, { bytes: new Uint8Array(bytes), size: bytes.byteLength, ...metadata }); },
-      async get(key) { const file = files.get(key); return file ? { size: file.size, arrayBuffer: async () => file.bytes.slice().buffer } : null; },
+      async get(key) { const file = files.get(key); return file ? { size: file.size, arrayBuffer: async () => file.bytes.slice().buffer, get body() { return new Blob([file.bytes]).stream(); } } : null; },
       async head(key) { return files.get(key) || null; },
       async list({ prefix }) { return { objects: [...files.keys()].filter(key => key.startsWith(prefix)).map(key => ({ key, customMetadata: files.get(key).customMetadata })), truncated: false }; },
       async delete(keys) { for (const key of [keys].flat()) files.delete(key); },
@@ -867,9 +869,9 @@ runtimeTest('3D shrinks large images via IMAGES and fails before billing when re
   app.files.set('assets/' + reference, { bytes: png(5000, 4500), size: 33 });
   const requester = { ...user, email: 'lead@studio.example' };
   const failed = await app.boardRoom.startNano({ nodeId: '3d', requester }); await app.settle();
-  assert.match(app.boardRoom.document.getMap('runs').get(failed.run.id).error, /needs resizing/); assert.equal(app.directory.nanoUsage(requester.email).usedToday, 0);
+  assert.equal(failed.status, 400); assert.match(failed.error, /needs resizing/); assert.equal(failed.run, undefined); assert.equal(app.directory.nanoUsage(requester.email).usedToday, 0);
   const transforms = []; let submitted;
-  app.boardRoom.env.IMAGES = { input: () => ({ transform: value => { transforms.push(value); return { output: async ({ format }) => { assert.equal(format, 'image/jpeg'); return { response: () => new Response(png(2048, 1843)) }; } }; } }) };
+  app.boardRoom.env.IMAGES = { input: () => ({ transform: value => { transforms.push(value); return { output: async ({ format }) => { assert.equal(format, 'image/jpeg'); return { response: () => new Response(jpeg(2048, 1843)) }; } }; } }) };
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     if (init.method === 'POST') { submitted = JSON.parse(init.body); return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }
     if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' }); if (url.endsWith('/result')) return Response.json({ model_glb: { url: 'https://media.example/model.glb' } }); return new Response(cubeGlb());

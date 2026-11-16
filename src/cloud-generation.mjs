@@ -5,6 +5,7 @@ import { boardAuthor } from './annotations.mjs';
 import { t } from './i18n.mjs';
 import { delegateAction } from './codex-sharing.mjs';
 import { placeRunOutput, placeRunText, runOutputId, runSummary, terminalRun as terminal } from './run-outputs.mjs';
+import { referenceCopy } from './image-resize.mjs';
 
 const timestamp = () => new Date().toISOString();
 const outdatedHelper = 'Update the Concept Graph helper to describe images.';
@@ -12,9 +13,13 @@ const outdatedHelper = 'Update the Concept Graph helper to describe images.';
 const jobSettings = job => ({ ...(typeof job.model === 'string' && /^[\w.\/:+-]{1,128}$/.test(job.model) ? { model: job.model } : {}),
   ...(typeof job.effort === 'string' && /^[a-z0-9_-]{1,32}$/.test(job.effort) ? { effort: job.effort } : {}) });
 
-async function base64(response) {
+async function base64(response, shrink) {
   if (!response.ok) throw new Error('Could not load a reference image.');
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  let blob = await response.blob();
+  // Codex reduces large images itself, so a smaller copy keeps the browser and the helper's request light; any trouble
+  // making one sends the original.
+  if (shrink) blob = await shrink(blob).catch(() => null) || blob;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
   if (bytes.length > 30 * 1024 * 1024) throw new Error('Reference images must be at most 30 MB.');
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
@@ -23,8 +28,8 @@ async function base64(response) {
 
 export class CloudGeneration {
   // `can(feature)` says whether this person's helper runs more than image generation, such as 'describe'.
-  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, read, can = () => false }) {
-    Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, can });
+  constructor({ doc, boardId, user, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, read, can = () => false, shrink = referenceCopy }) {
+    Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, can, shrink });
     // The editor's incremental reader when there is one; it returns shared objects, which this class never mutates.
     this.read = read || (() => (this.reader ||= new CloudGraphReader(doc)).read());
     this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map(); this.cancelling = new Set();
@@ -36,7 +41,12 @@ export class CloudGeneration {
     if (run && !terminal(run.status)) this.setRun({ ...run, finishedAt: timestamp(), ...fields });
   }
   delegated(id) { return !!this.doc.getMap('runs').get(id)?.delegate; }
-  async inputs(images) { return Promise.all(images.map(async asset => ({ asset, data: await base64(await this.request(`/assets/${asset}`)) }))); }
+  // One image at a time: each may be decoded at full size to make its copy.
+  async inputs(images) {
+    const inputs = [];
+    for (const asset of images) inputs.push({ asset, data: await base64(await this.request(`/assets/${asset}`), this.shrink) });
+    return inputs;
+  }
   startPolling() {
     this.active = true;
     this.tick();
