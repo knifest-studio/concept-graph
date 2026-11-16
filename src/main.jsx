@@ -54,6 +54,7 @@ import { bindingLabel, matchShortcut, platformIsMac, shortcutHint, withShortcut 
 import { getShortcutOverrides, replaceShortcutOverrides, savedShortcuts, subscribeShortcutOverrides } from './shortcut-preferences.mjs';
 import { useShortcutOverrides } from './useShortcutOverrides.jsx';
 import { installBackdropClose } from './backdrop-close.mjs';
+import { toastRoom } from './toast-room.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { NodeFeedback, useInteractionFeedback } from './InteractionFeedback.jsx';
 import { useDictationLanguage, usePromptDictation } from './usePromptDictation.jsx';
@@ -982,6 +983,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const remoteGroups = useRef({ version: 0, added: new Map() });
   const remoteCaptions = useRef({ version: 0, added: new Map() });
   const mouse = useRef({ x: innerWidth / 2, y: innerHeight / 2 }), fileInput = useRef(null), modelInput = useRef(null), toastTimer = useRef(null);
+  const keepToastRoom = useMemo(() => toastRoom(), []);
   const saveFn = useRef(null);
   const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
   const refreshTemplates = useCallback(async () => {
@@ -2961,7 +2963,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     }}/>}
     {showSignIn && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-welcome-title"><div className="login-card"><h2 id="codex-welcome-title">{t('Connect your ChatGPT account')}</h2><p>{t('Sign in to generate images with your Codex account. Your boards and images stay on this computer.')}</p><button className="primary-button" type="button" disabled={loginBusy} onClick={startLogin}>{t('Sign in with ChatGPT')}</button><button type="button" disabled={loginBusy} onClick={() => setDismissSignIn(true)}>{t('Not now')}</button></div></div>}
     {login && <div className="board-modal" role="dialog" aria-modal="true" aria-labelledby="codex-login-title"><div className="login-card"><h2 id="codex-login-title">{t('Sign in with ChatGPT')}</h2><p>{t('Continue in your browser to connect your account. Return here when you finish.')}</p><a className="primary-button" href={login.authUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer">{t('Continue in browser')}</a><button type="button" disabled={loginBusy} onClick={cancelLogin}>{t('Cancel')}</button></div></div>}
-    {toast && <div className="toast" role="status">{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
+    {toast && <div className="toast" role="status" ref={keepToastRoom}>{t(toast)}<button aria-label={t('Dismiss notification')} onClick={() => setToast('')}><Icon name="close" size={14}/></button></div>}
     {modelView && nodes.some(node => node.id === modelView.id && node.type === 'model') && <ModelDialog key={modelView.id} node={nodes.find(node => node.id === modelView.id)} orbit={modelView.orbit} assetUrl={assetUrl} onClose={() => setModelView(null)} save={saveModelView} readOnly={readOnly} Icon={Icon}/>}
     {/* The close button sits in its own strip above the scrolling details (beside the image on a wide screen, under it
         on a phone), so no text can scroll beneath it. The card is keyed by image so opening an input focuses Close again. */}
@@ -2986,8 +2988,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         <div className="lightbox-actions">{cloud && !readOnly && <><button type="button" onClick={() => editImage(viewNode.id, 'crop')}>{t('Crop')}</button><button type="button" onClick={() => editImage(viewNode.id, 'mask')}>{viewNode.data.mask ? t('Edit mask') : t('Mask')}</button><button type="button" onClick={() => editImage(viewNode.id, 'resize')}>{t('Resize…')}</button></>}<button data-tooltip={t('Download original image')} onClick={() => downloadImage(originalAsset(viewNode.data))}><Icon name="download" size={17}/> {t('Download original')}</button></div>
       </div>
     </div></div>}
-  </div>{uploading && !toast && <div className="toast" role="status">{t('Uploading files…')}</div>}{imageEdit && !readOnly && (imageEdit.mode === 'resize' ? <ResizeDialog key={`${imageEdit.node.id}:resize`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>
-    : <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>)} {mcpBusy && <div className="toast" role="status">{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
+  </div>{uploading && !toast && <div className="toast" role="status" ref={keepToastRoom}>{t('Uploading files…')}</div>}{imageEdit && !readOnly && (imageEdit.mode === 'resize' ? <ResizeDialog key={`${imageEdit.node.id}:resize`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>
+    : <ImageEditor key={`${imageEdit.node.id}:${imageEdit.mode}`} {...imageEdit} assetUrl={assetUrl} upload={uploadEdit} onApply={applyImageEdit} onClose={() => setImageEdit(null)}/>)} {mcpBusy && <div className="toast" role="status" ref={keepToastRoom}>{t('Synchronizing the board with the agent…')}</div>}<ButtonHelp/></CanvasContext.Provider>;
 }
 
 const helperBuilds = [
