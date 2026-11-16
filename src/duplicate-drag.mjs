@@ -11,9 +11,10 @@ export const duplicateGesture = event => !!event?.altKey && !event.ctrlKey;
  * captureSections gives them; taken from `page` when missing), groups held by a section included. A member dragged
  * without its frame comes out loose, as Cmd+D leaves it. Connections follow Cmd+D (duplicateNodes): inputs stay, links
  * between copies are remapped and outgoing links are not copied; images keep their stored files.
- * The selection moves to the copies. Returns `map` (original ID → copy ID, for cards, groups and sections), the new
- * `nodes`, `edges`, `groups` and `sections`, the `selected` originals, and `captures` keyed by copied section: what each
- * copy takes along, copies only, so a copy lying over its original never picks the original up.
+ * The selection moves to the copies, and selected connections give theirs up as Cmd+D makes them (a box selection
+ * takes every connection of its cards along). Returns `map` (original ID → copy ID, for cards, groups and sections), the
+ * new `nodes`, `edges`, `groups` and `sections`, the `selected` originals, the `selectedEdges` and `captures` keyed by
+ * copied section: what each copy takes along, copies only, so a copy lying over its original never picks the original up.
  */
 export function planDragDuplicate(board, dragged, { page = board, measure, captures = new Map(), makeId = () => crypto.randomUUID() } = {}) {
   const nodes = new Map(board.nodes.map(node => [node.id, node])), groups = board.groups || [], sections = board.sections || [];
@@ -57,8 +58,14 @@ export function planDragDuplicate(board, dragged, { page = board, measure, captu
     nodes: new Map([...capture.nodes].filter(([nodeId]) => ids.has(nodeId)).map(([nodeId, position]) => [ids.get(nodeId), position])),
     sections: new Map([...capture.sections].filter(([sectionId]) => map.has(sectionId)).map(([sectionId, position]) => [map.get(sectionId), position])),
   }]));
-  return { map, nodes: copies, edges: copied.edges, groups: groupCopies, sections: sectionCopies, selected, captures: copiedCaptures };
+  const selectedEdges = new Set((board.edges || []).filter(edge => edge.selected).map(edge => edge.id));
+  return { map, nodes: copies, edges: copied.edges, groups: groupCopies, sections: sectionCopies, selected, selectedEdges, captures: copiedCaptures };
 }
+
+// While the copies exist the originals named in `ids` (plan.selected, plan.selectedEdges) are deselected; when the copies
+// go (Alt released, Escape) they are selected again.
+export const handOverSelection = (items, ids) => items.some(item => item.selected && ids.has(item.id)) ? items.map(item => item.selected && ids.has(item.id) ? { ...item, selected: false } : item) : items;
+export const handBackSelection = (items, ids) => items.map(item => !item.selected && ids.has(item.id) ? { ...item, selected: true } : item);
 
 // React Flow keeps moving the originals it picked up when the drag began; while copies exist, those moves go to them.
 export function retargetDrag(changes, map) {

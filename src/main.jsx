@@ -11,7 +11,7 @@ import { formatDuration, runElapsed } from '../timing.mjs';
 import { generators, maxNodes, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
-import { duplicateGesture, dropDrag, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
+import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
 import './duplicate-drag.css';
 import { connectionColor, edgeDropCreatesPrompt, promptOverflows, arrowTargetAt, boardExtent, detachArrows, slideshowState, steppedSlide, frameBox, foldedShift, cleanGroups, pruneGroups, canvasView, createViewCache, viewSize as measureView, visibleTitles, lodHandleProps, moveGroup, sectionContents, captureSections, moveCaptured, wrapBounds, alignSelection, freshOutputNodes, mergeAddedGroups, preserveFreshOutputGroups, mergeRemoteImageCaptions, preserveRemoteImageCaptions, stampTargetAt, attachStampAt, boxTouches, boxSelection, reselect, selectionBounds } from './canvas.mjs';
 import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helper-download.mjs';
@@ -2082,11 +2082,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     // The copies appear where the originals are now, and the originals go back to where the drag picked them up.
     if (session.last) nodesChanged(positionChanges(session.start));
     // The selection moves to the copies; an original that moved before Alt was pressed has stopped moving.
-    const copies = stackOnTop(nodeRef.current, plan.nodes).map(placeOnPage), handOver = item => plan.map.has(item.id) ? deselected(item) : item;
+    // Connections give up their selection too, as Cmd+D makes them, so a Delete after the drop removes only the copies.
+    const copies = stackOnTop(nodeRef.current, plan.nodes).map(placeOnPage);
     putNodes(current => [...current.map(node => plan.map.has(node.id) && (node.selected || node.dragging) ? { ...node, selected: false, dragging: false } : node), ...copies]);
-    if (plan.edges.length) putEdges(current => [...current, ...plan.edges]);
-    putGroups(current => [...current.map(handOver), ...plan.groups]);
-    putSections(current => [...current.map(handOver), ...plan.sections.map(placeOnPage)]);
+    if (plan.edges.length || plan.selectedEdges.size) putEdges(current => [...handOverSelection(current, plan.selectedEdges), ...plan.edges]);
+    putGroups(current => [...handOverSelection(current, plan.selected), ...plan.groups]);
+    putSections(current => [...handOverSelection(current, plan.selected), ...plan.sections.map(placeOnPage)]);
     for (const [id, capture] of plan.captures) sectionMoves.current.set(id, capture);
     effects.seenNodes(copies.map(node => node.id));
     session.copies = plan; altDragged.current = true;
@@ -2097,11 +2098,10 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   };
   const removeCopies = plan => {
     const nodes = new Set(plan.nodes.map(node => node.id)), edges = new Set(plan.edges.map(edge => edge.id)), groups = new Set(plan.groups.map(group => group.id)), sections = new Set(plan.sections.map(section => section.id));
-    const handBack = item => plan.selected.has(item.id) && !item.selected ? { ...item, selected: true } : item;
-    putNodes(current => current.filter(node => !nodes.has(node.id)).map(handBack));
-    putEdges(current => current.filter(edge => !edges.has(edge.id) && !nodes.has(edge.source) && !nodes.has(edge.target)));
-    putGroups(current => current.filter(group => !groups.has(group.id)).map(handBack));
-    putSections(current => current.filter(section => !sections.has(section.id)).map(handBack));
+    putNodes(current => handBackSelection(current.filter(node => !nodes.has(node.id)), plan.selected));
+    putEdges(current => handBackSelection(current.filter(edge => !edges.has(edge.id) && !nodes.has(edge.source) && !nodes.has(edge.target)), plan.selectedEdges));
+    putGroups(current => handBackSelection(current.filter(group => !groups.has(group.id)), plan.selected));
+    putSections(current => handBackSelection(current.filter(section => !sections.has(section.id)), plan.selected));
     for (const id of plan.captures.keys()) sectionMoves.current.delete(id);
     setDragCopy(null);
   };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { duplicateGesture, dropDrag, planDragDuplicate, positionChanges, retargetDrag } from '../src/duplicate-drag.mjs';
+import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from '../src/duplicate-drag.mjs';
 import { captureSections, moveCaptured, moveGroup } from '../src/canvas.mjs';
 import { validateGraph } from '../graph.mjs';
 
@@ -35,7 +35,26 @@ test('a dragged card is copied over itself with its inputs, its file and its siz
   // Links between dragged cards are remapped to the copies.
   const pair = planDragDuplicate({ ...board, nodes: board.nodes.map(node => ({ ...node, selected: true })) }, ['parent', 'image'], { makeId: counter() });
   assert.deepEqual(pair.edges.map(({ source, target }) => ({ source, target })), [{ source: 'copy-1', target: 'copy-2' }]);
-  assert.deepEqual(planDragDuplicate(board, ['pending-run:0', 'missing'], { makeId: counter() }), { map: new Map(), nodes: [], edges: [], groups: [], sections: [], selected: new Set(), captures: new Map() });
+  assert.deepEqual(planDragDuplicate(board, ['pending-run:0', 'missing'], { makeId: counter() }), { map: new Map(), nodes: [], edges: [], groups: [], sections: [], selected: new Set(), selectedEdges: new Set(), captures: new Map() });
+});
+
+test('the copies take the selection over, connections included, and give it back when withdrawn', () => {
+  // A box selection of A and B also selects every connection of theirs, X→A and A→B.
+  const edges = [{ id: 'xa', source: 'x', target: 'a', selected: true }, { id: 'ab', source: 'a', target: 'b', selected: true }, { id: 'yz', source: 'y', target: 'z' }];
+  const board = { nodes: [prompt('x'), prompt('a', { x: 0, y: 0 }, { selected: true }), prompt('b', { x: 300, y: 0 }, { selected: true }), prompt('y'), prompt('z')], edges, groups: [], sections: [] };
+  const plan = planDragDuplicate(board, ['a'], { makeId: counter() });
+  assert.deepEqual([...plan.selectedEdges], ['xa', 'ab']);
+  assert.ok(plan.edges.every(edge => !edge.selected));
+  // While the copy exists nothing of the originals stays selected, so Delete removes only the copy, as after Cmd+D.
+  const during = [...handOverSelection(edges, plan.selectedEdges), ...plan.edges];
+  assert.deepEqual(during.filter(edge => edge.selected), []);
+  assert.deepEqual(during.slice(0, 3).map(({ id, source, target }) => ({ id, source, target })), edges.map(({ id, source, target }) => ({ id, source, target })));
+  // Alt released or Escape: the copy's edges go and the originals' connections are selected again.
+  const copyIds = new Set(plan.edges.map(edge => edge.id));
+  assert.deepEqual(handBackSelection(during.filter(edge => !copyIds.has(edge.id)), plan.selectedEdges), edges);
+  // Nothing to hand over leaves the list as it was.
+  const plain = edges.map(({ selected, ...edge }) => edge);
+  assert.equal(handOverSelection(plain, plan.selectedEdges), plain);
 });
 
 test('a dragged group frame copies the group with its name, members and slide; a member dragged alone comes out loose', () => {
