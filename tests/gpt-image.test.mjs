@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { transformWithEsbuild } from 'vite';
 import { signSession } from '../cloud/auth.mjs';
 import { gptImageCost, gptImageError, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from '../cloud/gpt-image.mjs';
-import { generators, imageSize, modelNames, validateGraph } from '../graph.mjs';
+import { clampVariants, generators, imageSize, maxVariants, modelNames, validateGraph, variantPresets } from '../graph.mjs';
 import { NanoError, nanoPrompt } from '../cloud/nano-banana.mjs';
 import { nanoState, usesSiteGenerator } from '../src/generator.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
@@ -134,7 +134,7 @@ runtimeTest('stale and multiple masks fail before quota reservation or a paid re
 });
 
 test('settings use the company key, the existing limits and only a loopback endpoint override', () => {
-  assert.deepEqual(gptImageSettings({}), { configured: false, dailyImages: 50, monthlyUsd: 50, endpoint: 'https://api.openai.com' });
+  assert.deepEqual(gptImageSettings({}), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: 'https://api.openai.com' });
   assert.deepEqual(gptImageSettings({ OPENAI_API_KEY: 'key', NANO_BANANA_DAILY_IMAGES: '2', NANO_BANANA_MONTHLY_USD: '1.25', GPT_IMAGE_ENDPOINT: 'http://127.0.0.1:8789/path' }),
     { configured: true, dailyImages: 2, monthlyUsd: 1.25, endpoint: 'http://127.0.0.1:8789' });
   assert.equal(gptImageSettings({ OPENAI_API_KEY: '  ', GEMINI_API_KEY: 'key' }).configured, false);
@@ -218,7 +218,7 @@ test('changed JSX compiles and the real picker renders three cloud generators, d
   const source = (await readFile(new URL('../src/GeneratorPicker.jsx', import.meta.url), 'utf8')).replace(/import .*?;\n/g, '');
   const compiled = await transformWithEsbuild(source, 'GeneratorPicker.jsx', { loader: 'jsx', format: 'cjs' });
   const module = { exports: {} };
-  new Function('module', 'exports', 'React', 'generators', 'maxVariants', 't', compiled.code)(module, module.exports, React, generators, 4, translate);
+  new Function('module', 'exports', 'React', 'generators', 'maxVariants', 'variantPresets', 'clampVariants', 't', compiled.code)(module, module.exports, React, generators, maxVariants, variantPresets, clampVariants, translate);
   const props = { id: 'p', generator: generators.gptImage, nano: { selectable: true, note: 'Ready' }, gpt: { selectable: false, note: 'GPT Image isn’t set up on this site' }, choose() {} };
   const markup = renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, generator: null }));
   assert.match(markup, /value="nano-banana"/); assert.match(markup, /value="gpt-image" disabled/); assert.match(markup, /GPT Image isn’t set up/);
@@ -228,6 +228,23 @@ test('changed JSX compiles and the real picker renders three cloud generators, d
     const uk = renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, generator: null, gpt: nanoState({ configured: false }, generators.gptImage) }));
     assert.match(uk, /GPT Image не налаштовано/); assert.equal(translate('Generate with GPT Image'), 'Згенерувати через GPT Image');
   } finally { setLanguage('en'); }
+  // The variants row: one-click presets, then a field for any other count, which shows a typed count as chosen.
+  const { VariantRow, typedVariants } = module.exports, row = props => renderToStaticMarkup(React.createElement(VariantRow, { id: 'p', choose() {}, ...props }));
+  const pressed = markup => [...markup.matchAll(/aria-pressed="true"[^>]*>(\d+)</g)].map(match => Number(match[1]));
+  const preset = row({ variants: 4 });
+  assert.deepEqual([...preset.matchAll(/<button[^>]*>(\d+)<\/button>/g)].map(match => Number(match[1])), [1, 2, 4, 8, 16]);
+  assert.deepEqual(pressed(preset), [4]); assert.match(preset, /class="variant-custom" type="text" inputMode="numeric" maxLength="2" placeholder="…"[^>]* value=""/);
+  assert.match(preset, /up to 32/); assert.match(preset, /aria-label="Custom number of variants, 1–32"/);
+  const custom = row({ variants: 6 });
+  assert.deepEqual(pressed(custom), []); assert.match(custom, /class="variant-custom chosen"[^>]* value="6"/);
+  const viewer = row({ variants: 12, disabled: true });
+  assert.equal(viewer.match(/disabled=""/g).length, 6); assert.match(viewer, /value="12"/);
+  // Typed text becomes a count on Enter or blur; nothing usable keeps the current count.
+  assert.deepEqual(['6', '16', '40', '99', '1'].map(typedVariants), [6, 16, 32, 32, 1]);
+  for (const bad of ['', '0', '00', 'x', '2.5', '-3']) assert.equal(typedVariants(bad), null, bad);
+  setLanguage('uk');
+  try { assert.match(row({ variants: 1 }), /Варіанти<\/span>.*aria-label="Своя кількість варіантів, 1–32"/s); }
+  finally { setLanguage('en'); }
 });
 
 test('the local OpenAI stand-in validates real requests and produces PNGs without opening a socket', async () => {
@@ -278,7 +295,7 @@ function fake(t, respond = () => Response.json(answer())) {
 runtimeTest('Worker and room enforce setup, shared Team access, origin and board edit access without calling OpenAI', async t => {
   const app = setup(t), calls = fake(t), path = `/api/boards/${app.board.id}/nano`;
   const status = await (await app.request('/api/nano')).json();
-  assert.deepEqual(status.gptImage, { configured: true, allowed: true, dailyImages: 50, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0 });
+  assert.deepEqual(status.gptImage, { configured: true, allowed: true, dailyImages: 100, usedToday: 0, monthlyUsd: 100, teamSpentUsd: 0 });
   assert.equal((await app.request(path, { method: 'POST', email: null, data: { nodeId: 'p' } })).status, 401);
   assert.equal((await app.request(path, { method: 'POST', data: { nodeId: 'p' }, headers: { Origin: 'https://evil.example' } })).status, 403);
   assert.equal((await app.request(path, { method: 'POST', email: 'outsider@example.com', data: { nodeId: 'p' } })).status, 403);

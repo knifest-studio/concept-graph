@@ -140,6 +140,29 @@ export class Directory extends DurableObject {
     this.ctx.storage.sql.exec('UPDATE nano_usage SET images = ?, usd = ?, open = 0 WHERE id = ?', Math.max(0, Math.floor(images) || 0), Math.max(0, Number(usd) || 0), id);
   }
 
+  // Every call of a run of variants is reserved in one step, or none is, so a run never starts with only part of what was
+  // asked; `fit` says how many would have fitted. The rows arrive as one JSON value because a Durable Object query
+  // takes at most 100 bound values, and the room makes one call here instead of one per variant.
+  reserveNanoMany(email, { dailyImages, monthlyUsd, estimates, images = 1 }, now = Date.now()) {
+    const { usedToday, teamSpentUsd } = this.nanoUsage(email, now);
+    let fit = 0, spent = teamSpentUsd;
+    for (const estimateUsd of estimates) {
+      // The same words reserveNano would answer with after reserving the calls that fit.
+      if (images && usedToday + fit + images > dailyImages) return { error: `Daily limit reached (${Math.min(usedToday + fit, dailyImages)}/${dailyImages}).`, status: 429, fit };
+      if (spent + estimateUsd > monthlyUsd) return { error: 'Team budget for this month is used up.', status: 429, fit };
+      spent += estimateUsd; fit++;
+    }
+    const day = new Date(now).toISOString().slice(0, 10), rows = estimates.map(usd => ({ id: crypto.randomUUID(), usd }));
+    this.ctx.storage.sql.exec(`INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt)
+      SELECT json_extract(value, '$.id'), ?, ?, ?, ?, json_extract(value, '$.usd'), 1, ? FROM json_each(?)`, email, day, day.slice(0, 7), images ? 1 : 0, now, JSON.stringify(rows));
+    return { reservations: rows.map(row => row.id) };
+  }
+
+  // Settles a run's reservations, each with what its call produced and cost, in one call from the room.
+  settleNanoMany(entries) {
+    for (const { id, ...usage } of entries) this.settleNano(id, usage);
+  }
+
   listBoards() {
     return this.ctx.storage.sql.exec('SELECT id, name, createdAt, COALESCE(updatedAt, createdAt) AS updatedAt, imageCount, covers FROM boards WHERE deletedAt IS NULL ORDER BY COALESCE(updatedAt, createdAt) DESC, rowid DESC').toArray().map(board => ({ ...board, covers: JSON.parse(board.covers) }));
   }

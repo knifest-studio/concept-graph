@@ -2,7 +2,7 @@ import { YServer } from 'y-partyserver';
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
 import { assetPattern, imageFormat, imageTypes } from './assets.mjs';
-import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout } from './nano-banana.mjs';
+import { base64, describeCost, describeEstimate, describeModel, describeResult, maxReferenceBytes, NanoError, nanoCost, nanoEstimate, nanoModel, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, variantLanes, variantRunTimeout } from './nano-banana.mjs';
 import { gptImageCost, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from './gpt-image.mjs';
 import { generators, imageSize, isSiteGenerator, isUpscale, isModel3d, model3dModels, promptVariants, upscalerOf, upscalers } from '../graph.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
@@ -26,6 +26,8 @@ const presenceIds = connection => connection.state?.__ypsAwarenessIds || [];
 const coordinate = value => Number.isFinite(value) && Math.abs(value) <= 1e7;
 const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
+// A prompt's image run: its calls are variants of one request (not images to upscale or turn into 3D, nor a description).
+const variantRun = request => !request.upscale && !request.model3d && !request.describe;
 
 export class BoardRoom extends YServer {
   static options = { hibernate: true };
@@ -341,19 +343,27 @@ export class BoardRoom extends YServer {
     const calls = request.upscale || model3d ? request.images.length : describe ? 1 : promptVariants(request.target);
     const estimates = Array.from({ length: calls }, (_, index) => model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? describeEstimate(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
     this.nanoStarting.add(nodeId);
-    const reservations = [], release = async () => { for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 }); };
+    const variants = variantRun(request), reservations = [], release = async () => {
+      if (variants) await this.directory().settleNanoMany(reservations.map(id => ({ id, images: 0, usd: 0 })));
+      else for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 });
+    };
     try {
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
-      for (let index = 0; index < calls; index++) {
+      // Variants are reserved together, all or none, in one call to the directory however many there are.
+      if (variants) {
+        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates });
+        if (reserved.error) return { error: reserved.fit ? `${reserved.error} Only ${reserved.fit} of ${calls} variants fit; choose fewer.` : reserved.error, status: reserved.status };
+        reservations.push(...reserved.reservations);
+      } else for (let index = 0; index < calls; index++) {
         const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1 });
         if (reserved.error) {
           await release();
-          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} ${request.upscale || request.model3d ? 'images' : 'variants'} fit; ${request.upscale || request.model3d ? 'connect' : 'choose'} fewer.` } : reserved;
+          return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} images fit; connect fewer.` } : reserved;
         }
         reservations.push(reserved.reservation);
       }
       const task = model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...task };
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? describeModel : gpt ? gptImageModel : nanoModel, status: 'running', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), ...(variants && calls > variantLanes ? { variantsStarted: variantLanes } : {}), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
       if (!this.document.getMap('nodes').has(nodeId)) {
@@ -681,25 +691,55 @@ export class BoardRoom extends YServer {
     }, origin);
   }
 
-  async callNano(job, references, fallback, result, mask) {
-    const gpt = job.run.provider === generators.gptImage, cost = gpt ? gptImageCost : nanoCost, parse = gpt ? gptImageResult : nanoResult;
-    const { url, init } = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, aspect: job.request.target.data.aspect, mask })
+  // Every variant sends the same request, so it is built once and shared: memory holds one copy of the reference images
+  // however many variants there are. A few calls run at a time; none starts after a cancel or the run's time limit, and
+  // a call that never started settles at nothing. Unstarted calls come back as failures with no reason of their own.
+  async runVariants(job, references, fallback, results, mask) {
+    const gpt = job.run.provider === generators.gptImage, outcomes = results.map(() => ({ status: 'rejected', reason: undefined }));
+    const call = gpt ? gptImageRequest(job.request.prompt, references, { key: this.env.OPENAI_API_KEY, endpoint: gptImageSettings(this.env).endpoint, aspect: job.request.target.data.aspect, mask })
       : nanoRequest(job.request.prompt, references, { key: this.env.GEMINI_API_KEY, endpoint: nanoSettings(this.env).endpoint });
-    // The provider may bill even without an answer, so the estimate stands until the answer says otherwise.
-    result.usd = job.estimateUsd;
-    const response = await fetch(url, { ...init, signal: job.controller.signal });
-    const body = await response.json().catch(() => null);
-    result.usd = response.ok ? cost(body?.usage, { ...fallback, images: gpt ? 1 : 0 }) : 0;
-    const { images, usage } = parse(response.status, body);
-    result.usd = cost(usage, { ...fallback, images: images.length });
-    for (const image of images) {
-      if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) break;
-      const asset = `${crypto.randomUUID()}.${image.format}`;
-      await this.env.FILES.put(`assets/${asset}`, image.bytes, { httpMetadata: { contentType: image.contentType } });
-      // Calls answer in any order; each image takes the next free output number.
-      if (!this.placeOutput(job, job.next, asset, imageSize(image.bytes))) break;
-      job.next++; result.placed++;
-    }
+    const runs = this.document.getMap('runs'), stopped = () => job.cancelled || job.controller.signal.aborted || terminalRun(runs.get(job.run.id)?.status);
+    let next = 0;
+    const lane = async () => {
+      while (next < results.length && !stopped()) {
+        const index = next++, run = runs.get(job.run.id);
+        // Placeholders past the first lanes say Queued until their call starts.
+        if (index >= variantLanes && run) this.document.transact(() => runs.set(job.run.id, { ...run, variantsStarted: index + 1 }), origin);
+        try { await this.callNano(job, call, fallback, results[index]); outcomes[index] = { status: 'fulfilled' }; }
+        catch (reason) { outcomes[index] = { status: 'rejected', reason }; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(variantLanes, results.length) }, lane));
+    return outcomes;
+  }
+
+  async callNano(job, { url, init }, fallback, result) {
+    const gpt = job.run.provider === generators.gptImage, cost = gpt ? gptImageCost : nanoCost, parse = gpt ? gptImageResult : nanoResult;
+    // Each call also has its own limit, so one slow answer cannot hold a lane until the whole run times out.
+    const controller = new AbortController(), stop = () => controller.abort(), parent = job.controller.signal;
+    const timer = setTimeout(() => { result.late = true; controller.abort(); }, nanoTimeout);
+    parent.addEventListener('abort', stop);
+    try {
+      // The provider may bill even without an answer, so the estimate stands until the answer says otherwise.
+      result.usd = job.estimateUsd;
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      const body = await response.json().catch(() => null);
+      controller.signal.throwIfAborted();
+      result.usd = response.ok ? cost(body?.usage, { ...fallback, images: gpt ? 1 : 0 }) : 0;
+      const { images, usage } = parse(response.status, body);
+      result.usd = cost(usage, { ...fallback, images: images.length });
+      for (const image of images) {
+        if (job.cancelled || terminalRun(this.document.getMap('runs').get(job.run.id)?.status)) break;
+        const asset = `${crypto.randomUUID()}.${image.format}`;
+        await this.env.FILES.put(`assets/${asset}`, image.bytes, { httpMetadata: { contentType: image.contentType } });
+        // Calls answer in any order; each image takes the next free output number.
+        if (!this.placeOutput(job, job.next, asset, imageSize(image.bytes))) break;
+        job.next++; result.placed++;
+      }
+    } catch (cause) {
+      if (result.late && !parent.aborted) throw new NanoError('timeout', `${gpt ? 'GPT Image' : 'Nano Banana'} took longer than ${nanoTimeout / 60000} minutes. Try again.`);
+      throw cause;
+    } finally { clearTimeout(timer); parent.removeEventListener('abort', stop); }
   }
 
   placeOutput(job, index, asset, dimensions, model) {
@@ -712,12 +752,13 @@ export class BoardRoom extends YServer {
     return placed;
   }
 
-  // One request per variant, side by side, never retried automatically: a retry could be billed twice. Images join the run
-  // as each call answers; each call's usage is settled with what it cost.
+  // One request per variant, a few side by side, never retried automatically: a retry could be billed twice. Images join
+  // the run as each call answers; each call's usage is settled with what it cost.
   async runNano(job) {
     const { run, request, controller } = job, fallback = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const name = request.model3d ? '3D generation' : request.upscale ? 'The upscale' : run.provider === generators.gptImage ? 'GPT Image' : 'Nano Banana';
-    const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, request.model3d ? 14 * 60 * 1000 : nanoTimeout);
+    const variants = variantRun(request), limit = request.model3d ? 14 * 60 * 1000 : variants ? variantRunTimeout(job.reservations.length) : nanoTimeout;
+    const timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, limit), late = `${name} took longer than ${Math.round(limit / 60000)} minutes. Try again.`;
     const results = job.reservations.map(() => ({ placed: 0, usd: 0 }));
     let outcome = { status: 'completed' };
     try {
@@ -729,16 +770,17 @@ export class BoardRoom extends YServer {
         try { await this.callModel3d(job, index, result); calls.push({ status: 'fulfilled' }); }
         catch (reason) { calls.push({ status: 'rejected', reason }); }
       }
-      else calls.push(...await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : request.describe ? this.callDescribe(job, references, fallback, result) : this.callNano(job, references, fallback, result, mask))));
+      else if (variants) calls.push(...await this.runVariants(job, references, fallback, results, mask));
+      else calls.push(...await Promise.allSettled(results.map((result, index) => request.upscale ? this.callUpscale(job, index, references[index], result) : this.callDescribe(job, references, fallback, result))));
       const failures = calls.filter(call => call.status === 'rejected').map(call => call.reason);
       if (failures.length === calls.length) throw failures[0];
       // Some variants (or images) arrived: the run succeeds, and History says what the others ran into.
       if (failures.length) {
-        const reason = failures[0] instanceof NanoError ? failures[0].message : `${name} failed.`;
+        const reason = job.timedOut ? late : failures[0] instanceof NanoError ? failures[0].message : `${name} failed.`;
         outcome = { status: 'completed', error: `${failures.length} of ${calls.length} ${request.upscale || request.model3d ? 'images' : 'variants'} failed: ${reason}` };
       }
     } catch (cause) {
-      outcome = { status: 'failed', error: job.timedOut ? `${name} took longer than ${request.model3d ? 14 : 5} minutes. Try again.` : cause instanceof NanoError ? cause.message
+      outcome = { status: 'failed', error: job.timedOut ? late : cause instanceof NanoError ? cause.message
         : cause?.name === 'TypeError' ? `Could not reach ${request.upscale ? 'the upscaler' : name}. Try again.` : `${name} failed. Try again.` };
       if (!(cause instanceof NanoError) && !job.cancelled) console.error(`${name} failed:`, cause);
     } finally {
@@ -746,10 +788,10 @@ export class BoardRoom extends YServer {
       this.nanoJobs.delete(run.id);
       const current = this.document.getMap('runs').get(run.id);
       this.writeRun(run.id, { ...(job.cancelled ? { status: 'cancelled' } : outcome), count: current?.outputIds?.length || 0 });
-      for (const [index, reservation] of job.reservations.entries()) {
-        try { await this.directory().settleNano(reservation, { images: results[index].placed, usd: results[index].usd }); }
-        catch (cause) { console.error(`Could not record ${name} usage:`, cause); }
-      }
+      const settled = job.reservations.map((id, index) => ({ id, images: results[index].placed, usd: results[index].usd }));
+      const failed = cause => console.error(`Could not record ${name} usage:`, cause);
+      if (variants) { try { await this.directory().settleNanoMany(settled); } catch (cause) { failed(cause); } }
+      else for (const { id, ...usage } of settled) { try { await this.directory().settleNano(id, usage); } catch (cause) { failed(cause); } }
       // Paid results are saved before the room may sleep, even when nobody is connected to flush them.
       await this.onSave().catch(cause => console.error(`Could not save the board after ${name}:`, cause));
     }

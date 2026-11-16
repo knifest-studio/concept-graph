@@ -33,7 +33,7 @@ const ids = (description, minItems = 1) => array(description, itemId, { minItems
 const hex = (description, palette) => text(`${description} as #rrggbb${palette ? `; the board's own: ${palette.join(', ')}` : ''}`, { pattern: '^#[0-9a-fA-F]{6}$' });
 const layer = number('Layer order on its page; higher draws in front', { minimum: -maxLayer, maximum: maxLayer });
 const generator = choice('Who makes the images: codex (the person\'s own Codex), nano-banana (the team\'s Gemini key), or gpt-image (the team\'s OpenAI key). Describe nodes use codex or nano-banana (Gemini) only.', ['codex', generators.nanoBanana, generators.gptImage]);
-const variants = integer(`How many images one run makes, 1–${maxVariants}`, { minimum: 1, maximum: maxVariants });
+const variants = integer(`How many images one nano-banana or gpt-image run makes, 1–${maxVariants}; each uses one of the person's daily images, and a run that does not fit starts nothing`, { minimum: 1, maximum: maxVariants });
 const end = object({ x: number('Canvas x of a free end'), y: number('Canvas y of a free end'), nodeId: text('Node this end holds on to: a prompt, image, sticky or shape', { minLength: 1, maxLength: 120 }) }, [], { description: 'An arrow end: a node to hold on to, or a point' });
 const templateFields = { name: text('Custom node name', { minLength: 1, maxLength: 80 }), instructions: text('Instructions added to every prompt made from it', { maxLength: 100000 }),
   assets: array('Reference image asset IDs, in order', assetId, { maxItems: 10 }), color: hex('Tag colour', templatePalette) };

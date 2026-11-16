@@ -30,6 +30,8 @@ export function runPlaceholders(graph, runs, page, spawns) {
       : [...new Set(graph.edges.filter(edge => edge.target === run.nodeId).map(edge => edge.source))].map(id => byId.get(id)).filter(node => node?.type === 'image');
     // Browser measurements are not stored; predict with the same bounds the server and shared document receive.
     const scratch = { ...graph, nodes: graph.nodes.map(({ measured, ...node }) => node) }, placement = { ...run, outputIds: [...outputIds] };
+    // A run of many variants starts a few calls at a time and counts them in variantsStarted; the slots after them are queued.
+    const started = run.variantsStarted ?? expected;
     for (let slot = outputIds.length; slot < expected; slot++) {
       const aspect = model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1;
       const id = `${run.id}-pending-${slot}`, output = { id, type: describe ? 'text' : model3d ? 'model' : 'image',
@@ -37,7 +39,7 @@ export function runPlaceholders(graph, runs, page, spawns) {
       positionRunOutput(output, scratch, placement);
       const size = nodeSize(output), spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
       nodes.push({ ...output, type: 'pending', selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
-        measured: size, style: size, data: { ...output.data, ...animation, describe, status: run.status === 'queued' ? 'Queued' : describe ? 'Describing' : model3d ? 'Generating 3D' : upscale ? 'Upscaling' : 'Generating', seed: describe ? undefined : waitingSeed(id) } });
+        measured: size, style: size, data: { ...output.data, ...animation, describe, slot, status: run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : model3d ? 'Generating 3D' : upscale ? 'Upscaling' : 'Generating', seed: describe ? undefined : waitingSeed(id) } });
       edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, type: 'pending', data: animation, className: 'pending-edge', selectable: false, deletable: false, focusable: false });
       scratch.nodes.push(output); placement.outputIds.push(id);
     }

@@ -14,6 +14,11 @@ export const nanoPrices = Object.freeze({ readOn: '2026-11-04', input: 1.5, text
 // Standard paid tier of gemini-3.5-flash-lite, same page and day: text and image input, then text and thinking output.
 export const describePrices = Object.freeze({ readOn: '2026-11-04', input: .3, output: 2.5 });
 export const nanoTimeout = 5 * 60 * 1000;
+// Variants go out a few at a time on one shared request body: a room may wait on only 6 connections at once and needs
+// some for storage, and one body per variant would not fit its memory. Each wave of lanes adds time to the run's limit,
+// which stays under the 15 minutes waitUntil keeps a room alive.
+export const variantLanes = 4;
+export const variantRunTimeout = count => Math.min(14 * 60 * 1000, nanoTimeout + (Math.ceil(Math.max(1, count) / variantLanes) - 1) * 2 * 60 * 1000);
 export const maxReferenceBytes = 20 * 1024 * 1024;
 
 export class NanoError extends Error {
@@ -38,10 +43,12 @@ export const localEndpoint = value => {
   catch { return null; }
 };
 
+// Production sets the same numbers in wrangler.jsonc; these apply when a variable is missing or unreadable.
+export const defaultDailyImages = 100, defaultMonthlyUsd = 100;
 export function nanoSettings(env) {
   return {
     configured: typeof env.GEMINI_API_KEY === 'string' && env.GEMINI_API_KEY.trim() !== '',
-    dailyImages: Math.floor(limit(env.NANO_BANANA_DAILY_IMAGES, 50)), monthlyUsd: limit(env.NANO_BANANA_MONTHLY_USD, 50),
+    dailyImages: Math.floor(limit(env.NANO_BANANA_DAILY_IMAGES, defaultDailyImages)), monthlyUsd: limit(env.NANO_BANANA_MONTHLY_USD, defaultMonthlyUsd),
     endpoint: (env.NANO_BANANA_ENDPOINT && localEndpoint(env.NANO_BANANA_ENDPOINT)) || googleEndpoint,
   };
 }

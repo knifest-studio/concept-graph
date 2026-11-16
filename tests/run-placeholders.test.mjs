@@ -58,6 +58,20 @@ test('Nano Banana keeps the remaining slot IDs and clips as real images arrive',
   assert.equal(pending(graph(), [run({ provider: 'nano-banana' })]).nodes.length, 1);
 });
 
+test('sixteen variants get sixteen numbered slots; those past the started calls say Queued until the room starts them', () => {
+  const board = graph(), job = run({ provider: 'nano-banana', variants: 16, variantsStarted: 4 });
+  const slots = pending(board, [job]).nodes;
+  assert.equal(slots.length, 16); assert.equal(new Set(slots.map(node => node.id)).size, 16);
+  assert.deepEqual(slots.map(node => node.data.slot), Array.from({ length: 16 }, (_, index) => index));
+  assert.deepEqual(slots.map(node => node.data.status), [...Array(4).fill('Generating'), ...Array(12).fill('Queued')]);
+  // Two images arrived and eight calls started: slots 2–7 are generating, the other eight still wait.
+  for (const count of [0, 1]) { const node = imageNode({ ...job, target: board.nodes[0] }, `image-${count}`, count, { width: 100, height: 100 }); positionRunOutput(node, board, job); board.nodes.push(node); job.outputIds.push(node.id); }
+  const later = pending(board, [{ ...job, variantsStarted: 8 }]).nodes;
+  assert.deepEqual(later.map(node => node.data.status), [...Array(6).fill('Generating'), ...Array(8).fill('Queued')]);
+  // Without the count (a short run, or an older room) every slot is generating.
+  assert.ok(pending(graph(), [run({ provider: 'nano-banana', variants: 4 })]).nodes.every(node => node.data.status === 'Generating'));
+});
+
 test('Codex shows its first slot, then waits for an active image tool signal, ignoring variants', () => {
   const board = graph(), job = run({ variants: 4 });
   for (let count = 0; count < 4; count++) {
