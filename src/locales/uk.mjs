@@ -1415,6 +1415,8 @@ export default {
   '{name} took longer than {minutes} minutes. Try again.': '{name} генерує довше за {minutes} хв. Спробуйте ще раз.',
   "3D generation runs on Concept Graph Cloud, not on this computer.": "Генерація 3D працює в Concept Graph Cloud, а не на цьому комп’ютері.",
   "3D generation runs on the site, not in Codex.": "Генерація 3D працює на сайті, а не в Codex.",
+  "Choose the shape and size": "Обирайте форму й розмір",
+  "Set the aspect ratio, size, thinking or quality and a transparent background from the button beside a prompt’s variants. Image details now show the reference images a run used.": "Задавайте пропорції, розмір, мислення чи якість і прозорий фон кнопкою поруч із варіантами промпта. У деталях зображення тепер видно референсні зображення, які використав запуск.",
   "More variants, tidier boards": "Більше варіантів, охайніші дошки",
   "Generate up to 32 variants at once on team boards and find results right beside their prompt. The generations tray folds away and clears itself, and oversized images are reduced for you (or use Resize…). Shortcuts work on any keyboard layout, now group and ungroup too, and you can change them in Settings; hold Alt while dragging to make a copy.": "Генеруйте до 32 варіантів за раз на командних дошках і знаходьте результати одразу біля промпту. Панель генерацій згортається й очищується сама, а завеликі зображення зменшуються автоматично (або через «Змінити розмір…»). Скорочення працюють за будь-якої розкладки, тепер і для групування та розгрупування, і їх можна змінити в Налаштуваннях; утримуйте Alt під час перетягування, щоб створити копію.",
   "Turn images into 3D": "Перетворюйте зображення на 3D",
