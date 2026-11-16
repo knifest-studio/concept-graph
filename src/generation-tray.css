@@ -1,0 +1,25 @@
+.generation-tray header>span{margin-right:auto}
+.generation-tray-tools{display:flex;align-items:center;gap:2px;margin:-6px -6px -6px 0}
+.generation-tray-icon{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--muted)}
+.generation-tray-icon:hover{background:var(--bg);color:var(--text)}
+.generation-tray-dismiss-all{padding:5px 6px;border-radius:5px;font-size:11px;color:var(--error)}
+.generation-tray-dismiss-all:hover{background:var(--bg)}
+.generation-tray .generation-tray-row.partial .generation-tray-status{color:var(--warning)}
+.generation-tray-status>span>svg{flex-shrink:0}
+.generation-tray-reason{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px;line-height:1.4}
+/* Folded: one pill in the tray's corner, coloured by the worst state it holds. */
+.generation-tray.collapsed{width:auto;margin-left:auto;padding:0;border-radius:999px}
+.generation-tray-chip{position:relative;display:flex;align-items:center;gap:7px;height:32px;padding:0 13px 0 11px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap;color:var(--text)}
+.generation-tray-chip:hover{background:var(--bg)}
+.generation-tray-chip>svg{flex-shrink:0;color:var(--muted)}
+.generation-tray.tone-active .generation-tray-chip>svg{color:var(--blue)}
+.generation-tray.tone-done .generation-tray-chip>svg{color:var(--success)}
+.generation-tray.tone-partial{border-color:color-mix(in srgb,var(--warning) 45%,var(--border))}
+.generation-tray.tone-partial .generation-tray-chip{color:var(--warning)}.generation-tray.tone-partial .generation-tray-chip>svg{color:var(--warning)}
+.generation-tray.tone-failed{border-color:color-mix(in srgb,var(--error) 45%,var(--border))}
+.generation-tray.tone-failed .generation-tray-chip{color:var(--error)}.generation-tray.tone-failed .generation-tray-chip>svg{color:var(--error)}
+.generation-tray-chip-pulse{position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;animation:tray-chip-pulse 700ms ease-out both}
+.generation-tray-spinner{animation:tray-spin 900ms linear infinite}
+@keyframes tray-chip-pulse{from{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 40%,transparent)}to{box-shadow:0 0 0 9px transparent}}
+@keyframes tray-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.generation-tray-chip-pulse{display:none}.generation-tray-spinner{animation:none}}

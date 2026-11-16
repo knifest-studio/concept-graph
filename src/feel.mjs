@@ -71,7 +71,7 @@ function particles(rect, count, confetti = false, dust = false) {
   }
 }
 function flight(source) {
-  const destination = () => document.querySelector('.generation-tray header>span,.canvas-tagline');
+  const destination = () => document.querySelector('.generation-tray header>span,.generation-tray-chip,.canvas-tagline');
   const target = destination(); if (!source || !target || reduced()) return;
   const a = source.getBoundingClientRect(), b = target.getBoundingClientRect(), x = b.left + b.width / 2 - a.left - a.width / 2, y = b.top + b.height / 2 - a.top - a.height / 2;
   const dot = piece({ left: a.left + a.width / 2, top: a.top + a.height / 2, width: 10, height: 10 }, 'feel-flight', 'var(--blue)');
