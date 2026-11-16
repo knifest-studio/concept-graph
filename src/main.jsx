@@ -32,7 +32,7 @@ import { ModelNode as ModelCard, ModelDialog } from './ModelNode.jsx';
 import { modelFile, modelExtension, modelInputAccept, groupModelFiles, checkModelBatch, checkModelFile, modelPoster, supportedModelFormats } from './model-upload.mjs';
 import { ImageEditor } from './ImageEditor.jsx';
 import { hasGenerationPrompt, imageAssets } from './image-edits.mjs';
-import { nanoState, usesSiteGenerator } from './generator.mjs';
+import { dollars, nanoState, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray } from './GenerationTray.jsx';
@@ -686,13 +686,29 @@ function GenerationControl({ status, version, readiness, helperNeeded, paired, e
       <p className="usage-note">{t('These are Codex usage limits; image generation may have a separate limit.')}</p>
       </section>
       {sharing}
-      {siteStatus && <section className="generation-providers">{[[generators.nanoBanana, 'Nano Banana', siteStatus], [generators.gptImage, 'GPT Image', siteStatus.gptImage]].filter(([, , provider]) => provider).map(([id, name, provider]) => {
-        const state = nanoState(provider, id);
-        return <p key={id}><strong>{name}</strong><span>{state.note}</span>{state.budget && <small>{state.budget}</small>}</p>;
-      })}</section>}
+      {siteStatus && <SiteLimits status={siteStatus}/>}
       {onAgentConnect && <button type="button" className="generation-agent" onClick={() => { close(); onAgentConnect(); }}><Icon name="branch" size={15}/>{t('Connect an AI agent (MCP)…')}</button>}
     </div>}
   </div>;
+}
+
+
+// Nano Banana and GPT Image draw on one allowance (images per person per day, the team's monthly budget), so it shows
+// once, as bars like Codex's limits; a model that isn't set up or open to this person says so on its own line.
+function SiteLimits({ status }) {
+  const models = [[generators.nanoBanana, 'Nano Banana', status], [generators.gptImage, 'GPT Image', status.gptImage]].filter(([, , provider]) => provider);
+  const usable = models.filter(([, , provider]) => provider.configured && provider.allowed), shown = usable[0]?.[2];
+  const left = shown ? Math.max(0, shown.dailyImages - shown.usedToday) : 0, money = shown ? Math.max(0, shown.monthlyUsd - shown.teamSpentUsd) : 0;
+  return <section className="generation-providers">
+    {shown && <>
+      <div className="usage-heading"><strong>{usable.map(([, name]) => name).join(' · ')}</strong>{usable.length > 1 && <span className="shared-limit">{t('shared limit')}</span>}</div>
+      <div className="usage-window"><div><span>{t('Today')}</span><strong>{t('{left} of {limit} left', { left, limit: shown.dailyImages })}</strong></div>
+        <progress max={shown.dailyImages} value={left} aria-label={t('Images left today')}/></div>
+      <div className="usage-window"><div><span>{t('Team this month')}</span><strong>{t('{left} of {limit} left', { left: dollars(money), limit: dollars(shown.monthlyUsd) })}</strong></div>
+        <progress max={shown.monthlyUsd} value={money} aria-label={t('Team budget left this month')}/></div>
+    </>}
+    {models.filter(([, , provider]) => !(provider.configured && provider.allowed)).map(([id, name, provider]) => <p key={id}><strong>{name}</strong><span>{nanoState(provider, id).note}</span></p>)}
+  </section>;
 }
 
 function TemplateEditor({ template, initial = template, templates, onClose, onSave, onDelete, onBusyChange }) {

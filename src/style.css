@@ -353,7 +353,7 @@ button,a,.image-collapse,.image-prompt-from,.image-expand,.image-shade{transitio
 .generation-panel .codex-sharing-details{width:100%}
 .generation-readiness>button,.generation-readiness>a{display:block;padding:5px 0;color:var(--blue);font-size:11px;text-align:left}
 .generation-readiness>button:hover,.generation-readiness>a:hover{text-decoration:underline}
-.generation-providers p{display:flex;flex-direction:column;gap:2px}.generation-providers strong{color:var(--text)}
+.generation-providers p{display:flex;flex-direction:column;gap:2px}.generation-providers .usage-heading{justify-content:flex-start;gap:8px;margin-bottom:12px}.shared-limit{font-size:9px;padding:2px 7px;border-radius:99px;color:var(--purple);background:color-mix(in srgb,var(--purple) 16%,transparent)}.generation-providers strong{color:var(--text)}
 .generation-agent{display:flex;align-items:center;gap:7px;width:100%;color:var(--purple);text-align:left;font-size:11px}
 .sidebar>.board-pages{padding-top:22px}.app-header .getting-started-help{flex-shrink:0}
 @media(max-width:1100px){.app-shell>.app-header{gap:9px;padding-inline:14px}.app-shell>.app-header .header-right{gap:6px}.board-menu{max-width:175px}.generation-chip{max-width:200px}}

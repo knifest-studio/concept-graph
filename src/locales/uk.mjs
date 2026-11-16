@@ -350,6 +350,12 @@ export default {
   'Daily limit reached ({used}/{limit})': 'Денний ліміт вичерпано ({used}/{limit})',
   'Team budget for this month is used up': 'Бюджет команди на цей місяць вичерпано',
   '{left} of {limit} left today': 'Сьогодні залишилося {left} з {limit}',
+  'shared limit': 'спільний ліміт',
+  'Today': 'Сьогодні',
+  'Team this month': 'Команда за місяць',
+  '{left} of {limit} left': 'Залишилося {left} з {limit}',
+  'Images left today': 'Залишилося зображень сьогодні',
+  'Team budget left this month': 'Залишок бюджету команди цього місяця',
   'Generate with Codex or Nano Banana': 'Генерувати через Codex або Nano Banana',
   'Image generator': 'Генератор зображень',
 
