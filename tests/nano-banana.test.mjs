@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import * as nodeModule from 'node:module';
 import * as Y from 'yjs';
 import { signSession, userColor } from '../cloud/auth.mjs';
-import { NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings } from '../cloud/nano-banana.mjs';
-import { imageSize, validateGraph } from '../graph.mjs';
+import { readFile } from 'node:fs/promises';
+import { defaultDailyImages, defaultMonthlyUsd, NanoError, nanoAllowed, nanoCost, nanoEstimate, nanoPrompt, nanoRequest, nanoResult, nanoSettings, nanoTimeout, variantLanes, variantRunTimeout } from '../cloud/nano-banana.mjs';
+import { clampVariants, imageSize, maxVariants, promptVariants, validateGraph, variantPresets } from '../graph.mjs';
+import { runPlaceholders } from '../src/run-placeholders.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { nanoState } from '../src/generator.mjs';
@@ -86,14 +88,31 @@ test('the allowed list matches whole emails and whole @domains in any case', () 
 
 test('settings come from the Worker environment with safe defaults, and the endpoint override stays on this machine', () => {
   const google = 'https://generativelanguage.googleapis.com';
-  assert.deepEqual(nanoSettings({}), { configured: false, dailyImages: 50, monthlyUsd: 50, endpoint: google });
+  assert.deepEqual(nanoSettings({}), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: google });
   assert.deepEqual(nanoSettings({ GEMINI_API_KEY: 'k', NANO_BANANA_DAILY_IMAGES: '20', NANO_BANANA_MONTHLY_USD: '12.5', NANO_BANANA_ENDPOINT: 'http://127.0.0.1:8788/' }),
     { configured: true, dailyImages: 20, monthlyUsd: 12.5, endpoint: 'http://127.0.0.1:8788' });
   assert.equal(nanoSettings({ GEMINI_API_KEY: '  ' }).configured, false);
-  assert.deepEqual(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 'many', NANO_BANANA_MONTHLY_USD: '-1' }), { configured: false, dailyImages: 50, monthlyUsd: 50, endpoint: google });
+  assert.deepEqual(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 'many', NANO_BANANA_MONTHLY_USD: '-1' }), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: google });
   assert.equal(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 0 }).dailyImages, 0);
   for (const endpoint of ['https://attacker.example', 'http://localhost.attacker.example', 'file:///etc/passwd', 'not a url']) assert.equal(nanoSettings({ NANO_BANANA_ENDPOINT: endpoint }).endpoint, google, endpoint);
   assert.equal(nanoSettings({ NANO_BANANA_ENDPOINT: 'http://localhost:9000' }).endpoint, 'http://localhost:9000');
+});
+
+test('the deployed limits are 100 images per person a day and $100 a team month, the same as the code falls back to', async () => {
+  const { vars } = JSON.parse(await readFile(new URL('../cloud/wrangler.jsonc', import.meta.url), 'utf8'));
+  assert.deepEqual([defaultDailyImages, defaultMonthlyUsd], [100, 100]);
+  const deployed = nanoSettings(vars), fallback = nanoSettings({});
+  assert.deepEqual([deployed.dailyImages, deployed.monthlyUsd], [fallback.dailyImages, fallback.monthlyUsd]);
+});
+
+test('variant counts: presets up to 16, any whole number up to 32, and a run limit that grows by waves under 15 minutes', () => {
+  assert.deepEqual(variantPresets, [1, 2, 4, 8, 16]); assert.equal(maxVariants, 32); assert.equal(variantLanes, 4);
+  assert.deepEqual([0, -3, 1, 2.4, 2.6, 6, 32, 33, 1000, NaN, '12', ''].map(clampVariants), [1, 1, 1, 2, 3, 6, 32, 32, 32, 1, 12, 1]);
+  const node = variants => ({ id: 'q', type: 'text', position: { x: 0, y: 0 }, data: { text: 'x', variants } });
+  for (const good of [2, 6, 16, 32]) { assert.doesNotThrow(() => validateGraph({ nodes: [node(good)], edges: [] })); assert.equal(promptVariants(node(good)), good); }
+  for (const bad of [0, 1, 33, 2.5]) assert.throws(() => validateGraph({ nodes: [node(bad)], edges: [] }), /Invalid number of variants/);
+  assert.deepEqual([1, 4, 5, 8, 16, 20, 32].map(count => variantRunTimeout(count) / 60000), [5, 5, 7, 7, 11, 13, 14]);
+  assert.equal(variantRunTimeout(1), nanoTimeout);
 });
 
 test('the request sends the prompt, connected context and labelled references, without Codex tool instructions', () => {
@@ -336,7 +355,7 @@ runtimeTest('Nano Banana routes check sign-in, origin, board, setup, the allowed
   const lead = await cookie('lead@studio.example'), outsider = await cookie('guest@gmail.example', 'Guest'), path = `/api/boards/${board.id}/nano`;
   assert.equal((await request('/api/nano')).status, 401);
   assert.equal((await request(path, { method: 'POST', data: { nodeId: 'p' } })).status, 401);
-  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 50, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
+  assert.deepEqual(await (await request('/api/nano', { cookie: lead })).json(), { configured: true, allowed: true, dailyImages: 1, usedToday: 0, monthlyUsd: 100, teamSpentUsd: 0, gptImage: { configured: false, allowed: true }, fal: false, model3d: { configured: false, allowed: false } });
   assert.deepEqual(await (await request('/api/nano', { cookie: outsider })).json(), { configured: true, allowed: false, gptImage: { configured: false, allowed: false }, fal: false, model3d: { configured: false, allowed: false } });
   assert.equal((await request('/api/nano', { method: 'POST', cookie: lead })).status, 405);
   assert.equal((await request(path, { cookie: lead })).status, 405);
@@ -552,7 +571,126 @@ runtimeTest('variants that do not all fit the daily limit start nothing and hold
   assert.match((await response.json()).error, /Only 2 of 3 variants fit; choose fewer\.$/);
   assert.equal(calls.length, 0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 0);
   assert.equal(readCloudGraph(boardRoom.document).runs.length, 0);
-  for (const bad of [1, 5, 2.5]) assert.throws(() => validateGraph({ nodes: [{ id: 'q', type: 'text', position: { x: 0, y: 0 }, data: { text: 'x', variants: bad } }], edges: [] }), /Invalid number of variants/);
+});
+
+const setVariants = (room, count) => { const before = readCloudGraph(room.document), next = structuredClone(before); next.nodes.find(node => node.id === 'p').data.variants = count; applyLocalGraph(room.document, next, before, 'edit'); };
+// A call that answers only when it is aborted, as a slow provider looks from the room.
+const hanging = init => new Promise((resolve, reject) => init.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError'))));
+const variantEstimate = room => nanoEstimate({ promptLength: nanoPrompt(readCloudGraph(room.document), 'p').prompt.length, references: 1 });
+
+runtimeTest('sixteen variants share one request and keep at most four calls in flight; the rest wait as Queued', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t);
+  setVariants(boardRoom, 16);
+  const held = gate(), seen = [];
+  let flying = 0, most = 0;
+  const calls = fakeGemini(t, async (init, count) => {
+    flying++; most = Math.max(most, flying); seen.push(boardRoom.document.getMap('runs').values().next().value.variantsStarted);
+    if (count <= 4) await held.promise; else await new Promise(resolve => setImmediate(resolve));
+    flying--; return Response.json(interaction([png(100, 100)]));
+  });
+  const response = await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('lead@studio.example'), data: { nodeId: 'p' } });
+  assert.equal(response.status, 202);
+  const { run: { id } } = await response.json();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 4);
+  const running = readCloudGraph(boardRoom.document), statuses = runPlaceholders(running, running.runs, 'page-1').nodes.map(node => node.data.status);
+  assert.deepEqual(statuses, [...Array(4).fill('Generating'), ...Array(12).fill('Queued')]);
+  held.open(); await settle();
+  assert.equal(calls.length, 16); assert.equal(most, 4);
+  // Built once: every call sends the very same headers object and the same body text.
+  assert.ok(calls.every(call => call.init.headers === calls[0].init.headers && call.init.body === calls[0].init.body));
+  assert.deepEqual(seen, [4, 4, 4, 4, ...Array.from({ length: 12 }, (_, index) => index + 5)]);
+  const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
+  assert.deepEqual([run.status, run.count, run.variants, run.variantsStarted, run.error], ['completed', 16, 16, 16, undefined]);
+  assert.deepEqual(graph.groups.map(group => [group.slideshow, group.nodeIds.length]), [[true, 16]]);
+  assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 16);
+  validateGraph(graph);
+});
+
+runtimeTest('cancelling many variants sends no further calls and refunds the ones that never started', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t);
+  setVariants(boardRoom, 10);
+  const calls = fakeGemini(t, hanging), lead = await cookie('lead@studio.example');
+  const { run: { id } } = await (await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: lead, data: { nodeId: 'p' } })).json();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 4);
+  assert.equal((await request(`/api/boards/${board.id}/nano/${id}/cancel`, { method: 'POST', cookie: lead })).status, 200);
+  await settle();
+  assert.equal(calls.length, 4); assert.ok(calls.every(call => call.init.signal.aborted));
+  const run = boardRoom.document.getMap('runs').get(id), spent = directory.nanoUsage('lead@studio.example');
+  assert.deepEqual([run.status, run.count], ['cancelled', 0]);
+  // The four sent calls may have been billed; the six never sent cost nothing.
+  assert.equal(spent.usedToday, 0); assert.equal(Math.round(spent.teamSpentUsd * 1e6), Math.round(4 * variantEstimate(boardRoom) * 1e6));
+});
+
+runtimeTest('a run of variants cut off by a room restart refunds the calls it never sent and sends none again', async t => {
+  const { room, board, directory, waits } = cloudSetup(t);
+  const calls = fakeGemini(t, hanging), values = new Map(), name = `${board.id}-first`, lead = 'lead@studio.example';
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const first = room(name, values, { save: true });
+  applyLocalGraph(first.document, seed, empty, 'seed'); setVariants(first, 10);
+  await first.setName(name);
+  const { run: { id } } = await first.startNano({ nodeId: 'p', requester: { name: 'Lead', email: lead, color: user.color } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 4);
+  const estimate = variantEstimate(first), spent = () => Math.round(directory.nanoUsage(lead).teamSpentUsd * 1e6);
+  assert.equal(spent(), Math.round(10 * estimate * 1e6));
+  await first.saveSnapshot();
+  // The room stops with four calls sent; a new instance of it loads what was saved.
+  const restarted = room(name, values), before = waits.length;
+  await restarted.setName(name);
+  await Promise.all(waits.slice(before));
+  assert.equal(restarted.document.getMap('runs').get(id).status, 'failed');
+  // The four sent calls may have been billed; the six never sent cost nothing.
+  assert.equal(spent(), Math.round(4 * estimate * 1e6));
+  assert.equal(values.get('variants:reserved'), undefined); assert.equal(calls.length, 4);
+  // Cancelling the interrupted run later finds nothing more to refund.
+  assert.deepEqual(restarted.cancelNano({ runId: id, email: lead }), { ok: true });
+  await Promise.all(waits.slice(before));
+  assert.equal(spent(), Math.round(4 * estimate * 1e6));
+  // The stopped instance's own calls end here only because this test shares one process with the new one.
+  first.cancelNano({ runId: id, email: lead }); await Promise.all(waits);
+  assert.equal(calls.length, 4); assert.equal(spent(), Math.round(4 * estimate * 1e6));
+});
+
+runtimeTest('slow variants time out one by one and then as a run; calls the run never started cost nothing', async t => {
+  const { request, cookie, board, boardRoom, settle, directory } = cloudSetup(t);
+  setVariants(boardRoom, 12);
+  const calls = fakeGemini(t, hanging), flush = () => new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { run: { id } } = await (await request(`/api/boards/${board.id}/nano`, { method: 'POST', cookie: await cookie('lead@studio.example'), data: { nodeId: 'p' } })).json();
+  await flush();
+  assert.equal(calls.length, 4);
+  // Each call has five minutes; the lanes go on with the next variants.
+  t.mock.timers.tick(nanoTimeout); await flush();
+  assert.equal(calls.length, 8); assert.ok(calls.slice(0, 4).every(call => call.init.signal.aborted));
+  // Three waves give the run nine minutes; the last four variants are never sent.
+  t.mock.timers.tick(variantRunTimeout(12) - nanoTimeout); await settle();
+  assert.equal(calls.length, 8); assert.ok(calls.every(call => call.init.signal.aborted));
+  const run = boardRoom.document.getMap('runs').get(id), spent = directory.nanoUsage('lead@studio.example');
+  assert.deepEqual([run.status, run.error, run.count], ['failed', 'Nano Banana took longer than 9 minutes. Try again.', 0]);
+  assert.equal(spent.usedToday, 0); assert.equal(Math.round(spent.teamSpentUsd * 1e6), Math.round(8 * variantEstimate(boardRoom) * 1e6));
+});
+
+runtimeTest('a run of variants reserves all its calls in one step or none, and settles them in one step', t => {
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const sql = { exec(query, ...bindings) { const rows = database.prepare(query).all(...bindings).map(row => ({ ...row })); return { toArray: () => rows }; } };
+  const directory = new Directory({ storage: { sql } }, {}), now = Date.UTC(2026, 10, 16, 12), usage = email => directory.nanoUsage(email, now);
+  const cents = value => Math.round(value * 100);
+  const first = directory.reserveNanoMany('a@studio.example', { dailyImages: 5, monthlyUsd: 2, estimates: [.1, .1, .1] }, now);
+  assert.equal(new Set(first.reservations).size, 3);
+  assert.deepEqual([usage('a@studio.example').usedToday, cents(usage('a@studio.example').teamSpentUsd)], [3, 30]);
+  // Three more do not fit five a day: nothing is reserved, and the answer says two would have.
+  assert.deepEqual(directory.reserveNanoMany('a@studio.example', { dailyImages: 5, monthlyUsd: 2, estimates: [.1, .1, .1] }, now), { error: 'Daily limit reached (5/5).', status: 429, fit: 2 });
+  assert.equal(usage('a@studio.example').usedToday, 3);
+  assert.deepEqual(directory.reserveNanoMany('b@studio.example', { dailyImages: 10, monthlyUsd: 1, estimates: [.3, .3, .3] }, now), { error: 'Team budget for this month is used up.', status: 429, fit: 2 });
+  assert.equal(usage('b@studio.example').usedToday, 0);
+  // 32 rows go in as one JSON value, past the 100 values one Durable Object query may bind.
+  const many = directory.reserveNanoMany('c@studio.example', { dailyImages: 32, monthlyUsd: 2, estimates: Array(32).fill(.01) }, now);
+  assert.equal(many.reservations.length, 32); assert.equal(usage('c@studio.example').usedToday, 32);
+  directory.settleNanoMany(first.reservations.map((id, index) => ({ id, images: index ? 0 : 1, usd: index ? 0 : .05 })));
+  assert.deepEqual([usage('a@studio.example').usedToday, cents(usage('a@studio.example').teamSpentUsd)], [1, 5 + 32]);
 });
 
 runtimeTest('a describe node can use Gemini on the site key: one text call, a description prompt, no daily images', async t => {
@@ -897,7 +1035,7 @@ runtimeTest('concurrent 3D runs share one room lane; cancelling a queued run sta
 runtimeTest('fal-only sites report the separate 3D access and shared allowance without requiring Gemini configuration', async t => {
   const app = cloudSetup(t, { SITE_OWNER_EMAIL: 'lead@studio.example', FAL_KEY: 'key', GEMINI_API_KEY: '' }), cookie = await app.cookie('lead@studio.example');
   const status = await (await app.request('/api/nano', { cookie })).json();
-  assert.equal(status.configured, false); assert.equal(status.model3d.configured, true); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 50);
+  assert.equal(status.configured, false); assert.equal(status.model3d.configured, true); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 100);
 });
 
 runtimeTest('a 3D thumbnail that fails to store falls back to the source poster', async t => {

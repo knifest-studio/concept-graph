@@ -64,6 +64,8 @@ function PendingSplash({ spawnAt, height }) {
   })}</g>;
 }
 
+// A zoomed-out run of many variants keeps clips on its first few placeholders only; each clip is two video elements.
+const liveSlots = 6;
 export function PendingNode({ id, data, width = 310, height = 310, positionAbsoluteX, positionAbsoluteY }) {
   const media = useRef(null);
   useLayoutEffect(() => {
@@ -80,7 +82,7 @@ export function PendingNode({ id, data, width = 310, height = 310, positionAbsol
   return <div className={`pending-node${data.describe ? ' pending-text' : ''}${full ? '' : ' pending-light'}${spawn ? ' pending-spawn' : ''}`} style={{ width: '100%', height: '100%', ...style }}>
     <article className="node-card pending-card">
       <div ref={media} className="pending-media"><div className="pending-shimmer" aria-hidden="true"/>
-        {videos && !data.describe && data.seed !== undefined && <WaitingVideo key={data.seed} seed={data.seed}/>}
+        {videos && !data.describe && data.seed !== undefined && (full || !(data.slot >= liveSlots)) && <WaitingVideo key={data.seed} seed={data.seed}/>}
       </div>
       {full && <span className="pending-status" role="status">{t(data.status)}</span>}
     </article>

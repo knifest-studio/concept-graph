@@ -110,7 +110,7 @@ runtimeTest('admins manage per-person 3D separately from image access, including
   assert.equal(directory.model3dAllowed('waiting@studio.example'), true); assert.equal(directory.nanoAllowed('waiting@studio.example'), false);
   assert.deepEqual((await (await request('/api/nano', { email: 'solo@mail.example' })).json()).model3d, { configured: true, allowed: false });
   const status = await (await request('/api/nano', { email: 'waiting@studio.example' })).json();
-  assert.equal(status.allowed, false); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 50);
+  assert.equal(status.allowed, false); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 100);
   await patch('admin@studio.example', { email: 'waiting@studio.example', allowed: false });
   assert.equal((await (await request('/api/nano', { email: 'waiting@studio.example' })).json()).model3d.allowed, false);
   for (const email of ['@studio.example', 'studio.example', 'not an email', 'a@b@c', '', null]) assert.equal((await patch('admin@studio.example', { email, allowed: true })).status, 400, String(email));

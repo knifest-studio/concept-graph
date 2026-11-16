@@ -37,6 +37,14 @@ export function t(text, values) {
     if (match) return t('The 3D generator failed ({status}). Try again.', { status: match[1] });
     match = /^(\d+) of (\d+) images failed: (.*)$/s.exec(text);
     if (match) return t('{count} of {total} images failed: {error}', { count: match[1], total: match[2], error: t(match[3]) });
+    // Site generator errors with counts; the cheap checks keep the patterns off every other label.
+    if (text.includes(' variants failed: ') && (match = /^(\d+) of (\d+) variants failed: (.*)$/s.exec(text))) return t('{count} of {total} variants failed: {error}', { count: match[1], total: match[2], error: t(match[3]) });
+    if (text.endsWith(' fewer.')) {
+      if ((match = /^(.*) Only (\d+) of (\d+) variants fit; choose fewer\.$/s.exec(text))) return t('{reason} Only {count} of {total} variants fit; choose fewer.', { reason: t(match[1]), count: match[2], total: match[3] });
+      if ((match = /^(.*) Only (\d+) of (\d+) images fit; connect fewer\.$/s.exec(text))) return t('{reason} Only {count} of {total} images fit; connect fewer.', { reason: t(match[1]), count: match[2], total: match[3] });
+    }
+    if (text.startsWith('Daily limit reached (') && (match = /^Daily limit reached \((\d+)\/(\d+)\)\.$/.exec(text))) return t('Daily limit reached ({used}/{limit}).', { used: match[1], limit: match[2] });
+    if (text.includes(' took longer than ') && (match = /^(Nano Banana|GPT Image) took longer than (\d+) minutes\. Try again\.$/.exec(text))) return t('{name} took longer than {minutes} minutes. Try again.', { name: match[1], minutes: match[2] });
   }
   const translated = dictionaries[current]?.[text];
   return fill(typeof translated === 'string' ? translated : text, values);

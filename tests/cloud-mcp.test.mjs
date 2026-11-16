@@ -238,6 +238,13 @@ runtimeTest('an agent sees and edits a board live, within the person’s role', 
   assert.match((await lead.tool('upload_image', { data: Buffer.from('not an image').toString('base64') })).error, /PNG, JPEG/);
 
   const prompt = await lead.tool('add_text_node', { boardId, text: 'A courier robot', generator: 'nano-banana', variants: 2 });
+  // The schema allows the same counts as the board: any whole number up to 32.
+  const many = await lead.tool('add_text_node', { boardId, text: 'Many robots', generator: 'nano-banana', variants: 16 });
+  assert.match((await lead.tool('add_text_node', { boardId, text: 'Too many', generator: 'nano-banana', variants: 33 })).error, /variants/);
+  assert.equal((await lead.tool('update_node', { boardId, nodeId: many.nodeId, variants: 32 })).error, undefined);
+  assert.match((await lead.tool('update_node', { boardId, nodeId: many.nodeId, variants: 33 })).error, /variants/);
+  assert.equal(readCloudGraph(rooms.get(boardId).document).nodes.find(node => node.id === many.nodeId).data.variants, 32);
+  await lead.tool('delete_nodes', { boardId, nodeIds: [many.nodeId] });
   const image = await lead.tool('add_image_node', { boardId, asset, caption: 'Front' });
   assert.deepEqual(await lead.tool('connect_nodes', { boardId, source: image.nodeId, target: prompt.nodeId }).then(value => typeof value.edgeId), 'string');
   const sticky = await lead.tool('add_sticky', { boardId, text: 'Make it friendlier', position: { x: 0, y: 600 } });
@@ -447,7 +454,7 @@ runtimeTest('UI and MCP enforce separate 3D access and whoami reports it indepen
   assert.equal((await denied.json()).error, message); assert.equal((await lead.tool('start_run', { boardId, nodeId })).error, message);
   assert.equal(rooms.get(boardId).document.getMap('runs').size, 0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 0);
   directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'lead@studio.example', allowed: true }, nano: { entry: '@studio.example', allowed: false } });
-  const allowed = await lead.tool('whoami'); assert.equal(allowed.nanoBanana.allowed, false); assert.equal(allowed.model3d.allowed, true); assert.equal(allowed.model3d.dailyImages, 50);
+  const allowed = await lead.tool('whoami'); assert.equal(allowed.nanoBanana.allowed, false); assert.equal(allowed.model3d.allowed, true); assert.equal(allowed.model3d.dailyImages, 100);
   const { cubeGlb } = await import('./fixtures/cube-glb.mjs'); let submissions = 0;
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     if (init.method === 'POST') { submissions++; return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }

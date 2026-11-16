@@ -43,8 +43,12 @@ export function resolutionLabel(pixels) {
   return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2900, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
 }
 export const maxDescription = 20000;
-// A site-generated prompt can ask for up to this many variants, arriving as one slideshow.
-export const maxVariants = 4;
+// A site-generated prompt can ask for up to this many variants, arriving as one slideshow. The room runs them a few at a
+// time on one shared request, and the Workers Free plan allows 50 outside requests per run, so 32 leaves headroom.
+export const maxVariants = 32;
+// The one-click choices under a prompt; any other count up to maxVariants is typed in.
+export const variantPresets = Object.freeze([1, 2, 4, 8, 16]);
+export const clampVariants = value => Math.min(maxVariants, Math.max(1, Math.round(Number(value)) || 1));
 export const promptVariants = node => Number.isInteger(node?.data?.variants) && node.data.variants >= 2 && node.data.variants <= maxVariants ? node.data.variants : 1;
 export const nanoModel = 'gemini-nano-banana-2.1';
 export const gptImageModel = 'gpt-image-2.5-flare';
