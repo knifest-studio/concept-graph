@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, codexGenerator, resolveGeneration, runSettings, uniqueImageName } from './graph.mjs';
+import { collectInputs, localEdges, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, codexGenerator, resolveGeneration, runSettings, uniqueImageName } from './graph.mjs';
 import { positionRunOutput } from './src/output-placement.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
@@ -494,6 +494,7 @@ async function applyGraph(board, next, ensureConnected = () => {}) {
   next.sections ??= graph.sections;
   next.groups ??= (graph.groups || []).map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => nodeIds.has(id)) })).filter(group => group.nodeIds.length);
   validateGraph(next);
+  next.edges = localEdges(next.edges);
   if (next.sections) next.sections = cleanSections(next.sections);
   const nodeAssets = imageAssets;
   const availableAssets = new Set(graph.nodes.flatMap(nodeAssets));
@@ -719,7 +720,7 @@ const server = http.createServer(async (request, response) => {
         const suffix = number === 1 ? ' (imported)' : ` (imported ${number})`;
         name = imported.name.slice(0, 80 - suffix.length).replace(/[\uD800-\uDBFF]$/, '') + suffix; number++;
       } while (workspace.boards.some(board => board.name === name));
-      const board = createBoard(name, imported.graph);
+      const board = createBoard(name, { ...imported.graph, edges: localEdges(imported.graph.edges) });
       workspace.boards.push(board);
       try { await persist(); }
       catch (error) {

@@ -49,7 +49,9 @@ test('a connected main image overrides names, ignores stale choices and refuses 
   graph.edges.unshift({ id: 'sp', source: 'style', target: 'p' });
   const before = structuredClone(graph), request = gptImagePrompt(graph, 'p');
   assert.deepEqual(request.images.map(image => image.nodeId), ['i', 'style']);
-  assert.match(request.prompt, /Edit “Front view” \(Attachment 1\)\. The other attachments are references for the request\./);
+  // Connected second, so it is #2 on the board and keeps that number while it is sent first.
+  assert.match(request.prompt, /Edit #2 “Front view”, sent as attachment 1\. The other attachments are references for the request\./);
+  assert.match(request.prompt, /^#2, sent as attachment 1: “Front view”/m); assert.match(request.prompt, /^#1, sent as attachment 2: “Style”/m);
   assert.deepEqual(graph, before);
   graph.nodes[1].data.mask = imageMask(reference);
   assert.equal(gptImagePrompt(graph, 'p').images[0].asset, baseId);
@@ -82,11 +84,12 @@ runtimeTest('the room syncs a main-image choice and sends its bytes and shape fi
   const started = await app.start(); assert.equal(started.status, 202); await app.settle();
   assert.equal(calls.length, 1); assert.equal(calls[0].body.size, '1536x1024');
   assert.deepEqual(calls[0].body.images.map(image => image.image_url), [png(640, 480), png(480, 640)].map(bytes => `data:image/png;base64,${b64(bytes)}`));
-  assert.match(calls[0].body.prompt, /Edit “Front view” \(Attachment 1\)/);
+  // Connected before Style (its connection is older), so it is #1.
+  assert.match(calls[0].body.prompt, /Edit #1 “Front view”, sent as attachment 1/); assert.match(calls[0].body.prompt, /^#2: “Style”/m);
   const graph = readCloudGraph(app.room.document);
   assert.equal(graph.nodes.find(node => node.id === 'p').data.mainImage, 'i');
   assert.equal(graph.runs[0].status, 'completed');
-  assert.ok(graph.edges.every(edge => Object.keys(edge).sort().join() === 'id,source,target'));
+  assert.ok(graph.edges.every(edge => Object.keys(edge).sort().join() === 'id,order,source,target' && Number.isFinite(edge.order)));
 });
 
 test('GPT mask prompts reorder the target and converted PNG first and number references in the submitted order', () => {
@@ -94,7 +97,8 @@ test('GPT mask prompts reorder the target and converted PNG first and number ref
   graph.nodes.push({ id: 'style', type: 'image', position: { x: 0, y: 0 }, data: { asset: reference, caption: 'Style' } }); graph.edges.unshift({ id: 'sp', source: 'style', target: 'p' });
   const request = gptImagePrompt(graph, 'p');
   assert.deepEqual(request.images.map(image => image.asset), [baseId, reference]); assert.equal(request.mask, maskId);
-  assert.match(request.prompt, /Attachment 1: “Front view”/); assert.match(request.prompt, /Attachment 2: “Style”/); assert.match(request.prompt, /Edit only the masked area/);
+  assert.match(request.prompt, /^#2, sent as attachment 1: “Front view”/m); assert.match(request.prompt, /^#1, sent as attachment 2: “Style”/m);
+  assert.match(request.prompt, /Edit only the masked area of #2 “Front view”, sent as attachment 1\./);
   assert.doesNotMatch(request.prompt, /highlighted edit area/);
   const refs = request.images.map(() => ({ mimeType: 'image/png', data: b64(png(640, 480)), size: { width: 640, height: 480 } }));
   const mask = { mimeType: 'image/png', data: b64(png(640, 480)), size: { width: 640, height: 480 } };
@@ -145,7 +149,7 @@ test('settings use the company key, the existing limits and only a loopback endp
 
 test('generation and edit requests keep named context, fixed model/settings and standard aspect sizes', () => {
   const graph = boardGraph(), request = gptImagePrompt(graph, 'p');
-  assert.match(request.prompt, /Attachment 1: “Front view”/);
+  assert.match(request.prompt, /^#1: “Front view”/m);
   const refs = [{ mimeType: 'image/png', data: b64(png()) }], options = { key: 'company-secret' };
   const edit = gptImageRequest(request.prompt, refs, options), body = JSON.parse(edit.init.body);
   assert.equal(edit.url, 'https://api.openai.com/v1/images/edits');
@@ -165,10 +169,23 @@ test('generation and edit requests keep named context, fixed model/settings and 
 test('the image the request names first is sent first, and the output keeps its shape', () => {
   const image = (id, caption) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: `${id.repeat(8)}-1234-1234-1234-123456789abc.png`, caption } });
   const graph = (text, extra = []) => ({ ...empty, nodes: [prompt({ text }), image('a', 'Image 35'), image('b', 'Image 32'), image('c', 'Image 3'), ...extra], edges: ['a', 'b', 'c'].map(id => ({ id: `${id}p`, source: id, target: 'p' })) });
-  const order = text => [...gptImagePrompt(graph(text), 'p').prompt.matchAll(/Attachment \d: “([^”]+)”/g)].map(match => match[1]);
+  const order = text => [...gptImagePrompt(graph(text), 'p').prompt.matchAll(/^#\d+(?:, sent as attachment \d+)?: “([^”]+)”/gm)].map(match => match[1]);
   assert.deepEqual(order('налаштуй кольори на Image 32 щоб були як на Image 35'), ['Image 32', 'Image 35', 'Image 3']);
   assert.deepEqual(order('Recolor image 3 like Image 35'), ['Image 3', 'Image 35', 'Image 32']);
   assert.deepEqual(order('A courier robot'), ['Image 35', 'Image 32', 'Image 3']);
+  // Connection numbers: “Image 35” is #1, “Image 32” #2 and “Image 3” #3, in Ukrainian or English, as words or digits.
+  assert.deepEqual(order('зроби картинку 2 як першу'), ['Image 32', 'Image 35', 'Image 3']);
+  assert.deepEqual(order('make the third image look like #1'), ['Image 3', 'Image 35', 'Image 32']);
+  assert.deepEqual(order('Recolor 2-гу картинку'), ['Image 32', 'Image 35', 'Image 3']);
+  // A count is not a number (“2 картинки” asks for two images), and the image named as the style is a reference, not the
+  // one to edit; the image to edit follows “на”, “to” or nothing at all.
+  assert.deepEqual(order('зроби 2 картинки в стилі третьої картинки'), ['Image 35', 'Image 32', 'Image 3']);
+  assert.deepEqual(order('Перенеси стиль з картинки 1 на картинку 3'), ['Image 3', 'Image 35', 'Image 32']);
+  assert.deepEqual(order('Apply the style of image 2 to image 3'), ['Image 3', 'Image 35', 'Image 32']);
+  // A board name that reads as a number counts as that name in quotes.
+  const named = (text, captions) => [...gptImagePrompt({ ...empty, nodes: [prompt({ text }), image('a', captions[0]), image('b', captions[1])], edges: ['a', 'b'].map(id => ({ id: `${id}p`, source: id, target: 'p' })) }, 'p').prompt.matchAll(/^#\d+(?:, sent as attachment \d+)?: “([^”]+)”/gm)].map(match => match[1]);
+  assert.deepEqual(named('Edit image 2', ['Image 2', 'Front']), ['Front', 'Image 2']);
+  assert.deepEqual(named('Edit “Image 2”', ['Image 2', 'Front']), ['Image 2', 'Front']);
   const landscape = [{ mimeType: 'image/png', data: b64(png()), size: { width: 1982, height: 1341 } }];
   assert.equal(JSON.parse(gptImageRequest('x', landscape, { key: 'k' }).init.body).size, '1536x1024');
   assert.equal(JSON.parse(gptImageRequest('x', landscape, { key: 'k', aspect: 1.5 }).init.body).size, '1024x1536');

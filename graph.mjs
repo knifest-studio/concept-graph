@@ -2,7 +2,8 @@ import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAutho
 import { boardPages, defaultPageId, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
 import { layerIndex, maxLayer, topLayer, validLayer } from './src/layers.mjs';
 import { validateSections } from './src/sections.mjs';
-import { validateImageEdits, generationReferences, maskInstruction } from './src/image-edits.mjs';
+import { validateImageEdits, generationReferences, maskInstruction, imageTitle } from './src/image-edits.mjs';
+export { imageTitle };
 import { maxModelBytes } from './src/model-assets.mjs';
 
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
@@ -28,7 +29,8 @@ export const isGptImage = node => node?.type === 'text' && node.data?.generator 
 export function mainImageFor(nodes, edges, node) {
   if (!isGptImage(node)) return undefined;
   const images = new Set(nodes.filter(item => item.type === 'image').map(item => item.id));
-  const inputs = edges.filter(edge => edge.target === node.id && images.has(edge.source)).map(edge => edge.source);
+  // Without a choice, the image numbered 1 (the first connected) is the one it edits.
+  const inputs = connectedSources(edges, node.id).filter(id => images.has(id));
   return inputs.includes(node.data.mainImage) ? node.data.mainImage : inputs[0];
 }
 export const upscalers = Object.freeze({ topaz: 'topaz', seedvr: 'seedvr', nanoBanana: 'nano-banana' });
@@ -321,7 +323,8 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
     }
     return { id: ids.get(id), type: node.type, position: { x: node.position.x + offset.x, y: node.position.y + offset.y }, data, ...(node.page === undefined ? {} : { page: node.page }), z: Math.min(maxLayer, top + rank.get(id)) };
   });
-  const edges = graph.edges.filter(edge => ids.has(edge.target)).map(edge => {
+  // Copies are listed in connection order and stored as new connections, so a copied prompt numbers its images the same.
+  const edges = graph.edges.filter(edge => ids.has(edge.target)).sort(byConnection).map(edge => {
     if (!edgeIds.has(edge.id)) edgeIds.set(edge.id, crypto.randomUUID());
     return { id: edgeIds.get(edge.id), source: ids.get(edge.source) || edge.source, target: ids.get(edge.target) };
   });
@@ -378,9 +381,33 @@ export function nameImageConnections(nodes, edges, added) {
 // name a download gets (plus the original name of an uploaded file).
 const uploadedName = node => !node.data.runId && /\.[a-z\d]{2,5}$/i.test(node.data.label?.trim() || '') && node.data.label.trim() !== node.data.asset ? node.data.label.trim().slice(0, 200) : undefined;
 export const imageReference = node => ({ asset: node.data.asset, label: imageName(node), nodeId: node.id, ...(node.data.mask ? { mask: node.data.mask } : {}), ...(uploadedName(node) ? { uploaded: uploadedName(node) } : {}) });
-export const imageAttachment = (image, index) => `Attachment ${index + 1}: “${image.label}”` + (image.nodeId || image.asset
-  ? ` (${[image.nodeId && `node ID ${image.nodeId}`, image.asset && `file ${image.asset}${image.uploaded ? `, uploaded as ${image.uploaded}` : ''}`].filter(Boolean).join('; ')})` : '');
-export const imageAttachments = images => images.length ? 'Attached images, in order. The request may point at an image by its name on the board, its node ID or its file name; each of these means that image:\n' + images.map(imageAttachment).join('\n') : '';
+// A prompt numbers its connected images 1, 2, 3… in the order they were connected, and the board shows these numbers on
+// the connections while the prompt is selected, so a request can say “image 2” or “the second image”. Connections that
+// remember when they were made (`order`) follow that; older ones keep their stored order and come first.
+// An order is a millisecond time; anything else (a crafted huge number, text) is ignored rather than trusted.
+export const validOrder = value => Number.isSafeInteger(value) && value >= 0 && value <= 1e14;
+const connectionOrder = edge => validOrder(edge?.order) ? edge.order : -Infinity;
+export const byConnection = (a, b) => { const x = connectionOrder(a), y = connectionOrder(b); return x === y ? 0 : x < y ? -1 : 1; };
+// A local board's list is its connection order, so it stores none: an order from a team board's export is folded into the list.
+export const localEdges = edges => [...edges].sort(byConnection).map(({ order, ...edge }) => edge);
+export const connectedSources = (edges, nodeId) => [...new Set(edges.filter(edge => edge.target === nodeId).sort(byConnection).map(edge => edge.source))];
+// Each connected image node's number, by node ID; `isImage` tells image nodes from prompts and custom nodes.
+export function imageNumbers(edges, nodeId, isImage) {
+  const numbers = new Map();
+  for (const id of connectedSources(edges, nodeId)) if (isImage(id)) numbers.set(id, numbers.size + 1);
+  return numbers;
+}
+const attachmentFiles = image => image.nodeId || image.asset
+  ? ` (${[image.nodeId && `node ID ${image.nodeId}`, image.asset && `file ${image.asset}${image.uploaded ? `, uploaded as ${image.uploaded}` : ''}`].filter(Boolean).join('; ')})` : '';
+// `index` is where the image is sent. A numbered image is named by its number (#2), not “Image 2”, which is a common board
+// name of its own; one sent elsewhere says so, as GPT Image's edited image goes first.
+const ownName = image => image.label && image.label !== 'Image' ? `: “${image.label}”` : '';
+export const imageAttachment = (image, index) => image.marks
+  ? `Attachment ${index + 1}: a copy of #${image.marks} with the area to edit marked in magenta`
+  : image.number
+    ? `#${image.number}${image.number === index + 1 ? '' : `, sent as attachment ${index + 1}`}${ownName(image)}${attachmentFiles(image)}`
+    : `Attachment ${index + 1}: “${image.label}”${attachmentFiles(image)}`;
+export const imageAttachments = images => images.length ? `Attached images, in the order they are sent. ${images.some(image => image.number) ? 'Each connected image has the number the board shows on its connection to this prompt (#1, #2, …). A number or position in the request (“#2”, “image 2”, “the second image”, “картинка 2”, “друга картинка”, in any language) means the image with that number, whatever position it is sent in and even when another image is named “Image 2”; a name in quotes means the image with exactly that name. ' : ''}The request may also point at an image by its name on the board, its node ID or its file name; each of these means that image:\n` + images.map(imageAttachment).join('\n') : '';
 
 // What every generator receives for a prompt: the prompt and its directly connected nodes (their own ancestors are
 // not sent, to keep runs small), the reference images in order with their labels, and the connected context texts.
@@ -389,8 +416,9 @@ export function runInputs(graph, nodeId) {
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const target = nodes.get(nodeId);
   if (target?.type !== 'text' || (!isDescribe(target) && !isUpscale(target) && !isModel3d(target) && !target.data.text.trim() && !target.data.template?.instructions.trim())) throw new Error('Write an image prompt first.');
-  const ordered = [...new Set(graph.edges.filter(edge => edge.target === nodeId).map(edge => edge.source))].map(id => nodes.get(id)).concat(target);
-  let images = ordered.flatMap(node => node.type === 'image' ? [imageReference(node)]
+  const ordered = connectedSources(graph.edges, nodeId).map(id => nodes.get(id)).concat(target);
+  let number = 0;
+  let images = ordered.flatMap(node => node.type === 'image' ? [{ ...imageReference(node), number: ++number }]
     : (node.type === 'text' ? node.data.template?.assets || [] : []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
   if (isDescribe(target) || isUpscale(target) || isModel3d(target)) images = images.map(({ mask, ...image }) => image);
   else {
@@ -423,18 +451,21 @@ export function runInputs(graph, nodeId) {
 // and whether its mask went along; a custom node's references name that custom node. Runs send at most 10 images; the
 // cap only bounds what a run stored in the shared document can hold.
 export const maxRunInputs = 16;
-const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template']);
+const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template', 'number']);
 const validRunInput = input => !!input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).every(key => runInputKeys.has(key))
   && typeof input.asset === 'string' && assetPattern.test(input.asset)
   && (input.nodeId === undefined || (typeof input.nodeId === 'string' && input.nodeId.length > 0 && input.nodeId.length <= 120))
   && (input.label === undefined || (typeof input.label === 'string' && input.label.length <= 120))
   && (input.mask === undefined || input.mask === true)
+  && (input.number === undefined || (Number.isInteger(input.number) && input.number >= 1 && input.number <= 999))
   && (input.template === undefined || (typeof input.template === 'string' && !!input.template.trim() && input.template.length <= 80));
 export function runInputRecord(graph, nodeId) {
   const { target, ordered, mainImage } = runInputs(graph, nodeId), picturesOnly = isUpscale(target) || isModel3d(target), masks = !picturesOnly && !isDescribe(target);
-  // Mirrors runInputs: connected image nodes and, except for an upscale or 3D model, the references of custom nodes.
+  // Mirrors runInputs: connected image nodes, with the numbers the prompt used, and, except for an upscale or 3D model,
+  // the references of custom nodes.
+  let number = 0;
   const record = ordered.flatMap(node => node.type === 'image'
-    ? [{ nodeId: node.id, asset: node.data.asset, label: imageName(node).slice(0, 120), ...(masks && node.data.mask ? { mask: true } : {}) }]
+    ? [{ nodeId: node.id, asset: node.data.asset, label: imageName(node).slice(0, 120), ...(picturesOnly ? {} : { number: ++number }), ...(masks && node.data.mask ? { mask: true } : {}) }]
     : !picturesOnly && node.type === 'text' && node.data.template ? node.data.template.assets.map(asset => ({ asset, template: node.data.template.name.trim().slice(0, 80) })) : []);
   // GPT Image edits its main image, which it receives first.
   if (mainImage) record.sort((a, b) => (b.nodeId === mainImage.nodeId) - (a.nodeId === mainImage.nodeId));

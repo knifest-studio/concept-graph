@@ -17,9 +17,9 @@ test('cloud Codex fetches and submits the marked copy after its source through t
   const submitted = calls.find(call => call[0] === 'helper-api' && call[2].method === 'POST'), body = JSON.parse(submitted[2].body);
   assert.deepEqual(body.images.map(image => image.asset), [asset, otherAsset]);
   assert.deepEqual(calls.filter(call => call[0] === 'cloud-image').map(call => call[1]), [`/assets/${asset}`, `/assets/${otherAsset}`]);
-  assert.match(body.prompt, /Edit only the highlighted area of “Reference”/); assert.match(body.prompt, /must not contain the highlight/);
+  assert.match(body.prompt, /Edit only the highlighted area of #1 “Reference”/); assert.match(body.prompt, /must not contain the highlight/);
   // The run lists the board image once, with its mask, not the marked copy sent after it.
-  assert.deepEqual(readCloudGraph(doc).runs[0].inputs, [{ nodeId: 'i', asset, label: 'Reference', mask: true }]);
+  assert.deepEqual(readCloudGraph(doc).runs[0].inputs, [{ nodeId: 'i', asset, label: 'Reference', number: 1, mask: true }]);
   generation.stop(); doc.destroy();
 });
 function setup() {

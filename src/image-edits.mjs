@@ -80,16 +80,18 @@ export const hasGenerationPrompt = (graph, id) => {
   return graph.nodes.some(node => targets.has(node.id) && node.type === 'text' && !node.data.task);
 };
 
+// How a prompt's text names an image: its number on the board, and its own name when it has one (graph.mjs).
+export const imageTitle = image => image.number ? `#${image.number}${image.label && image.label !== 'Image' ? ` “${image.label}”` : ''}` : `“${image.label}”`;
 export function generationReferences(images, maskInput = false) {
   if (maskInput) {
     const target = images.find(image => image.mask);
     return target ? [{ ...target, asset: target.mask.base }, ...images.filter(image => image !== target)] : images;
   }
-  return images.flatMap(image => image.mask ? [image, { asset: image.mask.marked, label: `${image.label} (highlighted edit area)`, nodeId: image.nodeId }] : [image]);
+  return images.flatMap(image => image.mask ? [image, { asset: image.mask.marked, label: `${image.label} (highlighted edit area)`, nodeId: image.nodeId, ...(image.number ? { marks: image.number } : {}) }] : [image]);
 }
 export function maskInstruction(images, maskInput = false) {
   const image = images.find(image => image.mask);
   if (!image) return '';
-  return maskInput ? `Edit only the masked area of “${image.label}” (Attachment 1). Keep everything else identical.`
-    : `Edit only the highlighted area of “${image.label}”. The attachment immediately after it is a marked copy showing the edit area in magenta. Keep everything else identical. The output must not contain the highlight.`;
+  return maskInput ? `Edit only the masked area of ${imageTitle(image)}, sent as attachment 1. Keep everything else identical.`
+    : `Edit only the highlighted area of ${imageTitle(image)}. The attachment immediately after it is a marked copy showing the edit area in magenta. Keep everything else identical. The output must not contain the highlight.`;
 }

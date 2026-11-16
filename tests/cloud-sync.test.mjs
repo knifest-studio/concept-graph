@@ -27,8 +27,10 @@ test('main-image promotion syncs with its edge in one transaction and undo resto
   try {
     const next = structuredClone(graph); next.nodes[0].data.mainImage = 'i'; next.edges.push({ id: 'ip', source: 'i', target: 'p' });
     applyLocalGraph(a, next, graph, origin); exchange(a, b);
-    let shown = readCloudGraph(b); assert.equal(shown.nodes.find(node => node.id === 'p').data.mainImage, 'i'); assert.deepEqual(shown.edges, next.edges);
-    assert.deepEqual(a.getMap('edges').get('ip'), { source: 'i', target: 'p' });
+    let shown = readCloudGraph(b); assert.equal(shown.nodes.find(node => node.id === 'p').data.mainImage, 'i');
+    // A new connection stores when it was made, which numbers a prompt's images (graph.mjs connectedSources).
+    const { order } = a.getMap('edges').get('ip'); assert.ok(Number.isFinite(order));
+    assert.deepEqual(shown.edges, [{ ...next.edges[0], order }]); assert.deepEqual(a.getMap('edges').get('ip'), { source: 'i', target: 'p', order });
     undo.undo(); exchange(a, b); shown = readCloudGraph(b);
     assert.equal(shown.nodes.find(node => node.id === 'p').data.mainImage, undefined); assert.equal(shown.edges.length, 0);
     undo.redo(); exchange(a, b); assert.equal(readCloudGraph(b).nodes.find(node => node.id === 'p').data.mainImage, 'i');

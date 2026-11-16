@@ -30,8 +30,8 @@ test('Codex attaches each marked copy immediately after its image and refuses st
   const target = text('p', 'Change the hat'), a = image('a', 'Style'), b = masked('b'), graph = { nodes: [a, b, target], edges: [edge('a', 'p'), edge('b', 'p')] };
   const request = collectInputs(graph, 'p');
   assert.deepEqual(request.images, [a.data.asset, b.data.asset, marked]);
-  assert.match(request.prompt, /Attachment 2: “b”/); assert.match(request.prompt, /Attachment 3: “b \(highlighted edit area\)”/);
-  assert.match(request.prompt, /Edit only the highlighted area of “b”/); assert.match(request.prompt, /must not contain the highlight/);
+  assert.match(request.prompt, /^#2: “b”/m); assert.match(request.prompt, /^Attachment 3: a copy of #2 with the area to edit marked in magenta$/m);
+  assert.match(request.prompt, /Edit only the highlighted area of #2 “b”/); assert.match(request.prompt, /must not contain the highlight/);
   a.data.mask = { ...b.data.mask }; assert.throws(() => collectInputs(graph, 'p'), /Only one masked image per prompt/);
   delete a.data.mask; b.data.mask.source = maskAsset; assert.throws(() => collectInputs(graph, 'p'), /The mask on “b” no longer matches/);
   for (const task of ['describe', 'upscale']) { target.data.task = task; assert.deepEqual(collectInputs(graph, 'p').images, [a.data.asset, b.data.asset]); }
@@ -85,23 +85,24 @@ test('connecting legacy images stores names and resolves target collisions in on
   assert.deepEqual(batch.slice(1).map(node => node.data.caption), ['Image 1', 'Image 2']);
 });
 
-test('attachment ordinals never impersonate board names, including the real Image 1 collision', () => {
+test('connection numbers never impersonate board names, including the real Image 1 collision', () => {
   const nodes = [image('first', 'image.png'), { ...image('second', 'Result 1'), data: { ...image('second').data, label: 'generated.png', caption: 'Image 1', runId: 'run' } }, text('p', 'Take the clouds from “Image 1”')];
   const graph = { nodes, edges: [edge('first', 'p'), edge('second', 'p')] };
   const { prompt, snapshot } = collectInputs(graph, 'p');
+  // Numbers are #1, #2: “Image 1” stays a board name, which the prompt keeps in quotes.
   const attachments = [
-    `Attachment 1: “Image” (node ID first; file ${nodes[0].data.asset}, uploaded as image.png)`,
-    `Attachment 2: “Image 1” (node ID second; file ${nodes[1].data.asset})`,
+    `#1 (node ID first; file ${nodes[0].data.asset}, uploaded as image.png)`,
+    `#2: “Image 1” (node ID second; file ${nodes[1].data.asset})`,
   ];
-  const actualAttachments = prompt.split('\n').filter(line => line.startsWith('Attachment '));
+  const actualAttachments = prompt.split('\n').filter(line => /^#\d/.test(line));
   assert.deepEqual(actualAttachments, attachments);
-  assert.doesNotMatch(prompt, /Image 1:|Image 2:/);
+  assert.doesNotMatch(prompt, /^Image \d|Image 1:|Image 2:/m); assert.match(prompt, /a name in quotes means the image with exactly that name/);
   assert.match(actualAttachments[0], /uploaded as image\.png/);
   assert.doesNotMatch(actualAttachments[1], /uploaded as/);
   assert.match(prompt, /Take the clouds from “Image 1”/);
   assert.deepEqual(snapshot, nodes);
   graph.nodes[2].data.task = 'describe';
-  assert.deepEqual(collectInputs(graph, 'p').prompt.split('\n').filter(line => line.startsWith('Attachment ')), attachments);
+  assert.deepEqual(collectInputs(graph, 'p').prompt.split('\n').filter(line => /^#\d/.test(line)), attachments);
 });
 
 test('every expanded image reserves name space, including unnamed legacy images', () => {
@@ -205,12 +206,12 @@ test('optional caption settings are validated and captions describe connected im
   input.data.caption = 'Front view'; prompt.data.labelOutputs = true;
   const graph = { nodes: [input, prompt], edges: [edge('reference', 'prompt')] };
   const result = collectInputs(graph, 'prompt');
-  assert.match(result.prompt, /Attachment 1: “Front view”/);
+  assert.match(result.prompt, /^#1: “Front view”/m);
   assert.equal(result.target.data.labelOutputs, true);
   input.data.caption = 42; assert.throws(() => validateGraph(graph), /caption/);
   input.data.caption = 'x'.repeat(121); assert.throws(() => validateGraph(graph), /caption/);
   delete input.data.caption; prompt.data.labelOutputs = 'yes'; assert.throws(() => validateGraph(graph), /caption setting/);
-  delete prompt.data.labelOutputs; assert.match(collectInputs(graph, 'prompt').prompt, /Attachment 1: “Original label”/);
+  delete prompt.data.labelOutputs; assert.match(collectInputs(graph, 'prompt').prompt, /^#1: “Original label”/m);
   const template = { name: 'Views', instructions: 'Describe views', assets: [] };
   assert.deepEqual(validateTemplate({ ...template, labelOutputs: true }), { ...template, labelOutputs: true });
   assert.deepEqual(validateTemplate({ ...template, labelOutputs: false }), template);

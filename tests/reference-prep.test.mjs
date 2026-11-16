@@ -262,7 +262,7 @@ runtimeTest('Generate refuses an image that cannot be reduced before reserving a
   const started = await room.startNano({ nodeId: 'p', requester }); assert.ok(started.run); await Promise.all(waits);
   const sent = calls[0].input.find(part => part.type === 'image');
   assert.equal(sent.mime_type, 'image/jpeg'); assert.deepEqual(imageSize(Buffer.from(sent.data, 'base64')), { width: 3072, height: 1728 });
-  assert.match(calls[0].input.find(part => part.type === 'text' && part.text.includes('Attachment')).text, /Hero/);
+  assert.match(calls[0].input.find(part => part.type === 'text' && part.text.startsWith('#1')).text, /Hero/);
   assert.equal(readCloudGraph(room.document).runs[0].status, 'completed');
   assert.equal(readCloudGraph(room.document).nodes.find(node => node.id === 'i').data.asset, hero, 'the board keeps the original');
   // Without Cloudflare Images a 4K photo is sent as it is, as before reduced copies existed.

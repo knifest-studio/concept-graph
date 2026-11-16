@@ -1415,6 +1415,8 @@ export default {
   '{name} took longer than {minutes} minutes. Try again.': '{name} генерує довше за {minutes} хв. Спробуйте ще раз.',
   "3D generation runs on Concept Graph Cloud, not on this computer.": "Генерація 3D працює в Concept Graph Cloud, а не на цьому комп’ютері.",
   "3D generation runs on the site, not in Codex.": "Генерація 3D працює на сайті, а не в Codex.",
+  "Point at images by number": "Звертайтеся до картинок за номером",
+  "Select a prompt to see 1, 2, 3… on its image connections, in the order you connected them. Write “make image 2 like the first one” and every generator knows which is which.": "Виділіть промпт, і на зв’язках його картинок з’являться 1, 2, 3… у порядку, в якому ви їх під’єднували. Напишіть «зроби другу картинку як першу», і кожен генератор зрозуміє, про яку йдеться.",
   "Choose the shape and size": "Обирайте форму й розмір",
   "Set the aspect ratio, size, thinking or quality and a transparent background from the button beside a prompt’s variants. Image details now show the reference images a run used.": "Задавайте пропорції, розмір, мислення чи якість і прозорий фон кнопкою поруч із варіантами промпта. У деталях зображення тепер видно референсні зображення, які використав запуск.",
   "More variants, tidier boards": "Більше варіантів, охайніші дошки",

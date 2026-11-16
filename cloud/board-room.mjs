@@ -693,7 +693,7 @@ export class BoardRoom extends YServer {
       }
       const image = images[index];
       prepared.push({ mimeType: imageTypes[sniffFormat(bytes)] || imageTypes[image.asset.split('.').pop()], data: base64(bytes), size: imageSize(bytes), byteLength: bytes.length, ...(keepBytes ? { bytes } : {}),
-        ...(upscale || model3d ? {} : { label: image.label, nodeId: image.nodeId, asset: image.asset, uploaded: image.uploaded }) });
+        ...(upscale || model3d ? {} : { label: image.label, nodeId: image.nodeId, asset: image.asset, uploaded: image.uploaded, number: image.number, marks: image.marks }) });
     }
     return prepared;
   }

@@ -1,4 +1,4 @@
-import { validateGraph, duplicateNodes } from '../graph.mjs';
+import { validateGraph, duplicateNodes, byConnection } from '../graph.mjs';
 import { detachMissingStampTargets } from './annotations.mjs';
 import { sectionContents } from './canvas.mjs';
 import { cleanSections } from './sections.mjs';
@@ -37,7 +37,8 @@ export function selectedGraph(nodes, edges, { sections = [], groups = [], measur
   const selected = nodes.filter(node => node.selected || held?.nodeIds.has(node.id)), ids = new Set(selected.map(node => node.id));
   return structuredClone({ format: nodeClipboardType, version: 1,
     nodes: detachMissingStampTargets(selected.map(({ id, type, position, data, z }) => ({ id, type, position, data, ...(z === undefined ? {} : { z }) }))),
-    edges: edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).map(({ id, source, target }) => ({ id, source, target })),
+    // Listed in connection order: pasted connections are stored as new ones in this order (graph.mjs byConnection).
+    edges: edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)).sort(byConnection).map(({ id, source, target }) => ({ id, source, target })),
     ...(held ? { sections: cleanSections(sections.filter(section => held.sectionIds.has(section.id))).map(({ page, ...section }) => section) } : {}),
   });
 }

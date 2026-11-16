@@ -47,6 +47,8 @@ import { PendingNode, useWaitingVideos } from './PendingNode.jsx';
 import { ImageReveal, ImageRevealContext } from './ImageReveal.jsx';
 import { runPlaceholders } from './run-placeholders.mjs';
 import { PendingEdge } from './PendingEdge.jsx';
+import { ConnectionNumbers, NumberedEdge } from './NumberedEdge.jsx';
+import { connectionNumbers } from './edge-numbers.mjs';
 import { observePendingSpawns, pendingPulseKeyframes } from './pending-animation.mjs';
 import { generationFocusNodes } from './generation-tray.mjs';
 import { switchNodeTemplate, templateFromNode } from './node-template.mjs';
@@ -580,7 +582,7 @@ function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
 }
-const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge };
+const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge, numbered: NumberedEdge };
 // Constant props: React Flow copies changed props into its store, and every copy re-runs every card's and edge's selector.
 // As in FigJam, Shift (or ⌘) toggles a card in or out of the selection, and a Shift drag starts on empty canvas like any box.
 const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
@@ -588,7 +590,7 @@ const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelect
 const HistoryItem = React.memo(function HistoryItem({ run, now, page, canCancel, canvas }) {
   return <div className={`history-item ${run.status}`}><button className="history-focus" data-tooltip={t('Show this generation')} onClick={() => canvas.showRun(run)}><span className="history-status"><Icon name={run.status === 'completed' ? 'check' : 'clock'} size={14}/> {busy(run) ? formatDuration(runElapsed(run, now)) : t(run.status)}</span><strong>{run.label}</strong><small>{new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {run.task === 'describe' ? t('description') : run.task === model3dTask ? `${modelNames[run.model] || t('3D model')} · ${plural(run.outputIds.length, '{count} model', '{count} models')}` : plural(run.outputIds.length, '{count} image', '{count} images')}{appliedSummary(run.settings) && ` · ${appliedSummary(run.settings)}`}{page && ` · ${page}`}</small>{run.by && <span className="history-author"><AuthorBadge author={run.by}/></span>}</button>{busy(run) && canCancel && <button className="cancel-link" data-tooltip={t('Cancel generation')} onClick={() => canvas.cancel(run.id)}>{t('Cancel run')}</button>}{run.error && <p>{t(run.error)}</p>}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(run.id)}>{t('Run details')}</button>}</div>;
 });
-const noSections = Object.freeze([]);
+const noSections = Object.freeze([]), noNumbers = new Map();
 
 async function api(url, options = {}) {
   const response = await request(url, options);
@@ -2771,8 +2773,31 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const fit = Math.min(box.width / ((right - left) * 1.36), box.height / ((bottom - top) * 1.36));
     return Math.max(fitFloor(), Math.min(.15, fit * .9));
   }, [displayed]);
+  const inputMemo = useRef(null);
+  const inputs = useMemo(() => inputMemo.current = inputCounts(nodes, edges, inputMemo.current), [nodes, edges]);
+  const imageIds = useMemo(() => new Set(nodes.filter(node => node.type === 'image').map(node => node.id)), [inputs.counts]);
+  // While prompts are selected, the connections from their images show the numbers their text uses (edge-numbers.mjs).
+  const numberedPrompts = useMemo(() => JSON.stringify(scoped.nodes.filter(node => node.selected && node.type === 'text' && (!node.data.task || node.data.task === describeTask)).map(node => node.id)), [scoped.nodes]);
+  // The page's lists are rebuilt on every keystroke and drag frame, so unchanged labels keep the previous Map, and a
+  // numbered connection keeps its object while its label stays, or every edge would re-render.
+  const numberedMemo = useRef(noNumbers), numberedViews = useRef(new WeakMap());
+  const numbered = useMemo(() => {
+    const prompts = JSON.parse(numberedPrompts), shown = prompts.length && new Map(view.edges.map(edge => [edge.id, edge]));
+    // A drawn line is its shown source (a folded group) and port (a GPT Image prompt's Main image); hidden ones are none.
+    const lineOf = edge => { const line = shown.get(edge.id); return !line || line.hidden ? null : `${line.source}\n${line.targetHandle || ''}`; };
+    const next = prompts.length ? connectionNumbers(scoped.edges, prompts, id => imageIds.has(id), lineOf) : noNumbers, last = numberedMemo.current;
+    return next.size === last.size && [...next].every(([id, label]) => last.get(id) === label) ? last : numberedMemo.current = next;
+  }, [numberedPrompts, scoped.edges, view.edges, imageIds]);
+  const numberedView = (edge, number) => {
+    const saved = numberedViews.current.get(edge);
+    if (saved?.number === number) return saved.view;
+    const view = { ...edge, type: 'numbered', data: { ...edge.data, number } };
+    numberedViews.current.set(edge, { number, view });
+    return view;
+  };
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
-  const viewEdges = useMemo(() => effects.edges.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' } : edge) : view.edges, [view.edges, effects.edges]);
+  const viewEdges = useMemo(() => effects.edges.size || numbered.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' }
+    : numbered.has(edge.id) && !edge.hidden ? numberedView(edge, numbered.get(edge.id)) : edge) : view.edges, [view.edges, effects.edges, numbered]);
   // An Alt-drag copy looks picked up, as the card under the pointer does in a plain drag (duplicate-drag.css).
   const flowNodes = useMemo(() => dragCopy ? view.nodes.map(node => node.id === dragCopy ? { ...node, className: node.className ? `${node.className} dragging drag-copy` : 'dragging drag-copy' } : node) : view.nodes, [view.nodes, dragCopy]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
@@ -2787,10 +2812,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const selectedNodes = scoped.nodes.filter(n => n.selected), ids = new Set(selectedNodes.map(node => node.id));
     return { selectedCount: selectedNodes.length + scoped.groups.filter(group => group.selected).length + scoped.sections.filter(section => section.selected).length, canGroup: selectedNodes.length >= 2 && !groups.some(group => group.selected || group.nodeIds.some(id => ids.has(id))) };
   }, [scoped, groups]);
-  const inputMemo = useRef(null);
-  const inputs = useMemo(() => inputMemo.current = inputCounts(nodes, edges, inputMemo.current), [nodes, edges]);
   const lookups = useMemo(() => runLookups(runs), [runs]);
-  const imageIds = useMemo(() => new Set(nodes.filter(node => node.type === 'image').map(node => node.id)), [inputs.counts]);
   // Images saved from a 3D model: they need an input point for the model's connection, as generated images do.
   const modelViewIds = useMemo(() => { const models = new Set(nodes.filter(node => node.type === 'model').map(node => node.id)); return new Set(edges.filter(edge => models.has(edge.source)).map(edge => edge.target)); }, [nodes, edges]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
@@ -2942,7 +2964,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} viewer={viewer} onCancel={cancel} onFocus={showRun} onHistory={() => setTab('history')}/>}</div>
       <ReactFlow nodes={flowNodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
         {!readOnly && !modalOpen.current && <CustomNodeActions node={selectedCount === 1 ? view.nodes.find(node => node.selected && !node.hidden && plainPrompt(node)) : null} tip={!discovery.used && templateTip && selectedCount === 1 ? view.nodes.find(node => node.id === templateTip.id && node.selected && !node.hidden) : null} actions={canvas} onDismiss={() => { if (cloud) track('tip_event', { tip: 'duplicate_to_custom_node', action: 'dismissed' }); setTemplateTip(null); }}/>}
-        <Background color="var(--grid)" gap={24} size={1}/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
+        <Background color="var(--grid)" gap={24} size={1}/><ConnectionNumbers/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
       {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}

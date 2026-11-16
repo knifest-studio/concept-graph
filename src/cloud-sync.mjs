@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { validOrder } from '../graph.mjs';
 import { isAnnotation, canAttachStamp, reconcileStampAttachments } from './annotations.mjs';
 import { boardPages, defaultPages, maxPages, pageResolver, validPageId } from './pages.mjs';
 import { validLayer } from './layers.mjs';
@@ -84,6 +85,40 @@ function patchValues(map, next, before, value) {
   }
 }
 
+// The edges map keeps no order of its own, so a new connection stores when it was made (`order`, milliseconds) and a
+// prompt numbers its reference images in that order (graph.mjs connectedSources). Connections listed together, as a
+// paste does, keep their listed order; older connections without one keep sorting by ID. A new connection always sorts
+// after those its prompt already has, so a client whose clock is behind cannot renumber the images before it.
+const lastOrders = new WeakMap();
+// An order from up to a month ahead of this clock is a skewed clock; one further out (a crafted value) is not followed,
+// so it can never push every later connection to the same order.
+const plausible = value => validOrder(value) && value <= Date.now() + 30 * 864e5;
+// The highest stored order into each prompt, read in one pass.
+function highestOrders(map) {
+  const highest = new Map();
+  for (const edge of map.values()) if (edge && plausible(edge.order) && !(highest.get(edge.target) >= edge.order)) highest.set(edge.target, edge.order);
+  return highest;
+}
+// The next order for a connection into `target`: after the clock, this document's last one and the prompt's others.
+function orderAfter(map, target, highest) {
+  const last = lastOrders.get(map), order = Math.max(Date.now(), plausible(last) ? last + 1 : 0, (highest.get(target) ?? -Infinity) + 1);
+  highest.set(target, order); lastOrders.set(map, order);
+  return order;
+}
+function patchEdges(map, next, before) {
+  const { removed, pairs } = changes(before, next);
+  for (const id of removed) map.delete(id);
+  let highest;
+  const given = edge => plausible(edge.order) ? edge.order : undefined;
+  for (const [item, old] of pairs) {
+    if (old && !map.has(item.id)) continue;
+    // A caller that leaves an existing connection's order out, as an agent's whole-board edit may, keeps the stored one.
+    if (old && item.source === old.source && item.target === old.target && (given(item) === undefined || item.order === old.order)) continue;
+    const stored = old && map.get(item.id)?.order, order = given(item) ?? (old ? (validOrder(stored) ? stored : undefined) : orderAfter(map, item.target, highest ||= highestOrders(map)));
+    map.set(item.id, { source: item.source, target: item.target, ...(order === undefined ? {} : { order }) });
+  }
+}
+
 // Concurrent page creation can repeat an order; every replica breaks the tie by ID.
 const readPages = doc => [...doc.getMap('pages')].filter(([id, page]) => validPageId(id) && typeof page?.name === 'string')
   .sort(([a, left], [b, right]) => (Number.isFinite(left.order) ? left.order : 0) - (Number.isFinite(right.order) ? right.order : 0) || compare(a, b))
@@ -162,7 +197,8 @@ function groupValues(entries, nodes, samePage) {
 const withLocalNode = (local, value) => { const { page, z, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalGroup = (local, value) => { const { color, slideshow, slide, ...rest } = local || {}; return { ...rest, ...value }; };
 const withLocalSection = (local, value) => { const { color, page, ...rest } = local || {}; return { ...rest, ...value }; };
-const withLocalEdge = (local, id, edge) => ({ ...local, id, ...copy(edge) });
+// A connection's order is the stored one only: a local copy must never keep an order the document no longer has.
+const withLocalEdge = (local, id, edge) => { const { order, ...rest } = local || {}; return { ...rest, id, ...copy(edge) }; };
 
 export function readCloudGraph(doc, local = {}) {
   const locals = keyed(local.nodes), localGroups = keyed(local.groups), localEdges = keyed(local.edges), localSections = keyed(local.sections), pages = readPages(doc), samePage = pageTest(pages);
@@ -199,7 +235,7 @@ const showsNode = (local, value) => local.id === value.id && local.type === valu
   && local.page === value.page && ('page' in local) === ('page' in value) && local.z === value.z && ('z' in local) === ('z' in value) && same(local.data, value.data);
 const showsGroup = (local, value) => local.name === value.name && local.collapsed === value.collapsed && sameList(local.nodeIds, value.nodeIds)
   && ['color', 'slideshow', 'slide'].every(key => local[key] === value[key] && (key in local) === (key in value)) && sameKeys(local, value);
-const showsEdge = (local, edge) => Object.keys(edge).every(key => same(local[key], edge[key]));
+const showsEdge = (local, edge) => Object.keys(edge).every(key => same(local[key], edge[key])) && local.order === edge.order;
 const showsSection = (local, value) => local.name === value.name && local.x === value.x && local.y === value.y && local.width === value.width && local.height === value.height
   && local.color === value.color && ('color' in local) === ('color' in value) && local.page === value.page && ('page' in local) === ('page' in value) && sameKeys(local, value);
 
@@ -362,7 +398,7 @@ export function applyLocalGraph(doc, graph, previous, origin, stampIds) {
       if (!(parent instanceof Y.Map) || !canAttachStamp({ type: parent.get('type') })) { data.delete('attachedTo'); node.delete('stampAttachment'); }
     }
     patchMaps(map, nodes, previous.nodes, nodeFields, true);
-    patchValues(doc.getMap('edges'), graph.edges, previous.edges, edge => ({ source: edge.source, target: edge.target }));
+    patchEdges(doc.getMap('edges'), graph.edges, previous.edges);
     patchMaps(doc.getMap('groups'), (graph.groups || []).map(group => group.nodeIds.every(id => ids.has(id)) ? group : { ...group, nodeIds: group.nodeIds.filter(id => ids.has(id)) }).filter(group => group.nodeIds.length), previous.groups, groupFields);
     // A caller that leaves sections out keeps them as they are.
     patchMaps(doc.getMap('sections'), graph.sections ?? previous.sections ?? [], previous.sections ?? [], sectionFields);

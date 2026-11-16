@@ -54,7 +54,7 @@ test('Nano Banana places highlighted copies directly after masked images; descri
   image.data.mask = { asset: reference, marked, base: reference, source: reference };
   const request = nanoPrompt(graph, 'p');
   assert.deepEqual(request.images.map(image => image.asset), [reference, marked]);
-  assert.match(request.prompt, /Attachment 1: “Front view”/); assert.match(request.prompt, /Attachment 2: “Front view \(highlighted edit area\)”/);
+  assert.match(request.prompt, /^#1: “Front view”/m); assert.match(request.prompt, /^Attachment 2: a copy of #1 with the area to edit marked in magenta$/m);
   assert.match(request.prompt, /Edit only the highlighted area/); assert.match(request.prompt, /must not contain the highlight/);
   const { init } = nanoRequest(request.prompt, request.images.map(image => ({ ...image, mimeType: 'image/png', data: image.asset })), { key: 'fake', endpoint: 'https://example.test' });
   assert.deepEqual(JSON.parse(init.body).input.filter(part => part.type === 'image').map(part => part.data), [reference, marked]);
@@ -122,8 +122,8 @@ test('variant counts: presets up to 16, any whole number up to 32, and a run lim
 
 test('the request sends the prompt, connected context and labelled references, without Codex tool instructions', () => {
   const { prompt, images, target } = nanoPrompt(seed, 'p');
-  assert.equal(target.id, 'p'); assert.deepEqual(images, [{ asset: reference, label: 'Front view', nodeId: 'i' }]);
-  assert.equal(prompt, `Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nAttached images, in order. The request may point at an image by its name on the board, its node ID or its file name; each of these means that image:\nAttachment 1: “Front view” (node ID i; file ${reference})\n\nRequest:\nA courier robot at dawn`);
+  assert.equal(target.id, 'p'); assert.deepEqual(images, [{ asset: reference, label: 'Front view', nodeId: 'i', number: 1 }]);
+  assert.equal(prompt, `Create an image for the request at the end. The earlier text is context for it, not separate requests.\n\nContext 1:\nCustom node instructions:\nUse warm light\n\nSoft painterly style\n\nAttached images, in the order they are sent. Each connected image has the number the board shows on its connection to this prompt (#1, #2, …). A number or position in the request (“#2”, “image 2”, “the second image”, “картинка 2”, “друга картинка”, in any language) means the image with that number, whatever position it is sent in and even when another image is named “Image 2”; a name in quotes means the image with exactly that name. The request may also point at an image by its name on the board, its node ID or its file name; each of these means that image:\n#1: “Front view” (node ID i; file ${reference})\n\nRequest:\nA courier robot at dawn`);
   assert.doesNotMatch(prompt, /built-in image tool|paid API|Not connected/);
   // A lone prompt is sent as written.
   assert.equal(nanoPrompt({ nodes: [seed.nodes[0]], edges: [] }, 'p').prompt, 'A courier robot at dawn');
@@ -145,16 +145,16 @@ test('generation and describe interleave exact board names with the correspondin
   for (const describe of [false, true]) {
     if (describe) graph.nodes[0].data.task = 'describe';
     const { prompt, images } = nanoPrompt(graph, 'p');
-    assert.deepEqual(prompt.split('\n').filter(line => line.startsWith('Attachment ')), [
-      `Attachment 1: “Image” (node ID first; file ${reference}, uploaded as image.png)`,
-      `Attachment 2: “Image 1” (node ID i; file ${reference})`,
+    assert.deepEqual(prompt.split('\n').filter(line => /^#\d/.test(line)), [
+      `#1 (node ID first; file ${reference}, uploaded as image.png)`,
+      `#2: “Image 1” (node ID i; file ${reference})`,
     ]);
     const references = images.map((image, index) => ({ ...image, mimeType: 'image/png', data: `bytes-${index}` }));
     const { init } = nanoRequest(prompt, references, { key: 'key', endpoint: 'https://generativelanguage.googleapis.com' });
     assert.deepEqual(JSON.parse(init.body).input, [
       { type: 'text', text: prompt },
-      { type: 'text', text: `Attachment 1: “Image” (node ID first; file ${reference}, uploaded as image.png)` }, { type: 'image', mime_type: 'image/png', data: 'bytes-0' },
-      { type: 'text', text: `Attachment 2: “Image 1” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: 'bytes-1' },
+      { type: 'text', text: `#1 (node ID first; file ${reference}, uploaded as image.png)` }, { type: 'image', mime_type: 'image/png', data: 'bytes-0' },
+      { type: 'text', text: `#2: “Image 1” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: 'bytes-1' },
     ]);
   }
 });
@@ -399,7 +399,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   assert.equal(response.status, 202);
   const { run: { id } } = await response.json();
   const running = boardRoom.document.getMap('runs').get(id);
-  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', inputs: [{ nodeId: 'i', asset: reference, label: 'Front view' }], provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', by: user, startedAt: 'time', createdAt: 'time' });
+  assert.deepEqual({ ...running, startedAt: 'time', createdAt: 'time' }, { id, nodeId: 'p', label: 'A courier robot at dawn', inputs: [{ nodeId: 'i', asset: reference, label: 'Front view', number: 1 }], provider: 'nano-banana', model: 'gemini-nano-banana-2.1', status: 'running', by: user, startedAt: 'time', createdAt: 'time' });
   held.open();
   await settle();
   assert.equal(calls.length, 1);
@@ -407,7 +407,7 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
   assert.equal(headers.get('x-goog-api-key'), 'test-gemini-key'); assert.equal(headers.get('api-revision'), '2026-05-20');
   assert.equal(body.model, 'gemini-nano-banana-2.1'); assert.equal(body.store, false);
-  assert.deepEqual(body.input.slice(1), [{ type: 'text', text: `Attachment 1: “Front view” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
+  assert.deepEqual(body.input.slice(1), [{ type: 'text', text: `#1: “Front view” (node ID i; file ${reference})` }, { type: 'image', mime_type: 'image/png', data: b64(png(640, 480)) }]);
   assert.equal(body.input[0].text, nanoPrompt(before, 'p').prompt);
   const graph = readCloudGraph(boardRoom.document), run = graph.runs.find(item => item.id === id);
   assert.equal(run.status, 'completed'); assert.equal(run.count, 2); assert.ok(Date.parse(run.finishedAt) >= Date.parse(run.startedAt));
@@ -417,7 +417,9 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   expected = placeRunOutput(expected, { runId: id, nodeId: 'p', run: expected.runs.at(-1), author: user, output: { index: 1 }, asset: 'b.png', dimensions: { width: 100, height: 100 } });
   const shape = item => ({ ...item, data: { ...item.data, asset: undefined, createdAt: undefined } });
   for (const outputId of run.outputIds) assert.deepEqual(shape(graph.nodes.find(node => node.id === outputId)), shape(expected.nodes.find(node => node.id === outputId)));
-  assert.deepEqual(graph.edges.filter(edge => edge.source === 'p'), expected.edges.filter(edge => edge.source === 'p'));
+  // Stored connections also keep when they were made (src/cloud-sync.mjs).
+  assert.ok(graph.edges.every(edge => Number.isFinite(edge.order)));
+  assert.deepEqual(graph.edges.filter(edge => edge.source === 'p').map(({ order, ...edge }) => edge), expected.edges.filter(edge => edge.source === 'p'));
   assert.deepEqual(graph.groups, [{ id: `${id}-group`, name: 'Group 1', collapsed: false, slideshow: true, nodeIds: run.outputIds }]);
   for (const outputId of run.outputIds) {
     const asset = graph.nodes.find(node => node.id === outputId).data.asset;
@@ -717,7 +719,7 @@ runtimeTest('a describe node can use Gemini on the site key: one text call, a de
   assert.equal(calls.length, 1); assert.equal(body.model, 'gemini-3.5-flash-lite');
   assert.match(body.input[0].text, /Describe the attached images in detail/); assert.match(body.input[0].text, /FOCUS:\nOnly the lighting/);
   assert.deepEqual(body.input.slice(1).map(item => item.type), ['text', 'image']);
-  assert.equal(body.input[1].text, `Attachment 1: “Front view” (node ID i; file ${reference})`);
+  assert.equal(body.input[1].text, `#1: “Front view” (node ID i; file ${reference})`);
   assert.deepEqual([run.status, run.task, run.model, run.count], ['completed', 'describe', 'gemini-3.5-flash-lite', 1]);
   const output = graph.nodes.find(node => node.id === run.outputIds[0]);
   assert.deepEqual([output.type, output.data.text], ['text', 'A small courier robot lit from the left.']);
@@ -1123,7 +1125,8 @@ runtimeTest('site runs record the images they were given: prompts with masks and
     assert.ok(started.run, `${nodeId}: ${started.error}`);
     recorded[nodeId] = boardRoom.document.getMap('runs').get(started.run.id).inputs;
   }
-  assert.deepEqual(recorded, { p: [{ asset: style, template: 'Style' }, { ...front, mask: true }], describe: [front], upscale: [front], model3d: [front] });
+  // Upscales and 3D models take no prompt, so their images carry no number.
+  assert.deepEqual(recorded, { p: [{ asset: style, template: 'Style' }, { ...front, number: 1, mask: true }], describe: [{ ...front, number: 1 }], upscale: [front], model3d: [front] });
   await settle();
   // The list survives the run's later writes.
   for (const run of boardRoom.document.getMap('runs').values()) assert.deepEqual(run.inputs, recorded[run.nodeId]);

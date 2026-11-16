@@ -2,7 +2,7 @@
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
 import { arrowPalette, boardAuthor, canAttachArrow, canAttachStamp, drawingFromStroke, penPalette, penWidths, reconcileArrows, shapeDefault, shapeKinds, shapePalette, shiftArrow, stamps, stickyPalette, arrowPosition } from '../src/annotations.mjs';
-import { aspectRatios, describeTask, duplicateNodes, generationFields, generators, isGptImage, imageSize, imageSizes, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, nanoOnlyRatios, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName, uniqueModelName } from '../graph.mjs';
+import { aspectRatios, byConnection, describeTask, duplicateNodes, generationFields, generators, isGptImage, imageSize, imageSizes, mainImageFor, maxUpscaleImages, maxModel3dImages, model3dTask, modelers, maxVariants, nanoOnlyRatios, reconcileStampGraph, templatePalette, templateSnapshot, upscalers, upscaleTask, validateGraph, imageName, uniqueImageName, uniqueModelName } from '../graph.mjs';
 import { boardPages, defaultPages, maxPages, nextPageName, nodePage, pageContent, pageField, pageName, targetPage } from '../src/pages.mjs';
 import { maxSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from '../src/sections.mjs';
 import { maxLayer, nextLayer } from '../src/layers.mjs';
@@ -153,7 +153,7 @@ define('get_board', 'Read a board as it is now: pages, nodes (each with its page
     const { graph, args } = ctx, pages = boardPages(graph);
     if (args.pageId !== undefined && !pages.some(page => page.id === args.pageId)) fail(`Page not found: ${args.pageId}.`);
     const nodes = graph.nodes.map(item => shownNode(item, pages)).filter(item => args.pageId === undefined || item.page === args.pageId), kept = new Set(nodes.map(item => item.id));
-    return { revision: ctx.revision, pages, nodes, edges: graph.edges.filter(edge => kept.has(edge.source)), groups: (graph.groups || []).filter(group => group.nodeIds.some(item => kept.has(item))),
+    return { revision: ctx.revision, pages, nodes, edges: graph.edges.filter(edge => kept.has(edge.source)).sort(byConnection), groups: (graph.groups || []).filter(group => group.nodeIds.some(item => kept.has(item))),
       sections: (graph.sections || []).map(section => ({ ...section, page: nodePage(section, pages) })).filter(section => args.pageId === undefined || section.page === args.pageId),
       templates: ctx.templates.map(({ id: templateId, name, color }) => ({ id: templateId, name, color })), runCount: graph.runs.length, runs: graph.runs.slice(-(args.runs ?? 20)).map(runBrief) };
   } });
@@ -286,7 +286,7 @@ define('duplicate_nodes', 'Copy nodes from one page with their connections betwe
   graph.nodes.push(...copies.nodes.map(copy => ({ ...copy, z: z++ }))); graph.edges.push(...copies.edges);
   return { nodeIds: Object.fromEntries(newIds), edgeIds: copies.edges.map(edge => edge.id) };
 } });
-define('connect_nodes', 'Connect a prompt or image into a prompt on the same page, so the target uses it when it generates. Loops are refused.', { source: itemId, target: itemId, main: boolean('For a GPT Image prompt: this image is the one it edits; sent first') }, ['source', 'target'], { run: ctx => {
+define('connect_nodes', 'Connect a prompt or image into a prompt on the same page, so the target uses it when it generates. A prompt numbers its images 1, 2, 3… in the order they were connected, so its text can say “image 2”. Loops are refused.', { source: itemId, target: itemId, main: boolean('For a GPT Image prompt: this image is the one it edits; sent first') }, ['source', 'target'], { run: ctx => {
   const { args, graph } = ctx, found = ensure(graph.nodes, [args.source, args.target], 'Node');
   targetPage(graph, undefined, [args.source, args.target]);
   if (!['text', 'image'].includes(found.get(args.source).type) || found.get(args.target).type !== 'text') fail('Connect a prompt or image into a prompt.');
@@ -404,7 +404,7 @@ define('delete_section', 'Delete a section. What lies inside it stays, unless wi
   return { deletedSections: doomed.size, deletedNodes: nodes };
 } });
 
-define('apply_graph', 'Replace the board’s nodes, connections and groups in one step, for large rearrangements. First call get_board and pass its revision; if anyone changed the board since, nothing is applied. Everything left out is deleted. Pass pages or sections to replace those lists too; leave them out to keep them. Generation history stays.',
+define('apply_graph', 'Replace the board’s nodes, connections and groups in one step, for large rearrangements. First call get_board and pass its revision; if anyone changed the board since, nothing is applied. Everything left out is deleted. Keep each connection’s id and order: they number a prompt’s images, and a recreated connection counts as connected last. Pass pages or sections to replace those lists too; leave them out to keep them. Generation history stays.',
   { revision: text('Revision from a fresh get_board', { minLength: 1, maxLength: 64 }), nodes: array('Every node', graphNode, { maxItems: 20000 }), edges: array('Every connection', graphEdge, { maxItems: 50000 }), groups: array('Every group', graphGroup, { maxItems: 20000 }),
     pages: array('Every page, in order', graphPage, { minItems: 1, maxItems: maxPages }), sections: array('Every section', graphSection, { maxItems: maxSections }) }, ['revision', 'nodes', 'edges', 'groups'], { destructive: true, run: ctx => {
     const { args, graph } = ctx;

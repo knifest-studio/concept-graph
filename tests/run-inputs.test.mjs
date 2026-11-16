@@ -16,7 +16,7 @@ test('a run records its connected images, their mask and its custom node referen
   graph.nodes.find(node => node.id === 'front').data.mask = { asset: asset(4), marked: asset(5), base: asset(6), source: asset(1) };
   assert.deepEqual(runInputRecord(graph, 'p'), [
     { asset: asset(9), template: 'Style' }, { asset: asset(8), template: 'Style' },
-    { nodeId: 'front', asset: asset(1), label: 'Front view', mask: true }, { nodeId: 'side', asset: asset(2), label: 'side' },
+    { nodeId: 'front', asset: asset(1), label: 'Front view', number: 1, mask: true }, { nodeId: 'side', asset: asset(2), label: 'side', number: 2 },
   ]);
   validateRunInputs(runInputRecord(graph, 'p'));
   // A prompt's own custom node references count too.

@@ -1,6 +1,6 @@
 import { describePrompt, describeModel, isDescribe, nanoModel, promptText, runInputs, imageAttachment, imageAttachments } from '../graph.mjs';
 import { imageFormat, imageTypes } from './assets.mjs';
-import { generationReferences, maskInstruction } from '../src/image-edits.mjs';
+import { generationReferences, imageTitle, maskInstruction } from '../src/image-edits.mjs';
 
 // Nano Banana 2.1 through the Gemini Interactions API, the request the image-generation guide documents (read 2026-11-04):
 // https://aistudio.google.com/docs/image-generation and, for the Interaction object (steps, usage, errors),
@@ -75,16 +75,71 @@ export function nanoSettings(env) {
 }
 
 // The inputs a Codex run would get (runInputs decides which), written for an image model instead of an agent.
-// The request names images by board name, node ID or file name; the earliest one named comes first in the text.
-const named = (text, image) => [image.label, image.nodeId, image.asset, image.uploaded].filter(Boolean).map(name => {
-  const at = text.toLowerCase().search(new RegExp(`(?<![\\p{L}\\p{N}])${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'u'));
-  return at < 0 ? Infinity : at;
-}).reduce((a, b) => Math.min(a, b), Infinity);
+// The request names images by number, board name, node ID or file name; the earliest one named comes first in the text.
+// Numbers are written as “image 2”, “image number 2”, “image two”, “#2”, “the second (attached) image”, “the first and
+// second images” or “2nd image”, or the same in Ukrainian (“картинку 2 як 1”, “на картинці 3,”, “фотку три і”, “другу
+// картинку”, “3-ю картинку”). After a picture word a number counts only before the end, a punctuation mark or a joining
+// word, as “на фото 3 людини” and “на картинці два коти” are counts; so are “2 картинки”, “з 2-х фото”, “фото 3-х
+// дівчат” and “з п’яти картинок”, and “2x bigger”, “#2a2a2a”, “photo 3/4 view”, “photo 2.jpg”, “3-d”, “третину
+// картинки” and “a second image” (another one) are not numbers either.
+const escaped = value => value.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const pictureWords = 'image|img|picture|pic|photo|reference|ref|картин\\p{L}*|зображенн\\p{L}*|фот\\p{L}*|референс\\p{L}*|реф\\p{L}*';
+// Ordinal stems; a cardinal sharing the stem (п’ять, п’яти, сьоми, десяти) or a fraction (третина, четвертина) is not one.
+const cardinal = '(?!ь|и(?!\\p{L}))';
+const ordinalWords = [, 'first|перш\\p{L}*', 'second|друг\\p{L}*', 'third|трет(?!ин)\\p{L}*', 'fourth|четверт(?!ин)\\p{L}*', `fifth|п[’'ʼ]?ят${cardinal}\\p{L}*`, 'sixth|шост\\p{L}*',
+  `seventh|сьом${cardinal}\\p{L}*`, `eighth|восьм${cardinal}\\p{L}*`, `ninth|дев[’'ʼ]?ят${cardinal}\\p{L}*`, `tenth|десят${cardinal}\\p{L}*`];
+const numberWords = [, 'one|один|одна|одну', 'two|два|дві', 'three|три', 'four|чотири', "five|п[’'ʼ]?ять", 'six|шість', 'seven|сім', 'eight|вісім', "nine|дев[’'ʼ]?ять", 'ten|десять'];
+// Endings of ordinals after a digit (2nd, 2-гу, 3-тя, 3-ю, 2-ї), not of counts (2-х, 3-ох, 3-ма, 5-ти, 7-ми).
+const ordinalEnding = '(?:st|nd|rd|th|-(?:й|ий|ій|го|ого|му|ому|ї|ої|ю|ою|ша|шу|ше|ші|га|гу|ге|гі|тя|тю|тє|ті|та|ту|те|а|у|е|я|і))(?!\\p{L})';
+const anyOrdinal = [...ordinalWords.slice(1), `\\d{1,2}${ordinalEnding}`].join('|');
+// Words that may stand between an ordinal and the picture word: “the second attached image”, “другу підключену картинку”.
+const pictureAdjectives = "attached|connected|uploaded|input|generated|original|підключен\\p{L}*|під[’'ʼ]?єднан\\p{L}*|прикріплен\\p{L}*|вхідн\\p{L}*|згенерован\\p{L}*|оригінальн\\p{L}*";
+// A number ends where no letter, digit, fraction, size, ratio, file extension or count ending continues it.
+const numberEnd = '(?![\\p{L}\\p{N}]|[:/×.,]\\p{N}|\\.\\p{L}|-\\p{L})';
+// What may follow a number after a picture word: the end, a punctuation mark, or a word that joins it to the request.
+const joining = "and|or|like|as|with|to|into|onto|from|in|on|at|by|but|then|so|than|please|instead|using|should|must|is|looks?|і|й|та|а|або|чи|як|з|із|зі|на|в|у|до|від|під|за|але|щоб|ніж|теж|також|зроби\\p{L}*|має|мають|буде|стал\\p{L}*|бул\\p{L}*";
+const asReference = `(?=\\s*(?:$|[^\\p{L}\\p{N}\\s]|(?:${joining})(?!\\p{L})))`;
+const numberPatterns = new Map();
+const numberPattern = number => {
+  if (!numberPatterns.has(number)) {
+    const ordinal = [ordinalWords[number], `${number}${ordinalEnding}`].filter(Boolean).join('|'), written = [number, numberWords[number]].filter(Boolean).join('|');
+    numberPatterns.set(number, new RegExp(`(?<![\\p{L}\\p{N}])(?:(?:${pictureWords})\\s*(?:(?:№|#|no\\.?|number|номер)\\s*)?(?:${written})${numberEnd}${asReference}|[#№]\\s*${number}${numberEnd}`
+      + `|(?<ordinal>${ordinal})(?:\\s*(?:,|and|or|і|й|та|чи)\\s*(?:${anyOrdinal})){0,9}\\s+(?:(?:${pictureAdjectives})\\s+)?(?:${pictureWords}))`, 'gu'));
+  }
+  return numberPatterns.get(number);
+};
+// “A second image” asks for another one, and an image named as the source (“the style of image 2”, “like the first
+// photo”, “з картинки 2”) is a reference rather than the one to edit; both are checked on the few characters before a
+// mention, never scanned for.
+const another = /(?:^|[^\p{L}])(?:an?|another|one more|ще одн\p{L}*)\s+$/u;
+const source = /(?:^|[^\p{L}])(?:like|as in|style of|styled after|from|як|як на|як у|як в|з|із|зі|від|стиль|стилі|стилем)\s+(?:the\s+|that\s+)?$/u;
+const before = (text, index) => text.slice(Math.max(0, index - 24), index);
+// The first place the request names this number for editing, or Infinity.
+const numberAt = (text, number) => {
+  for (const match of text.matchAll(numberPattern(number))) {
+    const ahead = before(text, match.index);
+    if ((!match.groups.ordinal || !another.test(ahead)) && !source.test(ahead)) return match.index;
+  }
+  return Infinity;
+};
+const word = name => new RegExp(`(?<![\\p{L}\\p{N}])${escaped(name)}(?![\\p{L}\\p{N}])`, 'gu');
+const firstEdit = (text, pattern) => { for (const match of text.matchAll(pattern)) if (!source.test(before(text, match.index))) return match.index; return Infinity; };
+// A board name made of a picture word (“Image”, “photo”) names no image in particular, and one with a number (“Image 2”,
+// “Photo 2”) reads as that number while the prompt has it, so it counts as a name only in quotes.
+const pictureName = new RegExp(`^(?:${pictureWords})(?: ?(\\d+))?$`, 'iu');
+// Where the request first names an image to edit, doubled, with a number winning a tie with a name at the same place.
+const named = (text, image, count) => {
+  const lower = text.toLowerCase(), label = image.label?.trim(), generic = label && pictureName.exec(label);
+  const byLabel = !label || (generic && !generic[1]) ? Infinity : generic && Number(generic[1]) <= count ? firstEdit(lower, new RegExp(`[“"«']${escaped(label)}[”"»']`, 'gu')) : firstEdit(lower, word(label));
+  const byName = Math.min(byLabel, ...[image.nodeId, image.asset, image.uploaded].filter(Boolean).map(name => firstEdit(lower, word(name))));
+  return Math.min(byName * 2 + 1, image.number ? numberAt(lower, image.number) * 2 : Infinity);
+};
 // GPT Image edits the first input image and uses the rest as references (OpenAI image generation guide), so the image
 // the request names first leads, unless a mask already fixes which image is edited.
 export function editedFirst(images, text) {
   if (images.some(image => image.mask) || images.length < 2) return images;
-  const first = images.map(image => named(text, image)).reduce((best, at, i, all) => at < all[best] ? i : best, 0);
+  const count = images.reduce((most, image) => Math.max(most, image.number || 0), 0);
+  const first = images.map(image => named(text, image, count)).reduce((best, at, i, all) => at < all[best] ? i : best, 0);
   return [images[first], ...images.filter((_, i) => i !== first)];
 }
 
@@ -97,7 +152,7 @@ export function nanoPrompt(graph, nodeId, { maskInput = false, leadEdited = fals
     context.length ? 'Create an image for the request at the end. The earlier text is context for it, not separate requests.' : '',
     ...context.map((node, i) => `Context ${i + 1}:\n${promptText(node)}`),
     imageAttachments(images),
-    leadEdited && run.mainImage ? `Edit “${run.mainImage.label}” (Attachment 1). The other attachments are references for the request.` : '',
+    leadEdited && run.mainImage ? `Edit ${imageTitle(run.mainImage)}, sent as attachment 1. The other attachments are references for the request.` : '',
     `${context.length || images.length ? 'Request:\n' : ''}${promptText(target)}`,
     maskInstruction(inputs, maskInput),
   ].filter(Boolean).join('\n\n');
