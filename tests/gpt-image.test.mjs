@@ -426,7 +426,7 @@ runtimeTest('the room sends GPT Image the chosen size, quality and background, a
   const app = setup(t, {}, { aspectRatio: '16:9', imageSize: '2K', gptQuality: 'high', background: 'transparent' }), calls = fake(t), path = `/api/boards/${app.board.id}/nano`;
   // A page from before settings would start a run it cannot show, so it is asked to reload; nothing is reserved or sent.
   const stale = await app.start();
-  assert.equal(stale.status, 409); assert.equal((await stale.json()).error, 'Reload the page to use generation settings.');
+  assert.equal(stale.status, 409); assert.match((await stale.json()).error, /^Reload the page to use generation settings\. /);
   assert.equal(calls.length, 0); assert.deepEqual(app.directory.nanoUsage(user.email), { usedToday: 0, teamSpentUsd: 0 });
   assert.equal((await app.request(path, { method: 'POST', data: { nodeId: 'p', settings: 1 } })).status, 202); await app.settle();
   assert.deepEqual([calls[0].body.size, calls[0].body.quality, calls[0].body.background, calls[0].body.output_format], ['2736x1536', 'high', 'transparent', 'png']);
@@ -442,4 +442,20 @@ runtimeTest('the room sends GPT Image the chosen size, quality and background, a
   assert.equal(calls[1].body.size, `${width}x${height}`); assert.ok(calls[1].body.mask);
   run = readCloudGraph(app.room.document).runs.find(item => item.id !== run.id);
   assert.deepEqual(run.settings.applied, { imageSize: '2K', gptQuality: 'high', background: 'transparent' });
+});
+
+runtimeTest('large GPT Image variants go one (4K) or two (2K) at a time, so a room never holds four large answers at once', async t => {
+  const app = setup(t, {}, { imageSize: '4K', variants: 4 }), path = `/api/boards/${app.board.id}/nano`;
+  let active = 0, peak = 0;
+  const calls = fake(t, async () => { peak = Math.max(peak, ++active); await new Promise(resolve => setTimeout(resolve, 5)); active--; return Response.json(answer()); });
+  for (const [imageSize, lanes] of [['4K', 1], ['2K', 2], [undefined, 4]]) {
+    app.update({ imageSize, variants: 6 }); peak = 0; calls.length = 0;
+    assert.equal((await app.request(path, { method: 'POST', data: { nodeId: 'p', settings: 1 } })).status, 202);
+    const id = readCloudGraph(app.room.document).runs.at(-1).id;
+    // The placeholders after the first lanes say Queued until their call starts.
+    assert.equal(app.room.document.getMap('runs').get(id).variantsStarted, lanes);
+    await app.settle();
+    assert.equal(calls.length, 6, imageSize); assert.equal(peak, lanes, imageSize);
+    assert.equal(app.room.document.getMap('runs').get(id).status, 'completed');
+  }
 });

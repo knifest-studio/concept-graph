@@ -46,3 +46,27 @@ export function costLine(node, generator, { references = 0, cloud = true } = {})
   const count = promptVariants(node), price = t('≈ {price} per image', { price: dollars(each) });
   return count > 1 ? `${price} · ${plural(count, '{count} variant', '{count} variants')} ≈ ${dollars(each * count)}` : price;
 }
+
+/**
+ * Where the settings popover goes on screen, as { side, left, top, maxHeight? } in window pixels: under the prompt's card,
+ * else above it, else beside it. Placed again as it or the card changes, it keeps the side it opened on while that side
+ * still has fair room, scrolling inside instead of jumping. Only when none of these fit (a short, narrow window) may it
+ * cover the card, and never its chip row: it takes the larger room under or over the chip and scrolls inside.
+ */
+export const popoverGap = 8, popoverMargin = 12, keptRoom = 160;
+export function settingsPosition(card, size, viewport, { chip = card, side } = {}) {
+  const { width, height } = size, bottom = viewport.height - popoverMargin, scroll = room => height > room ? { maxHeight: Math.max(0, room) } : {};
+  const left = Math.max(popoverMargin, Math.min(card.left, viewport.width - popoverMargin - width));
+  const room = { below: bottom - card.bottom - popoverGap, above: card.top - popoverGap - popoverMargin };
+  const at = (which, extra = {}) => ({ side: which, left, top: which === 'below' ? card.bottom + popoverGap : Math.max(popoverMargin, card.top - popoverGap - height), ...extra });
+  if ((side === 'below' || side === 'above') && room[side] >= Math.min(height, keptRoom)) return at(side, scroll(room[side]));
+  for (const which of ['below', 'above']) if (room[which] >= height) return at(which);
+  // Beside the card, level with its top: on the right, else on the left.
+  const level = { top: Math.max(popoverMargin, Math.min(card.top, bottom - height)), ...scroll(bottom - popoverMargin) };
+  if (card.right + popoverGap + width <= viewport.width - popoverMargin) return { side: 'right', left: card.right + popoverGap, ...level };
+  if (card.left - popoverGap - width >= popoverMargin) return { side: 'left', left: card.left - popoverGap - width, ...level };
+  const under = Math.max(popoverMargin, chip.bottom + popoverGap), over = Math.min(bottom, chip.top - popoverGap);
+  if (bottom - under >= over - popoverMargin) return { side: 'chip-below', left, top: under, ...scroll(bottom - under) };
+  const top = Math.max(popoverMargin, over - height);
+  return { side: 'chip-above', left, top, ...scroll(over - top) };
+}

@@ -2,13 +2,14 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'reac
 import { createPortal } from 'react-dom';
 import { useStore } from '@xyflow/react';
 import { aspectRatios, codexGenerator, generationCapabilities, generationFields, generationReasons, generators, ratioAspect, resolveGeneration } from '../graph.mjs';
-import { costLine, generatorNames, partsText, settingLabel, settingParts } from './generation-settings.mjs';
+import { costLine, generatorNames, partsText, popoverMargin, settingLabel, settingParts, settingsPosition } from './generation-settings.mjs';
+import { matchShortcut } from './shortcuts.mjs';
 import { t } from './i18n.mjs';
 import './generation-settings.css';
 
 // The shapes shown first; More… opens the rest, Nano Banana's long and tall ones last.
 const firstRatios = ['1:1', '3:4', '4:3', '9:16', '16:9'], moreRatios = aspectRatios.filter(ratio => !firstRatios.includes(ratio));
-const popoverWidth = 310, gap = 8, margin = 12, viewOnly = 'You can only view this board.';
+const popoverWidth = 310, viewOnly = 'You can only view this board.', boardKeys = ['edit.undo', 'edit.redo'];
 
 // A small outline of the shape, so the ratios read at a glance.
 function Shape({ ratio }) {
@@ -16,13 +17,6 @@ function Shape({ ratio }) {
   return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x={(12 - width) / 2} y={(12 - height) / 2} width={width} height={height} rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg>;
 }
 const Sliders = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>;
-
-// Where the popover goes on screen: under the prompt's card, or above it when there is no room below, inside the window.
-export function settingsPosition(card, size, viewport) {
-  const below = card.bottom + gap, above = card.top - gap - size.height;
-  const top = below + size.height <= viewport.height - margin ? below : above >= margin ? above : Math.max(margin, viewport.height - margin - size.height);
-  return { left: Math.max(margin, Math.min(card.left, viewport.width - margin - size.width)), top };
-}
 
 /**
  * The settings chip at the right end of an image prompt's variants row, and the popover it opens. The popover lives in
@@ -49,24 +43,36 @@ export function GenerationSettings({ id, data, generator, readOnly, references =
 }
 
 function SettingsPopover({ id, node, generator, readOnly, references, cloud, masked, change, chip, close }) {
-  const popover = useRef(null), [position, setPosition] = useState(null), closing = useRef(close);
+  const popover = useRef(null), content = useRef(null), [position, setPosition] = useState(null), closing = useRef(close), place = useRef(null);
   closing.current = close;
   const { requested, unsupported } = resolveGeneration(node, generator, { mask: masked }), capabilities = generationCapabilities[generator] || generationCapabilities[codexGenerator];
   const [more, setMore] = useState(() => moreRatios.includes(requested.aspectRatio));
   // Any pan or zoom moves the card away from the popover, so the popover closes instead of floating over the wrong place.
   const transform = useStore(state => state.transform), opened = useRef(transform);
   useEffect(() => { if (transform.some((value, index) => value !== opened.current[index])) closing.current(false); }, [transform]);
+  // Placed again whenever its content, the card or the window changes size, and when the card moves (a teammate dragging
+  // it, say): the card grows after the popover opens, as the click that opened it also selects the card and that adds its
+  // readiness row. The height is the content's own, so a popover held to the room it has can still grow into more.
+  const moved = useStore(state => { const at = state.nodeLookup.get(node.id)?.internals.positionAbsolute; return at ? `${at.x},${at.y}` : ''; });
   useLayoutEffect(() => {
-    const place = () => {
-      const card = chip.current?.closest('.react-flow__node')?.getBoundingClientRect(), element = popover.current;
-      if (!card || !element) return;
-      setPosition(settingsPosition(card, { width: Math.min(popoverWidth, innerWidth - 2 * margin), height: element.offsetHeight }, { width: innerWidth, height: innerHeight }));
+    let side;
+    place.current = () => {
+      const card = chip.current?.closest('.react-flow__node'), element = popover.current;
+      if (!card || !element || !content.current) return;
+      const style = getComputedStyle(element), frame = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+      const next = settingsPosition(card.getBoundingClientRect(), { width: Math.min(popoverWidth, innerWidth - 2 * popoverMargin), height: content.current.offsetHeight + frame },
+        { width: innerWidth, height: innerHeight }, { chip: chip.current.getBoundingClientRect(), side });
+      side = next.side;
+      setPosition(current => current && current.left === next.left && current.top === next.top && current.maxHeight === next.maxHeight ? current : next);
     };
-    place();
-    const observer = new ResizeObserver(place); observer.observe(popover.current);
-    addEventListener('resize', place);
-    return () => { observer.disconnect(); removeEventListener('resize', place); };
+    const update = () => place.current?.();
+    update();
+    const observer = new ResizeObserver(update), card = chip.current?.closest('.react-flow__node');
+    observer.observe(content.current); if (card) observer.observe(card);
+    addEventListener('resize', update);
+    return () => { observer.disconnect(); removeEventListener('resize', update); };
   }, []);
+  useLayoutEffect(() => { place.current?.(); }, [moved]);
   // Focus moves in once the popover is placed (a hidden element cannot take it), so the keyboard reaches its choices.
   const focused = useRef(false);
   useEffect(() => { if (position && !focused.current) { focused.current = true; popover.current?.focus({ preventScroll: true }); } }, [position]);
@@ -90,9 +96,12 @@ function SettingsPopover({ id, node, generator, readOnly, references, cloud, mas
   const sizeReason = capabilities.imageSize.length ? undefined : generationReasons.codexSize;
   const row = (label, controls, note) => <div className="gen-settings-row" role="group" aria-label={label}><span className="gen-settings-label">{label}</span><div>{controls}{note && <p>{note}</p>}</div></div>;
   return createPortal(<div ref={popover} id={id} tabIndex={-1} className={`gen-settings-popover nodrag nowheel nokey${generator === generators.gptImage ? ' gpt' : ''}`} role="dialog" aria-label={t('Generation settings')}
-    style={position ? { left: position.left, top: position.top } : { visibility: 'hidden' }}
+    style={position ? { left: position.left, top: position.top, ...(position.maxHeight !== undefined ? { maxHeight: position.maxHeight } : {}) } : { visibility: 'hidden' }}
     onKeyDown={event => {
       if (event.key === 'Escape') { event.stopPropagation(); close(true); return; }
+      // Other keys stay here: on the board, Backspace would delete the selected prompt and letters would switch tools.
+      // Undo and redo still reach it, so a choice made here can be taken back from here.
+      if (!matchShortcut(event, { ids: boardKeys })) event.stopPropagation();
       // Tabbing past either end goes back to the chip instead of leaving focus nowhere at the end of the page.
       const controls = [...popover.current.querySelectorAll('button:not(:disabled)')], at = controls.indexOf(document.activeElement);
       if (event.key === 'Tab' && (event.shiftKey ? at <= 0 : at === controls.length - 1)) { event.preventDefault(); close(true); }
@@ -100,6 +109,7 @@ function SettingsPopover({ id, node, generator, readOnly, references, cloud, mas
     onBlur={event => { if (event.relatedTarget && !popover.current?.contains(event.relatedTarget) && !chip.current?.contains(event.relatedTarget)) close(false); }}
     // Clicks stay with the popover: on the board they would select the prompt or open its menu.
     onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}>
+    <div ref={content}>
     <header><strong>{t('Generation settings')}</strong><span>{generatorNames[generator] || generatorNames[codexGenerator]}</span></header>
     {row(t('Aspect'), <div className="gen-settings-options">{option('aspectRatio', undefined, t('Auto'))}{firstRatios.map(ratioOption)}{more ? moreRatios.map(ratioOption)
       : <button type="button" className="gen-settings-more" aria-expanded="false" onClick={() => setMore(true)}>{t('More…')}</button>}</div>,
@@ -114,5 +124,6 @@ function SettingsPopover({ id, node, generator, readOnly, references, cloud, mas
     <footer><span className="gen-settings-cost" data-tooltip={generator === codexGenerator ? undefined : t('Held from the team budget when the run starts; the real cost is recorded when it finishes.')}>{costLine(node, generator, { references, cloud })}</span>
       <button type="button" className="gen-settings-reset" disabled={readOnly || !Object.keys(generationFields).some(key => node.data[key] !== undefined) || undefined} data-tooltip={readOnly ? t(viewOnly) : undefined}
         onClick={() => change(node.id, Object.fromEntries(Object.keys(generationFields).map(key => [key, undefined])))}>{t('Reset')}</button></footer>
+    </div>
   </div>, document.body);
 }

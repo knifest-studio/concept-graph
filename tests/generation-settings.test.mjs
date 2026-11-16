@@ -6,7 +6,7 @@ import { gptImageEstimate, gptImageRequest } from '../cloud/gpt-image.mjs';
 import { checkArgs, runBoardTool, toolByName } from '../cloud/mcp-tools.mjs';
 import { expectedOutputs } from '../src/output-placement.mjs';
 import { runPlaceholders } from '../src/run-placeholders.mjs';
-import { appliedSummary, costLine, partsText, settingParts } from '../src/generation-settings.mjs';
+import { appliedSummary, costLine, partsText, popoverGap, popoverMargin, settingParts, settingsPosition } from '../src/generation-settings.mjs';
 import { setLanguage, t } from '../src/i18n.mjs';
 import uk from '../src/locales/uk.mjs';
 
@@ -207,4 +207,31 @@ test('every reason a setting is not used, and the room’s reload message, read 
   for (const reason of [...Object.values(generationReasons), 'Reload the page to use generation settings.']) assert.ok(Object.hasOwn(uk, reason), reason);
   setLanguage('uk');
   try { assert.equal(t(generationReasons.nanoOnly), 'Такі пропорції підтримує лише Nano Banana.'); } finally { setLanguage('en'); }
+});
+
+test('the popover opens under its card, else above, else beside, keeps its side as it grows, and never covers the chip row', () => {
+  const rect = (left, top, width, height) => ({ left, top, right: left + width, bottom: top + height, width, height });
+  const card = rect(295, 307, 310, 310), chip = rect(500, 589, 100, 20), size = height => ({ width: 310, height });
+  assert.deepEqual(settingsPosition(card, size(228), { width: 1400, height: 1000 }, { chip }), { side: 'below', left: 295, top: 617 + popoverGap });
+  // A window 850 px tall: the popover fits above; after More… (303 px) it stays above, held to its room and scrolling,
+  // instead of moving down over the card and its chip as it used to.
+  const short = { width: 900, height: 850 }, opened = settingsPosition(card, size(228), short, { chip });
+  assert.deepEqual(opened, { side: 'above', left: 295, top: 307 - popoverGap - 228 });
+  assert.deepEqual(settingsPosition(card, size(303), short, { chip, side: opened.side }), { side: 'above', left: 295, top: popoverMargin, maxHeight: 307 - popoverGap - popoverMargin });
+  // Opened at that height it goes beside the card when the window is wide enough, the right first.
+  assert.deepEqual(settingsPosition(card, size(303), { width: 1400, height: 850 }, { chip }), { side: 'right', left: 605 + popoverGap, top: 307 });
+  assert.deepEqual(settingsPosition(rect(700, 307, 310, 310), size(303), { width: 1100, height: 850 }, { chip }), { side: 'left', left: 700 - popoverGap - 310, top: 307 });
+  // A grown card (its readiness row appeared) moves a popover under it down and lets it scroll rather than jump.
+  assert.deepEqual(settingsPosition(rect(295, 307, 310, 340), size(228), short, { chip, side: 'below' }), { side: 'below', left: 295, top: 647 + popoverGap, maxHeight: 850 - popoverMargin - 647 - popoverGap });
+  // Short and narrow: over the card, in the larger room beside the chip row, scrolling inside when needed.
+  for (let seed = 1; seed <= 2000; seed++) {
+    const random = (min, max) => { seed = (seed * 16807) % 2147483647; return min + (seed % 1000) / 1000 * (max - min); };
+    const viewport = { width: random(340, 1600), height: random(300, 1100) }, box = rect(random(-200, viewport.width), random(-300, viewport.height), 310, random(120, 600));
+    const row = rect(box.left + 16, box.top + random(40, box.height - 30), 278, 20), height = random(180, 340), side = [undefined, 'below', 'above', 'right'][Math.floor(random(0, 4))];
+    const place = settingsPosition(box, size(height), viewport, { chip: row, side }), shown = Math.min(height, place.maxHeight ?? height);
+    const across = place.left < row.right && place.left + 310 > row.left;
+    assert.ok(!across || place.top + shown <= row.top || place.top >= row.bottom, JSON.stringify({ viewport, box, row, height, side, place }));
+    assert.ok(place.left >= popoverMargin || viewport.width < 310 + 2 * popoverMargin); assert.ok(place.top >= popoverMargin);
+    if (!['chip-below', 'chip-above'].includes(place.side) || place.maxHeight === undefined || place.maxHeight > 0) assert.ok(place.top + shown <= viewport.height - popoverMargin + 1e-9, JSON.stringify({ viewport, box, height, place }));
+  }
 });

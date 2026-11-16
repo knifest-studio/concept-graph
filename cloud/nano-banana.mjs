@@ -23,8 +23,24 @@ export const nanoTimeout = 5 * 60 * 1000;
 // some for storage, and one body per variant would not fit its memory. Each wave of lanes adds time to the run's limit,
 // which stays under the 15 minutes waitUntil keeps a room alive.
 export const variantLanes = 4;
-export const variantRunTimeout = count => Math.min(14 * 60 * 1000, nanoTimeout + (Math.ceil(Math.max(1, count) / variantLanes) - 1) * 2 * 60 * 1000);
+// Large images go fewer at a time: while a call's answer is read the room holds it several times over (the body, its
+// base64 text, the decoded bytes), and a 4K PNG from GPT Image is 15–20 MB, so four at once could pass a room's 128 MB.
+// Nano Banana's JPEGs are several times smaller at the same size.
+export const variantLanesFor = ({ gpt = false, imageSize } = {}) => imageSize === '4K' ? gpt ? 1 : 2 : imageSize === '2K' && gpt ? 2 : variantLanes;
+export const variantRunTimeout = (count, lanes = variantLanes) => Math.min(14 * 60 * 1000, nanoTimeout + (Math.ceil(Math.max(1, count) / lanes) - 1) * 2 * 60 * 1000);
 export const maxReferenceBytes = 20 * 1024 * 1024;
+
+// Only a page built before generation settings existed is refused for them, and its translations lack this message, so
+// the room words it: in Ukrainian when the browser prefers Ukrainian to English (as such a page picks its language when
+// nobody chose one), otherwise in English followed by Ukrainian, for someone who chose Ukrainian in an English browser.
+export const staleSettings = Object.freeze({ en: 'Reload the page to use generation settings.', uk: 'Перезавантажте сторінку, щоб використати налаштування генерації.' });
+export function staleSettingsError(acceptLanguage) {
+  const preferred = String(acceptLanguage || '').split(',').map((part, index) => {
+    const [tag, ...parameters] = part.trim().split(';'), q = parameters.map(value => /^\s*q=([\d.]+)\s*$/i.exec(value)?.[1]).find(Boolean);
+    return { base: tag.trim().toLowerCase().split('-')[0], q: q === undefined ? 1 : Number(q), index };
+  }).filter(entry => entry.q > 0).sort((a, b) => b.q - a.q || a.index - b.index).find(entry => entry.base === 'uk' || entry.base === 'en');
+  return preferred?.base === 'uk' ? staleSettings.uk : `${staleSettings.en} ${staleSettings.uk}`;
+}
 
 export class NanoError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
