@@ -345,17 +345,17 @@ test('unmeasured cards get estimated sizes and handles; measured ones keep their
   const note = { id: 's', type: 'sticky', position: { x: 0, y: 400 }, data: { text: '', color: '#fff3ad' } };
   const cache = createViewCache(), view = canvasView([prompt, upload, output, note], [], [], cache), byId = new Map(view.nodes.map(node => [node.id, node]));
   // An image prompt's card includes its 28px settings row under the text.
-  assert.deepEqual(byId.get('p').measured, { width: 310, height: 152 });
-  assert.deepEqual(byId.get('p').handles.map(({ type, position, x, y }) => [type, position, x, y]), [['target', 'left', -9, 71], ['source', 'right', 309, 71]]);
+  assert.deepEqual(byId.get('p').measured, { width: 310, height: 191 });
+  assert.deepEqual(byId.get('p').handles.map(({ type, position, x, y }) => [type, position, x, y]), [['target', 'left', -9, 90.5], ['source', 'right', 309, 90.5]]);
   assert.deepEqual(byId.get('u').handles.map(handle => handle.type), ['source']);
   assert.deepEqual(byId.get('o').measured, { width: 310, height: 155 });
   assert.deepEqual(byId.get('o').handles.map(handle => handle.type), ['target', 'source']);
   assert.deepEqual(byId.get('s').handles, []);
-  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 108 });
-  // A fed prompt also shows its "Inputs" row (the card measures 129.5 px with one line of text and its settings row).
-  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: 'one line' } }, true), { width: 310, height: 130 });
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '' } }), { width: 310, height: 147 });
+  // A fed prompt also shows its "Inputs" row (the card measures 168.5 px with text, settings and model buttons).
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: 'one line' } }, true), { width: 310, height: 169 });
   // Describe nodes have no settings row.
-  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '', task: 'describe' } }), { width: 310, height: 80 });
+  assert.deepEqual(estimatedSize({ id: 'e', type: 'text', data: { text: '', task: 'describe' } }), { width: 310, height: 119 });
   assert.deepEqual(nodeHandles({ type: 'text', data: { template: { name: 'T' } } }, { width: 310, height: 100 }).map(handle => handle.x), [-8, 308]);
   // Once measured, a node keeps that size even when undo hands back a copy without it.
   const measured = { ...prompt, measured: { width: 310, height: 210 } };
@@ -455,7 +455,7 @@ test('a prompt is drawn at most as a square unless its bottom edge was dragged t
   const long = { id: 'long', type: 'text', position: { x: 0, y: 0 }, data: { text: 'word '.repeat(2000) } };
   assert.deepEqual(estimatedSize(long), { width: 310, height: 310 });
   assert.deepEqual(estimatedSize({ ...long, data: { ...long.data, height: 520 } }), { width: 310, height: 520 });
-  assert.equal(estimatedSize({ ...long, data: { text: 'Short' } }).height, 108);
+  assert.equal(estimatedSize({ ...long, data: { text: 'Short' } }).height, 147);
   validateGraph({ nodes: [{ ...long, data: { ...long.data, height: 520 } }], edges: [] });
   for (const height of [10, 5000, '400']) assert.throws(() => validateGraph({ nodes: [{ ...long, data: { ...long.data, height } }], edges: [] }), /Invalid prompt height/);
 });
@@ -508,4 +508,45 @@ test('two or more selected items share one FigJam-style box, whatever selected t
   const arrow = at('arrow', 'arrow', 600, 400, 232, 132, { data: { line: { x1: 16, y1: 16, x2: 216, y2: 116 } } });
   assert.deepEqual(selectionBounds([sticky, arrow]), { x: 0, y: 100, width: 816, height: 416 }, 'an arrow counts by its line, not its padded box');
   assert.equal(selectionBounds([sticky, { ...image, hidden: true }]), null, 'a card folded into a group is left out');
+});
+
+test('a folded group is a card above the connections, at its top member’s layer; an open group’s frame sits just under its own images', () => {
+  const asset = '12345678-1234-1234-1234-123456789abc.png';
+  const nodes = [{ id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A bird' }, z: 1 },
+    { id: 'a', type: 'image', position: { x: 400, y: 0 }, data: { asset }, z: 2 }, { id: 'b', type: 'image', position: { x: 400, y: 400 }, data: { asset }, z: 5 }];
+  const group = collapsed => ({ id: 'g', name: 'Group 1', nodeIds: ['a', 'b'], collapsed, slideshow: true });
+  const frame = collapsed => canvasView(nodes, [{ id: 'e', source: 'p', target: 'a' }], [group(collapsed)], createViewCache()).nodes.find(node => node.id === 'g');
+  assert.ok(frame(true).zIndex >= 1); assert.ok(frame(true).zIndex >= Math.max(...canvasView(nodes, [], [], createViewCache()).nodes.filter(node => ['a', 'b'].includes(node.id)).map(node => node.zIndex)));
+  // Open: above the connections and the prompt (layer 1), below both its images (layers 2 and 5).
+  const members = canvasView(nodes, [], [group(false)], createViewCache()).nodes.filter(node => ['a', 'b'].includes(node.id)).map(node => node.zIndex);
+  const prompt = canvasView(nodes, [], [], createViewCache()).nodes.find(node => node.id === 'p').zIndex;
+  assert.ok(frame(false).zIndex > 0 && frame(false).zIndex > prompt && frame(false).zIndex < Math.min(...members));
+});
+
+test('a card lying on another draws its links again over each card it covers, cut to that card; nowhere else', () => {
+  const size = { width: 300, height: 300 }, asset = '12345678-1234-1234-1234-123456789abc.png';
+  const card = (id, x, y, z, extra = {}) => ({ id, type: 'image', position: { x, y }, data: { asset, runId: 'r' }, measured: size, z, ...extra });
+  const prompt = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A bird' }, measured: { width: 310, height: 200 }, z: 1 };
+  const edges = [{ id: 'pl', source: 'p', target: 'low' }, { id: 'pt', source: 'p', target: 'top' }];
+  const layer = (view, id) => view.nodes.find(node => node.id === id).zIndex, copiesOf = (view, id) => view.copies.filter(copy => copy.data.edge === id);
+  // 'top' covers 'low' but not 'side', which lies lower still: the link to 'top' is copied over 'low' only.
+  const nodes = [prompt, card('side', 400, 600, 2), card('low', 400, 0, 3), card('top', 500, 100, 5)];
+  let view = canvasView(nodes, edges, [], createViewCache());
+  assert.ok(view.edges.every(edge => edge.zIndex === undefined), 'the links themselves stay under every card');
+  const [over] = copiesOf(view, 'pt');
+  assert.equal(copiesOf(view, 'pt').length, 1);
+  assert.deepEqual(over.data.clip, { x: 400, y: 0, width: 300, height: 300 });
+  assert.ok(over.zIndex > layer(view, 'low') && over.zIndex <= layer(view, 'top'), 'over the covered card, under its own card');
+  assert.equal(over.selectable, false); assert.equal(over.deletable, false); assert.equal(over.source, 'p'); assert.equal(over.target, 'top');
+  assert.deepEqual(copiesOf(view, 'pl'), [], 'the covered card’s own link gets no copy');
+  // Moving the covering card keeps the same copies; side by side there are none.
+  const cache = createViewCache(), first = canvasView(nodes, edges, [], cache).copies;
+  assert.equal(canvasView(nodes.map(node => node.id === 'top' ? { ...node, position: { x: 520, y: 100 } } : node), edges, [], cache).copies, first);
+  assert.deepEqual(canvasView([prompt, card('low', 400, 0, 3), card('top', 800, 0, 5)], edges, [], createViewCache()).copies, []);
+  // An open group’s frame under its own images gets no copy; a folded card over another card does.
+  const open = { id: 'g', name: 'Group 1', nodeIds: ['a', 'b'], collapsed: false, slideshow: true }, into = [{ id: 'pa', source: 'p', target: 'a' }];
+  assert.deepEqual(canvasView([prompt, card('a', 400, 0, 6), card('b', 400, 400, 7)], into, [open], createViewCache()).copies, []);
+  view = canvasView([prompt, card('under', 450, 50, 2), card('a', 400, 0, 6), card('b', 400, 400, 7)], into, [{ ...open, collapsed: true }], createViewCache());
+  assert.equal(view.edges[0].target, 'g');
+  assert.deepEqual(view.copies.map(copy => [copy.data.edge, copy.target, copy.data.clip.x]), [['pa', 'g', 450]]);
 });

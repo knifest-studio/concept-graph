@@ -1,3 +1,5 @@
+import { withGenerator, generatorOf, codexGenerator as runCodex, upscaleTask as runUpscale } from '../graph.mjs';
+import { generationKey } from '../src/canvas-store.mjs';
 import test from 'node:test';
 import * as nodeModule from 'node:module';
 import assert from 'node:assert/strict';
@@ -132,8 +134,8 @@ runtimeTest('the prompt reads as the record the room writes for every kind of si
 
 test('a Generate that never became a run is described as the route it was blocked on would run it', () => {
   const doc = board(), graph = readCloudGraph(doc);
-  // Codex waiting for its helper: Codex's model, one image, a describe stays a describe.
-  assert.deepEqual(promptAnalytics(graph, 'codex', { site: false }), { generator: 'codex', model: generationSettings.model, task: 'image', variants: 1, references: 2, masked: true });
+  // Codex waiting for its helper: Codex's model, the prompt's variants (a strict count in its request), a describe stays a describe.
+  assert.deepEqual(promptAnalytics(graph, 'codex', { site: false }), { generator: 'codex', model: generationSettings.model, task: 'image', variants: 4, references: 2, masked: true });
   assert.deepEqual(promptAnalytics(graph, 'describe', { site: false }), { generator: 'codex', model: generationSettings.model, task: 'describe', variants: 1, references: 2, masked: false });
   // Site access missing: the site's generator and the prompt's variants.
   assert.deepEqual(promptAnalytics(graph, 'nano'), { generator: 'nano-banana', model: nanoModel, task: 'image', variants: 4, references: 2, masked: true });
@@ -154,7 +156,7 @@ test('describe, upscale and 3D runs also log their own start; a record already o
   tracker.stop(); doc.destroy();
 });
 
-test('a Codex run keeps Codex’s model and one image; only a failure carries its message and kind', async () => {
+test('a Codex run keeps Codex’s model and the prompt’s variants; only a failure carries its message and kind', async () => {
   const doc = board(), { events, tracker } = tracked(doc);
   const generation = new CloudGeneration({ doc, boardId: 'board', user, ready: () => true, onStart: run => tracker.started(run), onError: () => {},
     request: async () => new Response(new Uint8Array([1, 2, 3])), api: async () => ({}), helperRequest: async () => new Response(new Uint8Array([1])),
@@ -163,8 +165,9 @@ test('a Codex run keeps Codex’s model and one image; only a failure carries it
   const id = await generation.start('codex');
   const [name, fields] = events[0];
   assert.equal(name, 'generation_started');
-  // The prompt still holds 4 variants from a site generator; Codex makes one image.
-  assert.deepEqual(fields, { generator: 'codex', model: generationSettings.model, task: 'image', run: id, variants: 1, references: 2, masked: true });
+  // The prompt holds 4 variants; Codex is asked for exactly 4 images, and its run records them for the placeholders.
+  assert.deepEqual(fields, { generator: 'codex', model: generationSettings.model, task: 'image', run: id, variants: 4, references: 2, masked: true });
+  assert.equal(doc.getMap('runs').get(id).variants, 4);
   finish(doc, id, { status: 'failed', error: 'Generation was interrupted. Run the prompt again.' });
   const failed = events.at(-1)[1];
   assert.equal(events.at(-1)[0], 'generation_failed'); assert.equal(failed.errorKind, 'interrupted'); assert.equal(failed.generator, 'codex');
@@ -223,20 +226,21 @@ test('the tray’s Dismiss all and a prompt’s settings chip have analytics nam
 // The editor's Generate (main.jsx run()), with the tab around it replaced by stand-ins: what it logs when a prompt does
 // not start, or fails to start, on a cloud board.
 const editor = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-const runSource = editor.slice(editor.indexOf('  const run = async (nodeId, resumeIntent = null, event) => {'), editor.indexOf('  runAction.current = run;'));
+const runSource = editor.slice(editor.indexOf('  const run = async (nodeId, resumeIntent = null, event, generator) => {'), editor.indexOf('  runAction.current = run;'));
 function editorRun(graph, { site = { selectable: true, ready: true, note: '' }, readiness = 'ready', start } = {}) {
-  const events = [], toasts = [], opened = [], ref = current => ({ current });
-  const begin = async () => { const error = await start?.(); if (error) throw error; return 'run'; };
+  const events = [], toasts = [], opened = [], defaults = [], ref = current => ({ current });
+  let launching = null;
+  const begin = async (...args) => { const error = await start?.(...args); if (error) throw error; return 'run'; };
   const env = {
-    alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: (graph, boardId, nodeId) => ({ nodeId }), currentGraph: () => graph, boardId: 'board',
-    notify: message => toasts.push(['error', message]), inform: (message, notice) => toasts.push(['news', message, notice]), starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref(graph.nodes),
+    withGenerator, generatorOf, generationKey, codexGenerator: runCodex, upscaleTask: runUpscale, busy: run => ['queued', 'running'].includes(run?.status), alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: (graph, boardId, nodeId) => ({ nodeId }), currentGraph: () => graph, boardId: 'board',
+    notify: message => toasts.push(['error', message]), inform: (message, notice) => toasts.push(['news', message, notice]), starting: null, generationStarting: ref(new Set()), revealHold: ref(new Map()), revealPause: 1500, visibleBoard: () => undefined, resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref(graph.nodes),
     cloud: true, usesSiteGenerator, generatorKind, startingGenerator, rememberGenerator() {}, model3dTask, generators, isDescribe, model3dRef: ref(site), gptRef: ref(site), nanoRef: ref(site), readinessRef: ref({ key: readiness }), pendingIntent: ref(null),
-    fixReadiness: () => opened.push('pairing'), effects: { start() {}, failedStart() {} }, userGeneration: ref(null), viewerMoved: ref(false), setStarting() {}, saveNow: async () => {},
+    setGenerator: (id, generator, undo) => { defaults.push([id, generator, undo]); graph.nodes.find(node => node.id === id).data.generator = generator || undefined; }, fixReadiness: () => opened.push('pairing'), effects: { start() {}, failedStart() {} }, userGeneration: ref(new Map()), viewerMoved: ref(false), setStarting(update) { launching = update(launching); }, saveNow: async () => {},
     cloudSession: { refreshNano() {}, unpair() {}, jobs: { startNano: begin, start: begin } }, helperNeeded: true, setHelperOffline() {}, openHelper() {}, mergeRemote() {}, focusNode() {}, intentUnchanged: () => true, t,
     track: (name, fields, kind = 'app') => events.push([name, details(fields), kind]), promptAnalytics
   };
   const run = new Function(...Object.keys(env), `${runSource}; return run;`)(...Object.values(env));
-  return { run, events, toasts, opened };
+  return { run, events, toasts, opened, defaults, pendingIntent: env.pendingIntent, get launching() { return launching; } };
 }
 
 test('a Generate or Describe blocked before it starts is logged once, with the prompt as it would run and why', async () => {
@@ -254,7 +258,7 @@ test('a Generate or Describe blocked before it starts is logged once, with the p
   // Codex needs its helper first: pairing opens, and the start is logged as Codex would run it.
   tab = editorRun(graph, { readiness: 'helper' });
   await tab.run('codex');
-  assert.deepEqual(tab.events, [['generation_blocked', { generator: 'codex', model: generationSettings.model, errorKind: 'helper', task: 'image', variants: 1, references: 2, masked: true }, 'app']]);
+  assert.deepEqual(tab.events, [['generation_blocked', { generator: 'codex', model: generationSettings.model, errorKind: 'helper', task: 'image', variants: 4, references: 2, masked: true }, 'app']]);
   assert.deepEqual(tab.opened, ['pairing']); assert.deepEqual(tab.toasts, []);
   // A prompt that is ready starts and logs nothing here: the run tracker logs the start.
   tab = editorRun(graph, { site: { selectable: true, ready: true, note: '' } });
@@ -277,6 +281,33 @@ test('a start the room or Codex refuses is logged with the prompt’s real gener
   tab = editorRun(graph, { start: () => Object.assign(new Error('Too many requests.'), { status: 429 }) });
   await tab.run('codex');
   [[name, fields]] = tab.events;
-  assert.deepEqual([name, fields.generator, fields.model, fields.variants, fields.references, fields.masked, fields.errorKind], ['generation_failed', 'codex', generationSettings.model, 1, 2, true, 'quota']);
+  assert.deepEqual([name, fields.generator, fields.model, fields.variants, fields.references, fields.masked, fields.errorKind], ['generation_failed', 'codex', generationSettings.model, 4, 2, true, 'quota']);
+  doc.destroy();
+});
+
+
+test('fast clicks start two explicit models independently, and a sibling default change cannot relabel a failure', async () => {
+  const doc = board(), graph = readCloudGraph(doc), submitted = [];
+  let nanoDone, gptDone;
+  const nanoWait = new Promise(resolve => { nanoDone = resolve; }), gptWait = new Promise(resolve => { gptDone = resolve; });
+  const tab = editorRun(graph, { start: async (nodeId, generator) => { submitted.push(generator); await (generator === generators.nanoBanana ? nanoWait : gptWait); return generator === generators.nanoBanana ? Object.assign(new Error('Too many requests.'), { status: 429 }) : null; } });
+  const nano = tab.run('nano', null, undefined, generators.nanoBanana), gpt = tab.run('nano', null, undefined, generators.gptImage);
+  await tab.run('nano', null, undefined, generators.nanoBanana);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(submitted, [generators.nanoBanana, generators.gptImage]);
+  assert.equal(tab.launching.size, 2);
+  assert.equal(graph.nodes.find(node => node.id === 'nano').data.generator, generators.gptImage);
+  assert.deepEqual(tab.defaults, [['nano', generators.gptImage, false]]);
+  nanoDone(); await nano;
+  assert.equal(tab.launching.size, 1); assert.equal(tab.launching.has(generationKey('nano', generators.gptImage)), true);
+  assert.equal(tab.events[0][1].generator, generators.nanoBanana);
+  gptDone(); await gpt; assert.equal(tab.launching, null); doc.destroy();
+});
+
+test('an explicit Codex click retains its provider in the pending pairing intent', async () => {
+  const doc = board(), graph = readCloudGraph(doc), tab = editorRun(graph, { readiness: 'helper' });
+  await tab.run('nano', null, undefined, 'codex');
+  assert.equal(tab.pendingIntent.current.generator, 'codex');
+  assert.deepEqual(tab.defaults, [['nano', null, false]]);
   doc.destroy();
 });

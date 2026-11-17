@@ -104,7 +104,7 @@ test('wrapping a selection frames it with room for the title and always holds wh
   assert.deepEqual(wrapBounds(outer, new Set(['inner'])), { x: -40, y: -72, width: 380, height: 312 });
 });
 
-test('sections draw behind group frames and connections, smaller ones above larger, and groups expose no colour', () => {
+test('sections draw behind connections and group frames, smaller ones above larger, and groups expose no colour', () => {
   const nodes = [text('a', 100, 100), text('b', 600, 100)], cache = createViewCache();
   const groups = [{ id: 'g', name: 'G', nodeIds: ['a', 'b'], collapsed: false, color: '#ffe5d5' }], sections = [section('small', 50, 50, 300, 200, { color: '#dceaff', selected: true }), section('big', 0, 0, 2000, 900)];
   const view = canvasView(nodes, [], groups, cache, sections);
@@ -112,7 +112,8 @@ test('sections draw behind group frames and connections, smaller ones above larg
   const small = view.sections[0], big = view.sections[1], frame = view.nodes.find(node => node.id === 'g');
   assert.equal(small.type, 'section'); assert.equal(small.dragHandle, '.section-handle'); assert.equal(small.selected, true);
   assert.deepEqual(small.data, { name: 'Section small', color: '#dceaff' }); assert.deepEqual(small.measured, { width: 300, height: 200 });
-  assert.ok(big.zIndex < small.zIndex && small.zIndex < frame.zIndex && frame.zIndex < 0);
+  // Sections under the connections (0); an open group's frame above them, just under its members.
+  assert.ok(big.zIndex < small.zIndex && small.zIndex < 0 && frame.zIndex > 0 && frame.zIndex < view.nodes.find(node => node.id === 'a').zIndex);
   assert.equal(Object.hasOwn(frame.data, 'color'), false);
   // Unchanged sections keep their view objects; without sections the view is as before.
   assert.equal(canvasView(nodes, [], groups, cache, sections).sections, view.sections);

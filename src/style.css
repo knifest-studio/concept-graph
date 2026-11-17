@@ -133,6 +133,7 @@
 .react-flow__node.dragging .node-card::after,.react-flow__node.dragging .collapsed-node::after,.react-flow__node.dragging .group-frame::after{opacity:1;transition:none}
 button,a,.image-collapse,.image-prompt-from,.image-expand,.image-shade{transition:color 120ms ease-out,background-color 120ms ease-out,border-color 120ms ease-out,opacity 120ms ease-out}
 .canvas.file-drag-over{outline:2px solid var(--blue);outline-offset:-5px}
+.react-flow__edge.link-over{pointer-events:none}
 .feedback-edge .react-flow__edge-path{stroke-dasharray:1;stroke-dashoffset:0;animation:edge-created 260ms cubic-bezier(.2,.8,.2,1)}
 .getting-started li{border-radius:5px}
 .getting-started li button>span:first-child{display:inline-flex;align-items:center;justify-content:center;min-width:14px}

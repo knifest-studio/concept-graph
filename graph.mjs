@@ -44,13 +44,17 @@ export function resolutionLabel(pixels) {
   return [[7600, '8K'], [5700, '6K'], [3800, '4K'], [2900, '3K'], [1900, '2K']].find(([least]) => side >= least)?.[1] || '';
 }
 export const maxDescription = 20000;
-// A site-generated prompt can ask for up to this many variants, arriving as one slideshow. The room runs them a few at a
-// time on one shared request, and the Workers Free plan allows 50 outside requests per run, so 32 leaves headroom.
+// A prompt can ask for up to this many variants, arriving as one slideshow. The room runs a site generator's a few at a
+// time on one shared request, and the Workers Free plan allows 50 outside requests per run, so 32 leaves headroom. Codex
+// gets the count as a strict rule in its request and makes them one after another in one turn (codexImageCount).
 export const maxVariants = 32;
 // The one-click choices under a prompt; any other count up to maxVariants is typed in.
 export const variantPresets = Object.freeze([1, 2, 4, 8, 16]);
 export const clampVariants = value => Math.min(maxVariants, Math.max(1, Math.round(Number(value)) || 1));
 export const promptVariants = node => Number.isInteger(node?.data?.variants) && node.data.variants >= 2 && node.data.variants <= maxVariants ? node.data.variants : 1;
+// Codex has no count parameter, so a chosen count is a rule in the request, above any number the prompt's text names.
+// With no count chosen the text still decides, as before variants reached Codex.
+export const codexImageCount = count => count > 1 ? `IMAGE COUNT (strict rule): return exactly ${count} images, as ${count} separate image tool calls with one image each, all for the final request. This count overrides any number of images the text asks for; do not stop early and do not add extra images.` : '';
 export const nanoModel = 'gemini-nano-banana-2.1';
 export const gptImageModel = 'gpt-image-2.5-flare';
 
@@ -71,6 +75,8 @@ export const generationFields = Object.freeze({ aspectRatio: aspectRatios, image
 const generationErrors = { aspectRatio: 'Invalid aspect ratio.', imageSize: 'Invalid output size.', nanoThinking: 'Invalid thinking level.', gptQuality: 'Invalid image quality.', background: 'Invalid image background.' };
 export const codexGenerator = 'codex';
 export const generatorOf = node => isSiteGenerator(node?.data?.generator) ? node.data.generator : codexGenerator;
+// A click owns its provider even if another click or teammate changes the prompt's default before it starts.
+export const withGenerator = (graph, nodeId, generator) => ({ ...graph, nodes: graph.nodes.map(node => node.id !== nodeId ? node : { ...node, data: { ...node.data, generator: isSiteGenerator(generator) ? generator : undefined } }) });
 // Only image prompts have settings: describe, upscale and 3D nodes keep their own controls.
 export const takesGenerationSettings = node => node?.type === 'text' && node.data?.task === undefined;
 export const requestedGeneration = data => Object.fromEntries(Object.entries(generationFields).filter(([key, values]) => values.includes(data?.[key])).map(([key]) => [key, data[key]]));
@@ -154,10 +160,10 @@ export const codexSettingLines = applied => [
   applied.aspectRatio ? `Aspect ratio: make each image ${applied.aspectRatio} (${orientation(ratioAspect(applied.aspectRatio))}).` : '',
   applied.background === 'transparent' ? 'Background: make each image with a transparent background (call the image tool with transparent_background).' : '',
 ].filter(Boolean);
-// Describe nodes without Codex use a small Gemini model with image input on the same site key.
-export const describeModel = 'gemini-3.5-flash-lite';
+// Describe nodes without Codex use Gemini or GPT with image input on the respective site key.
+export const describeModel = 'gemini-3.5-flash-lite', gptDescribeModel = 'gpt-6.1-terra';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5', [model3dModels.tripo]: 'Tripo H3.1' });
+export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [gptDescribeModel]: 'GPT-6.1 Terra', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5', [model3dModels.tripo]: 'Tripo H3.1' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -213,7 +219,7 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && !isSiteGenerator(node.data.generator)) throw new Error('Invalid image generator.');
     if (node.type === 'text' && node.data.mainImage !== undefined && (typeof node.data.mainImage !== 'string' || node.data.mainImage.length > 120)) throw new Error('Invalid main image.');
-    if (node.type === 'text' && node.data.generator === generators.gptImage && [describeTask, upscaleTask, model3dTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
+    if (node.type === 'text' && node.data.generator === generators.gptImage && [upscaleTask, model3dTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
     if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask, model3dTask].includes(node.data.task)) throw new Error('Invalid node task.');
     if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
     if (node.type === 'text' && node.data.modeler !== undefined && !Object.values(modelers).includes(node.data.modeler)) throw new Error('Invalid 3D modeler.');
@@ -484,7 +490,7 @@ export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
   // An upscale has no prompt; this shape only lets the editor notice changed inputs. Codex never runs it.
   if (isUpscale(target) || isModel3d(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: target.data.task };
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
-  const attachments = generationReferences(images, maskInput);
+  const attachments = generationReferences(images, maskInput), variants = promptVariants(target);
   if (attachments.length > 10) throw new Error('Use at most 10 connected reference images per run.');
   const prompt = [
     'Generate images for the final request. Earlier text is context, not additional jobs. The final request takes priority over older instructions.',
@@ -495,9 +501,10 @@ export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
     // The prompt's own settings, as Codex can follow them; a plain-text block, so helpers of any version pass it on.
     resolveGeneration(target, codexGenerator).codex.lines.join('\n'),
     'Return actual images with the built-in image tool. If multiple images are requested, generate each separately. Do not use a paid API fallback.',
+    codexImageCount(variants),
   ].filter(Boolean).join('\n\n');
   if (prompt.length > 150000) throw new Error('Connected text is too long. Disconnect some context.');
-  return { prompt, images: attachments.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target) };
+  return { prompt, images: attachments.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), ...(variants > 1 ? { variants } : {}) };
 }
 
 export function describePrompt(target, images, context) {
@@ -573,13 +580,35 @@ export function groupRunOutputs(graph, run, newOutputId) {
   return true;
 }
 
+// A finished run's own slideshow folds into its card once its last image is in (or the run stops early), so a big batch
+// becomes one card instead of a tall column. Returns whether it changed; `graph` is changed in place.
+export function foldRunGroup(graph, run) {
+  const group = run?.autoGroupId && (graph.groups || []).find(item => item.id === run.autoGroupId);
+  if (!group || !group.slideshow || group.collapsed || group.nodeIds.length < 2) return false;
+  group.collapsed = true; graph.revision = (graph.revision || 0) + 1;
+  return true;
+}
+
+// Images that all came from one prompt (its runs, or connections from it): grouping them makes a folded slideshow.
+export function onePromptImages(nodes, edges = [], runs = []) {
+  const byRun = new Map(runs.map(run => [run.id, run.nodeId])), prompts = new Set();
+  for (const node of nodes) {
+    if (node?.type !== 'image') return false;
+    const sources = edges.filter(edge => edge.target === node.id).map(edge => edge.source);
+    const prompt = byRun.get(node.data?.runId) || (sources.length === 1 ? sources[0] : undefined);
+    if (!prompt) return false;
+    prompts.add(prompt);
+  }
+  return nodes.length > 1 && prompts.size === 1;
+}
+
 export const captionHeight = node => node.type === 'image' && !node.data?.collapsed ? 24 : 0;
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
   : node.type === 'model' ? { width: 310, height: 386 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
-// An image prompt shows its settings row (with the variants on site generators) under the text.
-export const promptRowHeight = node => takesGenerationSettings(node) ? 28 : 0;
+// Prompt buttons sit below settings; describe nodes have the same model row, while upscale/3D keep their own controls.
+export const promptRowHeight = node => (takesGenerationSettings(node) ? 28 : 0) + (isUpscale(node) || isModel3d(node) ? 0 : 39);
 // Shared with the canvas, so a server can reserve a prompt's text, settings row and Inputs row without browser measurements.
 export function textNodeSize(node, inputs = false) {
   if (isModel3d(node)) return { width: 310, height: 180 };

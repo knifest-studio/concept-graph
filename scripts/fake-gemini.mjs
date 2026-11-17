@@ -27,6 +27,8 @@ createServer(async (request, response) => {
   if (mode === 'busy') return send(response, 429, { error: { code: 'rate_limit_exceeded', message: 'Resource has been exhausted.' } });
   if (mode === 'error') return send(response, 500, { error: { code: 'api_error', message: 'Internal error.' } });
   if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
+  // FAKE_DELAY_MS makes every answer take that long, so progress and parallel runs can be watched.
+  if (Number(process.env.FAKE_DELAY_MS) > 0) await new Promise(resolve => setTimeout(resolve, Number(process.env.FAKE_DELAY_MS)));
   if (response.destroyed) return;
   // Text models (descriptions) answer in words only.
   if (body.model !== 'gemini-nano-banana-2.1') {

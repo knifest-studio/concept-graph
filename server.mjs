@@ -8,8 +8,8 @@ import path from 'node:path';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Codex, CodexInstaller, generatedImageCaption } from './codex.mjs';
-import { collectInputs, localEdges, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, codexGenerator, resolveGeneration, runSettings, uniqueImageName } from './graph.mjs';
-import { positionRunOutput } from './src/output-placement.mjs';
+import { collectInputs, localEdges, maxVariants, foldRunGroup, describeTask, upscaleTask, model3dTask, descriptionNode, maxDescription, imageNode, imageSize, imageFormat, validateGraph, validateTemplate, groupRunOutputs, commitGraph, generationSettings, nextTemplateColor, codexGenerator, resolveGeneration, runSettings, uniqueImageName } from './graph.mjs';
+import { positionRunOutput, startView } from './src/output-placement.mjs';
 import { loadWorkspace, writeWorkspace, createBoard, boardName } from './workspace.mjs';
 import { authorizeHelper, helperOrigins } from './helper-auth.mjs';
 import { McpCoordinator } from './mcp-coordinator.mjs';
@@ -216,6 +216,7 @@ async function createCloudJob(value) {
       || (value.effort !== undefined && (typeof value.effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(value.effort)))
       || (value.labelOutputs !== undefined && typeof value.labelOutputs !== 'boolean')
       || (value.task !== undefined && value.task !== describeTask)
+      || (value.variants !== undefined && (value.task !== undefined || !Number.isInteger(value.variants) || value.variants < 2 || value.variants > maxVariants))
       || !Array.isArray(value.images) || value.images.length > 10 || (value.task && !value.images.length)) throw new Error('Invalid cloud job.');
   const images = value.images.map(image => {
     if (typeof image?.asset !== 'string' || !/^[\da-f-]{36}\.(png|jpg|gif|webp)$/.test(image.asset)
@@ -228,7 +229,7 @@ async function createCloudJob(value) {
   const now = new Date().toISOString();
   const job = { id: value.jobId, boardId: value.boardId, nodeId: value.nodeId, prompt: value.prompt,
     ...generationSettings,
-    labelOutputs: value.labelOutputs === true, ...(value.task ? { task: value.task } : {}), images: images.map((image, index) => `input-${index}.${image.format}`),
+    labelOutputs: value.labelOutputs === true, ...(value.task ? { task: value.task } : {}), ...(value.variants ? { variants: value.variants } : {}), images: images.map((image, index) => `input-${index}.${image.format}`),
     status: 'queued', createdAt: now, startedAt: now, progress: 'Queued.', outputs: [] };
   const temporary = path.join(cloudJobsDir, '.' + randomUUID() + '.tmp');
   try {
@@ -250,7 +251,7 @@ async function processCloudJob(job) {
     job.status = 'running'; job.startedAt = new Date().toISOString(); job.progress = job.task === describeTask ? 'Describing…' : 'Preparing your image…';
     await saveCloudJob(job);
     const result = await codex.generate({
-      prompt: job.prompt, images: job.images.map(image => path.join(directory, image)), ...generationSettings, task: job.task,
+      prompt: job.prompt, images: job.images.map(image => path.join(directory, image)), ...generationSettings, task: job.task, variants: job.variants,
       signal: controller.signal,
       onProgress: message => { job.progress = message; },
       onImage: async item => {
@@ -422,7 +423,7 @@ async function processQueue() {
       await persist(); publish('run', publicRun(run), board.id);
       try {
         const result = await codex.generate({
-          prompt: run.prompt, images: run.images.map(asset => path.join(assetsDir, asset)), signal: controller.signal, task: run.task,
+          prompt: run.prompt, images: run.images.map(asset => path.join(assetsDir, asset)), signal: controller.signal, task: run.task, variants: run.variants,
           model: run.model || generationSettings.model, effort: run.effort || generationSettings.effort,
           onDiagnostic: diagnostics.receive,
           onProgress: message => { run.message = message; publish('run', publicRun(run), board.id); },
@@ -458,11 +459,12 @@ async function processQueue() {
       }
       diagnostics.close();
       if (missingCaptions) run.captionMissing = missingCaptions;
-      const grouped = groupRunOutputs(graph, run);
+      // Grouped first (a run that ended early may still need its group), then folded into its slideshow card.
+      const grouped = groupRunOutputs(graph, run), folded = foldRunGroup(graph, run);
       run.finishedAt = new Date().toISOString();
       activeRun = null;
       await persist();
-      if (grouped) publish('graph', graph, board.id);
+      if (grouped || folded) publish('graph', graph, board.id);
       publish('run', publicRun(run), board.id);
     }
   } catch (error) { console.error('Could not save generation:', error.message); }
@@ -506,7 +508,7 @@ async function applyGraph(board, next, ensureConnected = () => {}) {
   return commitGraph(graph, next, persist);
 }
 
-async function startRun(board, { nodeId, revision }, ensureConnected = () => {}) {
+async function startRun(board, { nodeId, revision, view }, ensureConnected = () => {}) {
   const graph = board.graph;
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
@@ -518,7 +520,7 @@ async function startRun(board, { nodeId, revision }, ensureConnected = () => {})
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const label = inputs.target.data.text.trim() ? inputs.target.data.text : inputs.target.data.template?.name || (inputs.task ? 'Describe image' : '');
-  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, ...runSettings(resolveGeneration(inputs.target, codexGenerator)), status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
+  const run = { id: randomUUID(), nodeId, ...inputs, ...pageField(nodePage(inputs.target, boardPages(graph))), ...generationSettings, ...runSettings(resolveGeneration(inputs.target, codexGenerator)), ...(startView(view) ? { view: startView(view) } : {}), status: 'queued', createdAt: new Date().toISOString(), outputIds: [], label: label.slice(0, 90) };
   graph.runs.push(run);
   try { await persist(); } catch (error) { graph.runs.splice(graph.runs.indexOf(run), 1); throw error; }
   publish('run', publicRun(run), board.id);

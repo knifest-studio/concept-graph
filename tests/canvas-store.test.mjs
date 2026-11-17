@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual } from '../src/canvas-store.mjs';
+import { createCanvasStore, detailLevel, generationKey, inputCounts, latestCommands, nodeStarting, outsideViewport, runAuthor, runLookups, shallowEqual } from '../src/canvas-store.mjs';
 import { sameShape } from '../src/layers.mjs';
 
 test('canvas store notifies only when a published field changes', () => {
@@ -49,6 +49,18 @@ test('input counts survive moves and typing but follow new connections and node 
   assert.equal(sameShape(nodes, [nodes[0], { ...nodes[1], z: 4 }]), false);
   assert.equal(sameShape(nodes, [nodes[1], nodes[0]]), false);
   assert.equal(sameShape(nodes, typed), true);
+});
+
+test('each model keeps its latest run and an older active model keeps the whole prompt working', () => {
+  const runs = [{ id: 'c', nodeId: 'p', status: 'running' }, { id: 'n', nodeId: 'p', provider: 'nano-banana', status: 'failed' }, { id: 'g', nodeId: 'p', provider: 'gpt-image', status: 'completed' }];
+  const { latestRun, modelRuns, activeNodes } = runLookups(runs);
+  assert.equal(latestRun.get('p'), runs[2]); assert.equal(activeNodes.has('p'), true);
+  assert.deepEqual([...modelRuns.get('p').keys()], ['codex', 'nano-banana', 'gpt-image']);
+  assert.equal(modelRuns.get('p').get('codex'), runs[0]);
+  const starting = new Set([generationKey('p', 'codex'), generationKey('p', 'gpt-image')]);
+  starting.delete(generationKey('p', 'codex'));
+  assert.equal(nodeStarting(starting, 'p'), true); assert.equal(nodeStarting(starting, 'other'), false); assert.equal(nodeStarting(null, 'p'), false);
+  assert.notEqual(generationKey('a:b', 'c'), generationKey('a', 'b:c'));
 });
 
 test('detail level switches with slack around each threshold', () => {

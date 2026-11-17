@@ -32,7 +32,7 @@ const pageId = text('Page ID from get_board. Needed for new items on boards with
 const ids = (description, minItems = 1) => array(description, itemId, { minItems, maxItems: 2000, uniqueItems: true });
 const hex = (description, palette) => text(`${description} as #rrggbb${palette ? `; the board's own: ${palette.join(', ')}` : ''}`, { pattern: '^#[0-9a-fA-F]{6}$' });
 const layer = number('Layer order on its page; higher draws in front', { minimum: -maxLayer, maximum: maxLayer });
-const generator = choice('Who makes the images: codex (the person\'s own Codex), nano-banana (the team\'s Gemini key), or gpt-image (the team\'s OpenAI key). Describe nodes use codex or nano-banana (Gemini) only.', ['codex', generators.nanoBanana, generators.gptImage]);
+const generator = choice('Who makes the images: codex (the person\'s own Codex), nano-banana (the team\'s Gemini key), or gpt-image (the team\'s OpenAI key). Describe nodes use codex, nano-banana (Gemini), or gpt-image (GPT).', ['codex', generators.nanoBanana, generators.gptImage]);
 const variants = integer(`How many images one nano-banana or gpt-image run makes, 1–${maxVariants}; each uses one of the person's daily images, and a run that does not fit starts nothing`, { minimum: 1, maximum: maxVariants });
 // Generation settings of an image prompt; each is a field of its own, and its default value clears it. A generator that
 // cannot use a value keeps it stored and ignores it (shown dimmed on the board).

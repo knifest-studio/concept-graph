@@ -73,8 +73,23 @@ test('sixteen variants get sixteen numbered slots; those past the started calls 
   assert.ok(pending(graph(), [run({ provider: 'nano-banana', variants: 4 })]).nodes.every(node => node.data.status === 'Generating'));
 });
 
-test('Codex shows its first slot, then waits for an active image tool signal, ignoring variants', () => {
-  const board = graph(), job = run({ variants: 4 });
+test('Codex with a chosen count shows every slot at once, one generating and the rest queued, as each image lands', () => {
+  const board = graph(), job = run({ variants: 3 });
+  for (let count = 0; count < 3; count++) {
+    const result = pending(board, [job]);
+    assert.deepEqual(result.nodes.map(node => [node.id, node.data.status]), Array.from({ length: 3 - count }, (_, index) => [`run-pending-${count + index}`, index ? 'Queued' : 'Generating']));
+    const node = imageNode({ ...job, target: board.nodes[0] }, `image-${count}`, count);
+    positionRunOutput(node, board, job); assert.deepEqual(node.position, result.nodes[0].position);
+    board.nodes.push(node); job.outputIds.push(node.id);
+  }
+  assert.equal(pending(board, [job]).nodes.length, 0);
+  // An extra image beyond the count still gets its slot while the tool is drawing it.
+  job.diagnostics = { events: [{ type: 'image_started' }] };
+  assert.equal(pending(board, [job]).nodes.length, 1);
+});
+
+test('Codex without a chosen count shows its first slot, then waits for an active image tool signal', () => {
+  const board = graph(), job = run();
   for (let count = 0; count < 4; count++) {
     if (count) assert.equal(pending(board, [job]).nodes.length, 0);
     job.diagnostics = { events: [{ type: 'image_completed' }, { type: 'image_started' }] };
@@ -86,7 +101,7 @@ test('Codex shows its first slot, then waits for an active image tool signal, ig
     job.diagnostics.events.push({ type: 'image_completed' });
   }
   assert.equal(pending(board, [job]).nodes.length, 0);
-  assert.equal(pending(graph(), [run({ variants: 4 })]).nodes.length, 1);
+  assert.equal(pending(graph(), [run()]).nodes.length, 1);
 });
 
 test('Codex completion, failure and turn termination clear the active tool signal', () => {

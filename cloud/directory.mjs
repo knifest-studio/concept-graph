@@ -4,10 +4,10 @@ import { accessModes, boardRole, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxModel3dEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
+const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
-const shown = ({ owner, invited, covers, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role });
+const shown = ({ owner, invited, covers, requestCount, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role, ...(role === 'owner' && requestCount ? { requests: requestCount } : {}) });
 const email = value => { try { return normalizeEmail(value); } catch { return null; } };
 // An allowed entry: one email, or a whole domain written @example.com (a bare domain is read as one).
 const accessEntry = value => {
@@ -31,6 +31,8 @@ export class Directory extends DurableObject {
     // One row per person and board: an invitation (role) and the last visit (openedAt), so a board opened from its link stays in their list.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS board_people (board TEXT NOT NULL, email TEXT NOT NULL, role TEXT, name TEXT, openedAt TEXT, PRIMARY KEY (board, email))');
     ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS board_people_email ON board_people (email)');
+    // People a board is closed to who asked its owner to let them in, until the owner invites them, dismisses the request or opens the board to everyone with the link.
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS board_requests (board TEXT NOT NULL, email TEXT NOT NULL, name TEXT, requestedAt TEXT NOT NULL, PRIMARY KEY (board, email))');
     // The site owner, whose address is a Worker secret and never in the repository, owns the boards that have none.
     const siteOwner = email(env?.SITE_OWNER_EMAIL);
     if (siteOwner) ctx.storage.sql.exec('UPDATE boards SET owner = ? WHERE owner IS NULL', siteOwner);
@@ -219,7 +221,8 @@ export class Directory extends DurableObject {
 
   // The boards a person can open, newest first: their own, those they were invited to, those open to everyone, and link boards they opened.
   boardsFor(person) {
-    return this.ctx.storage.sql.exec(`SELECT ${boardFields}, p.role AS invited FROM boards b LEFT JOIN board_people p ON p.board = b.id AND p.email = ?
+    return this.ctx.storage.sql.exec(`SELECT ${boardFields}, p.role AS invited, (SELECT COUNT(*) FROM board_requests r WHERE r.board = b.id) AS requestCount
+      FROM boards b LEFT JOIN board_people p ON p.board = b.id AND p.email = ?
       WHERE b.deletedAt IS NULL AND (b.owner = ? OR p.role IS NOT NULL OR b.access = 'everyone' OR (b.access = 'link' AND p.openedAt IS NOT NULL))
       ORDER BY COALESCE(b.updatedAt, b.createdAt) DESC, b.rowid DESC`, person, person).toArray().map(row => shown(row, boardRole(row, person, row.invited))).filter(board => board.role);
   }
@@ -243,11 +246,27 @@ export class Directory extends DurableObject {
   openBoard(id, user) {
     const board = this.boardFor(id, user.email);
     if (!board) return { error: 'Board not found.', status: 404 };
-    if (!board.role) return { error: 'You don’t have access to this board.', status: 403, owner: { name: board.ownerName } };
+    if (!board.role) return { error: 'You don’t have access to this board.', status: 403, owner: { name: board.ownerName }, requested: this.requested(id, user.email) };
     if (board.role === 'owner') this.ctx.storage.sql.exec('UPDATE boards SET ownerName = ? WHERE id = ? AND ownerName IS NOT ?', user.name, id, user.name);
     else this.ctx.storage.sql.exec('INSERT INTO board_people (board, email, name, openedAt) VALUES (?, ?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET name = excluded.name, openedAt = excluded.openedAt', id, user.email, user.name, new Date().toISOString());
     return { board: { ...board, ownerName: board.role === 'owner' ? user.name : board.ownerName }, sharing: this.sharing(id, user.email) };
   }
+
+  // Someone the board is closed to asks its owner to let them in. The request waits in the owner's Share dialog until they
+  // invite the person, dismiss it or open the board to everyone with the link; asking again keeps the first request.
+  requestBoardAccess(id, user) {
+    const address = email(user?.email);
+    if (!address) return { error: 'Sign in to ask for access.', status: 401 };
+    const board = this.boardFor(id, address);
+    if (!board) return { error: 'Board not found.', status: 404 };
+    if (board.role) return { allowed: true };
+    const known = this.requested(id, address);
+    if (!known && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM board_requests WHERE board = ?', id).toArray()[0].count >= maxBoardRequests) return { error: 'This board has too many open access requests. Ask its owner directly.', status: 429 };
+    const name = typeof user.name === 'string' ? user.name.trim().slice(0, 80) || null : null;
+    this.ctx.storage.sql.exec('INSERT INTO board_requests (board, email, name, requestedAt) VALUES (?, ?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET name = excluded.name', id, address, name, new Date().toISOString());
+    return { requested: true, created: !known, name, email: address };
+  }
+  requested(id, person) { return !!person && this.ctx.storage.sql.exec('SELECT 1 FROM board_requests WHERE board = ? AND email = ?', id, person).toArray().length > 0; }
 
   // Who has access, as this person may see it: the owner sees invited people's emails; others see the names of those who opened the board.
   sharing(id, person) {
@@ -257,11 +276,13 @@ export class Directory extends DurableObject {
     const role = boardRole(board, person, people.find(item => item.email === person)?.role), owner = role === 'owner';
     return { role, canManage: owner, owner: board.owner ? { name: board.ownerName, ...(owner ? { email: board.owner } : {}) } : null, access: board.access, linkRole: board.linkRole,
       members: owner ? people.map(item => ({ email: item.email, role: item.role, name: item.name })) : people.filter(item => item.name).map(item => ({ name: item.name, role: item.role })),
-      pending: owner ? 0 : people.filter(item => !item.name).length };
+      pending: owner ? 0 : people.filter(item => !item.name).length,
+      ...(owner ? { requests: this.ctx.storage.sql.exec('SELECT email, name, requestedAt FROM board_requests WHERE board = ? ORDER BY requestedAt', id).toArray().map(item => ({ email: item.email, name: item.name, requestedAt: item.requestedAt })) } : {}) };
   }
 
   // Owner only. `member` invites someone or changes their role; a null role removes the invitation (a visit from the link stays).
-  changeSharing(id, person, { access, linkRole, member } = {}) {
+  // Inviting someone answers their access request, `dismiss` declines one, and opening the board to the link answers them all.
+  changeSharing(id, person, { access, linkRole, member, dismiss } = {}) {
     const board = this.ctx.storage.sql.exec('SELECT owner FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     if (!board) return { error: 'Board not found.', status: 404 };
     if (!board.owner || board.owner !== person) return { error: board.owner ? 'Only the board’s owner can change who has access.' : 'This board has no owner, so nobody can change who has access.', status: 403 };
@@ -276,7 +297,10 @@ export class Directory extends DurableObject {
       const invited = this.ctx.storage.sql.exec('SELECT email FROM board_people WHERE board = ? AND role IS NOT NULL', id).toArray();
       if (invite.role && invited.length >= maxInvited && !invited.some(item => item.email === invite.email)) return { error: `A board can have at most ${maxInvited} invited people.`, status: 400 };
     }
+    if (dismiss !== undefined && !email(dismiss)) return { error: 'Enter a valid email address.', status: 400 };
     if (access !== undefined || linkRole !== undefined) this.ctx.storage.sql.exec('UPDATE boards SET access = COALESCE(?, access), linkRole = COALESCE(?, linkRole) WHERE id = ?', access ?? null, linkRole ?? null, id);
+    if (access && access !== 'private') this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ?', id);
+    if (invite?.role || dismiss !== undefined) this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ? AND email = ?', id, invite?.role ? invite.email : email(dismiss));
     if (invite?.role) this.ctx.storage.sql.exec('INSERT INTO board_people (board, email, role) VALUES (?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET role = excluded.role', id, invite.email, invite.role);
     else if (invite) this.ctx.storage.sql.exec('UPDATE board_people SET role = NULL WHERE board = ? AND email = ?', id, invite.email);
     return { sharing: this.sharing(id, person) };
@@ -327,6 +351,7 @@ export class Directory extends DurableObject {
   forgetBoard(id) {
     this.ctx.storage.sql.exec('DELETE FROM boards WHERE id = ?', id);
     this.ctx.storage.sql.exec('DELETE FROM board_people WHERE board = ?', id);
+    this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ?', id);
   }
 
   updateBoardStats(id, { updatedAt, imageCount, covers }) {

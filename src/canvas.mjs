@@ -222,12 +222,12 @@ export function nodeHandles(node, { width, height }, fromModel = false) {
   return handles;
 }
 // Frames are not positioned, so their handles sit on the node box itself.
-const frameHandles = ({ width, height }) => [{ id: null, type: 'target', position: 'left', x: -10, y: height / 2 - 5, width: 10, height: 10 }, { id: null, type: 'source', position: 'right', x: width, y: height / 2 - 5, width: 10, height: 10 }];
+export const frameHandles = ({ width, height }) => [{ id: null, type: 'target', position: 'left', x: -10, y: height / 2 - 5, width: 10, height: 10 }, { id: null, type: 'source', position: 'right', x: width, y: height / 2 - 5, width: 10, height: 10 }];
 const groupHandles = Object.freeze(frameHandles(foldedGroup));
 const edgeStyles = { text: Object.freeze({ stroke: connectionColor('text'), strokeWidth: 2 }), image: Object.freeze({ stroke: connectionColor('image'), strokeWidth: 2 }) };
 
 // Per-editor memory for canvasView: unchanged inputs give back the same objects (and arrays), so React Flow skips them.
-export const createViewCache = () => ({ nodes: new WeakMap(), frames: new WeakMap(), edges: new WeakMap(), sections: new WeakMap(), sizes: new Map(), layers: null, sectionLayers: null, view: null });
+export const createViewCache = () => ({ nodes: new WeakMap(), frames: new WeakMap(), edges: new WeakMap(), sections: new WeakMap(), copies: new WeakMap(), sizes: new Map(), layers: null, sectionLayers: null, links: null, view: null });
 const folded = Object.freeze({ width: 72, height: 72 });
 const sameItems = (a, b) => a?.length === b.length && a.every((item, index) => item === b[index]);
 const noItems = Object.freeze([]);
@@ -240,6 +240,63 @@ function sectionLayers(sections, cache) {
   const layers = new Map(order.map((section, index) => [section.id, index - order.length - 1]));
   cache.sectionLayers = { sections, layers };
   return layers;
+}
+
+// Connections lie under every card (layer 0), except where a card lies on another: over each card it covers, its
+// connections are drawn again, cut to that card's box and one layer above it (still under the covering card and under
+// anything else lying on the covered card). So a link reaching a card never slips under the card beneath it, and it never
+// covers a card its own card doesn't. An open group's frame under its own images doesn't count: links enter through it.
+// Cards sit in a coarse grid kept between calls, so moving one card only re-checks the cards around it.
+const linkCell = 512, cellKey = (x, y) => (x + 5e5) * 1e6 + y + 5e5;
+function coveredCards(lists, groups, cache) {
+  const state = cache.links ||= { boxes: new Map(), grid: new Map(), covers: new Map(), groups: null, own: new Map(), stamp: 0 }, { boxes, grid, covers } = state, dirty = new Set(), stamp = ++state.stamp;
+  let all = false;
+  if (!sameItems(state.groups, groups)) {
+    state.groups = groups; state.own = new Map(); all = true;
+    for (const group of groups) if (!group.collapsed) for (const id of group.nodeIds) state.own.set(id, group.id);
+  }
+  const place = (entry, add) => { for (const key of entry.keys) {
+    let list = grid.get(key);
+    if (add) { if (list) list.push(entry.box); else grid.set(key, [entry.box]); } else if (list) { list.splice(list.indexOf(entry.box), 1); if (!list.length) grid.delete(key); }
+    dirty.add(key);
+  } };
+  let seen = 0;
+  for (const views of lists) for (const view of views) {
+    if (!view) continue;
+    const before = boxes.get(view.id);
+    if (before?.view === view) { before.stamp = stamp; seen++; continue; }
+    if (before) { place(before, false); boxes.delete(view.id); }
+    const size = view.type === 'group' ? view : view.measured;
+    if (view.hidden || view.type === 'arrow' || !size || !(view.zIndex > -Infinity)) { covers.delete(view.id); continue; }
+    const box = { id: view.id, z: view.zIndex, x: view.position.x, y: view.position.y, width: size.width, height: size.height }, keys = [];
+    for (let x = Math.floor(box.x / linkCell), right = Math.floor((box.x + box.width) / linkCell); x <= right; x++)
+      for (let y = Math.floor(box.y / linkCell), bottom = Math.floor((box.y + box.height) / linkCell); y <= bottom; y++) keys.push(cellKey(x, y));
+    const entry = { view, box, keys, stamp };
+    boxes.set(view.id, entry); place(entry, true); seen++;
+  }
+  if (seen < boxes.size) for (const [id, entry] of boxes) if (entry.stamp !== stamp) { place(entry, false); boxes.delete(id); covers.delete(id); }
+  const measure = entry => {
+    const { box, keys } = entry, own = state.own.get(box.id), found = [], before = covers.get(box.id);
+    for (const key of keys) for (const other of grid.get(key)) if (other.z < box.z && other.z >= 0 && other.id !== own && !found.includes(other)
+      && other.x < box.x + box.width && box.x < other.x + other.width && other.y < box.y + box.height && box.y < other.y + other.height) found.push(other);
+    // The same covered boxes keep the same list, so the links' copies are kept too while the covering card moves.
+    if (!found.length) covers.delete(box.id);
+    else if (!before || before.length !== found.length || found.some(other => !before.includes(other))) covers.set(box.id, found);
+  };
+  if (all) for (const entry of boxes.values()) measure(entry);
+  else { const again = new Set(); for (const key of dirty) for (const box of grid.get(key) || noItems) again.add(box.id); for (const id of again) measure(boxes.get(id)); }
+  return covers;
+}
+// One copy of a link per card its ends cover, drawn by the 'over' edge (main.jsx) and never selected, moved or saved.
+function linkCopies(edge, ...lists) {
+  const seen = new Set(), copies = [];
+  for (const list of lists) for (const box of list || noItems) if (!seen.has(box.id)) {
+    seen.add(box.id);
+    copies.push({ id: `${edge.id}~over~${box.id}`, source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle, targetHandle: edge.targetHandle, type: 'over',
+      zIndex: box.z + 1, className: 'link-over', selectable: false, focusable: false, deletable: false, reconnectable: false, style: edge.style,
+      data: { edge: edge.id, clip: { x: box.x, y: box.y, width: box.width, height: box.height } } });
+  }
+  return copies;
 }
 
 // The size a node is drawn at: its last measurement, or the same estimate canvasView uses for a card not drawn yet.
@@ -263,7 +320,8 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   const viewNodes = nodes.map((node, index) => {
     byId.set(node.id, node);
     if (node.type === 'arrow') { arrows.push(index); return null; }
-    const zIndex = layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node), fromModel = node.type === 'image' && modelViews.has(node.id);
+    // Cards take the even layers (2, 4, …), so an open group's frame fits between them, just under its own members.
+    const zIndex = 2 * layers.get(node.id), hidden = collapsed.has(node.id), size = known(node), saved = cache.nodes.get(node), input = !size && inputs(node), fromModel = node.type === 'image' && modelViews.has(node.id);
     if (saved && saved.zIndex === zIndex && saved.hidden === hidden && saved.size === size && saved.input === input && saved.fromModel === fromModel) return saved.view;
     if (node.measured && node.data?.collapsed !== true) cache.sizes.set(node.id, node.measured);
     const view = { ...node, zIndex, hidden, selected: hidden ? false : node.selected };
@@ -276,29 +334,43 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   });
   const shown = node => known(node) || cache.nodes.get(node)?.view.measured || estimatedSize(node, inputs(node));
   // Arrows follow the nodes they hold, so they are placed once every node is known.
-  for (const index of arrows) viewNodes[index] = arrowView(nodes[index], byId, shown, layers.get(nodes[index].id), cache);
+  for (const index of arrows) viewNodes[index] = arrowView(nodes[index], byId, shown, 2 * layers.get(nodes[index].id), cache);
   const frames = groups.map(group => {
     const bounds = groupBounds(group, nodes, byId, shown), slides = group.slideshow ? slideshowState(group, byId) : null, slide = slides?.node;
     const { x, y, width, height } = group.collapsed ? slide ? foldedTop(bounds, foldedSize(slide, cache.aspects)) : { ...bounds, ...foldedGroup } : bounds, saved = cache.frames.get(group);
-    if (saved && saved.x === x && saved.y === y && saved.width === width && saved.height === height && saved.slide === slide) return saved.view;
+    // A folded group is a card like any node: it sits at its top member's layer, above the connections' layer (0), so no
+    // link is drawn across it. An open group's frame sits just under its lowest member, so the frame and its images stay
+    // one unit above (or below) the cards around them; with no member on this page it stays at the bottom (-1).
+    const members = group.nodeIds.map(id => layers.get(id)).filter(Boolean);
+    const zIndex = group.collapsed ? 2 * Math.max(1, ...members) : members.length ? 2 * Math.min(...members) - 1 : -1;
+    if (saved && saved.x === x && saved.y === y && saved.width === width && saved.height === height && saved.slide === slide && saved.zIndex === zIndex) return saved.view;
     const images = slides ? slides.images.length : group.nodeIds.reduce((count, id) => count + (byId.get(id)?.type === 'image'), 0);
     // A stored group colour is kept for older boards but no longer drawn: groups only bundle and fold nodes.
     const view = { id: group.id, type: 'group', position: { x, y }, selected: !!group.selected,
       data: { name: group.name, count: group.nodeIds.length, collapsed: group.collapsed, images,
         ...(slides ? { slideshow: true, index: slides.index, ...(slide ? { slide: { id: slide.id, asset: slide.data.asset, aspect: slide.data.aspect } } : {}) } : {}) },
-      // Below the connections' layer (0), so a folded frame never hides the links between its members.
-      width, height, measured: { width, height }, style: { width, height }, zIndex: -1, handles: group.collapsed ? (slide ? frameHandles({ width, height }) : groupHandles) : [] };
-    cache.frames.set(group, { x, y, width, height, slide, view });
+      width, height, measured: { width, height }, style: { width, height }, zIndex, handles: group.collapsed ? (slide ? frameHandles({ width, height }) : groupHandles) : [] };
+    cache.frames.set(group, { x, y, width, height, slide, zIndex, view });
     return view;
   });
+  const covers = edges.length ? coveredCards([viewNodes, frames], groups, cache) : null, copies = [];
+  const copied = view => {
+    const a = !view.hidden && covers.get(view.source), b = !view.hidden && covers.get(view.target);
+    if (a || b) {
+      const saved = cache.copies.get(view);
+      if (saved && saved.a === a && saved.b === b) copies.push(...saved.list);
+      else { const list = linkCopies(view, a, b); cache.copies.set(view, { a, b, list }); copies.push(...list); }
+    }
+    return view;
+  };
   const viewEdges = edges.map(edge => {
     const source = collapsed.get(edge.source) || edge.source, target = collapsed.get(edge.target) || edge.target;
     const prompt = byId.get(edge.target), targetHandle = target === edge.target && isGptImage(prompt) && byId.get(edge.source)?.type === 'image' && prompt.data.mainImage === edge.source ? 'main' : undefined;
     const kind = byId.get(edge.source)?.type === 'image' ? 'image' : 'text', saved = cache.edges.get(edge);
-    if (saved && saved.source === source && saved.target === target && saved.kind === kind && saved.targetHandle === targetHandle) return saved.view;
+    if (saved && saved.source === source && saved.target === target && saved.kind === kind && saved.targetHandle === targetHandle) return copied(saved.view);
     const view = { ...edge, source, target, targetHandle, hidden: source === target, style: edgeStyles[kind] };
     cache.edges.set(edge, { source, target, kind, targetHandle, view });
-    return view;
+    return copied(view);
   });
   const sectionZ = sections.length ? sectionLayers(sections, cache) : null;
   const sectionViews = sections.map(section => {
@@ -313,7 +385,7 @@ export function canvasView(nodes, edges, groups, cache = createViewCache(), sect
   });
   const all = sectionViews.length ? [...sectionViews, ...frames, ...viewNodes] : [...frames, ...viewNodes], last = cache.view;
   cache.view = { nodes: last && sameItems(last.nodes, all) ? last.nodes : all, edges: last && sameItems(last.edges, viewEdges) ? last.edges : viewEdges,
-    sections: last && sameItems(last.sections, sectionViews) ? last.sections : sectionViews };
+    sections: last && sameItems(last.sections, sectionViews) ? last.sections : sectionViews, copies: last && sameItems(last.copies, copies) ? last.copies : copies.length ? copies : noItems };
   return cache.view;
 }
 

@@ -126,7 +126,7 @@ runtimeTest('invitations, roles, link visits and the board list follow the owner
   directory.changeSharing(linked.id, owner.email, { access: 'link' });
   directory.changeSharing(team.id, owner.email, { access: 'everyone', linkRole: 'edit' });
   const { sharing } = directory.changeSharing(invited.id, owner.email, { member: { email: ' Guest@Mail.example ', role: 'view' } });
-  assert.deepEqual(sharing, { role: 'owner', canManage: true, owner: { name: 'Owner', email: owner.email }, access: 'private', linkRole: 'view', members: [{ email: guest.email, role: 'view', name: null }], pending: 0 });
+  assert.deepEqual(sharing, { role: 'owner', canManage: true, owner: { name: 'Owner', email: owner.email }, access: 'private', linkRole: 'view', members: [{ email: guest.email, role: 'view', name: null }], pending: 0, requests: [] });
   assert.deepEqual(ids(directory.boardsFor(guest.email)), [everyone.id, invited.id, team.id]);
   assert.deepEqual(directory.boardsFor(guest.email).map(board => board.role), ['edit', 'view', 'edit']);
   assert.deepEqual(ids(directory.boardsFor(owner.email)), [everyone.id, invited.id, team.id, linked.id, secret.id]);
@@ -136,7 +136,7 @@ runtimeTest('invitations, roles, link visits and the board list follow the owner
   assert.deepEqual(ids(directory.boardsFor(guest.email)), [everyone.id, invited.id, team.id, linked.id]);
   directory.changeSharing(linked.id, owner.email, { access: 'private' });
   assert.deepEqual(ids(directory.boardsFor(guest.email)), [everyone.id, invited.id, team.id]);
-  assert.deepEqual(directory.openBoard(linked.id, guest), { error: 'You don’t have access to this board.', status: 403, owner: { name: 'Owner' } });
+  assert.deepEqual(directory.openBoard(linked.id, guest), { error: 'You don’t have access to this board.', status: 403, owner: { name: 'Owner' }, requested: false });
   assert.deepEqual(directory.openBoard(crypto.randomUUID(), guest), { error: 'Board not found.', status: 404 });
   assert.equal(directory.openBoard(secret.id, guest).status, 403);
   // Changing and removing an invitation.
@@ -176,7 +176,7 @@ runtimeTest('board routes give each person their role and let only the owner ren
   assert.deepEqual((await (await request('/api/cloud/boards', { cookie: guest.cookie })).json()).boards, []);
   const denied = await request(path, { cookie: guest.cookie });
   assert.equal(denied.status, 403);
-  assert.deepEqual(await denied.json(), { error: 'You don’t have access to this board.', owner: { name: 'Owner' } });
+  assert.deepEqual(await denied.json(), { error: 'You don’t have access to this board.', owner: { name: 'Owner' }, requested: false });
   assert.equal((await request(`${path}/sharing`, { cookie: guest.cookie })).status, 403);
   assert.equal((await request(`/api/cloud/boards/${crypto.randomUUID()}`, { cookie: guest.cookie })).status, 404);
   assert.equal((await request('/api/cloud/boards/not-a-board/sharing', { cookie: guest.cookie })).status, 404);
@@ -428,4 +428,45 @@ test('a call reaches only the person called, in the caller’s own name, at most
   boardRoom.getConnections = () => [alice, carol];
   send(person('anon@studio.example', null, [41]), { type: 'attention', to: 'all' });
   assert.equal(received(carol).length, before);
+});
+
+runtimeTest('someone a board is closed to can ask for access; the owner hears it, lets them in or declines', async t => {
+  const { env, request, person } = setup(t), notices = [], get = env.BoardRoom.get;
+  env.BoardRoom.get = name => ({ ...get(name), accessRequested: async notice => { notices.push([name, notice]); } });
+  const owner = await person('owner@studio.example', 'Owner'), guest = await person('guest@mail.example', 'Guest'), other = await person('other@mail.example', 'Other');
+  const { board } = await (await request('/api/cloud/boards', { method: 'POST', cookie: owner.cookie, data: { name: 'Closed' } })).json();
+  const open = async who => request(`/api/cloud/boards/${board.id}`, { cookie: who.cookie }), ask = who => request(`/api/cloud/boards/${board.id}/access-request`, { method: 'POST', cookie: who.cookie });
+  assert.deepEqual(await (await open(guest)).json(), { error: 'You don’t have access to this board.', owner: { name: 'Owner' }, requested: false });
+  assert.equal((await request(`/api/cloud/boards/${board.id}/access-request`, { cookie: guest.cookie })).status, 405);
+  assert.deepEqual(await (await ask(guest)).json(), { requested: true });
+  assert.deepEqual(await (await ask(guest)).json(), { requested: true }, 'asking again keeps the first request');
+  assert.deepEqual(notices, [[board.id, { name: 'Guest', email: 'guest@mail.example' }]], 'the owner on the board hears it once');
+  assert.equal((await (await open(guest)).json()).requested, true);
+  assert.deepEqual(await (await ask(owner)).json(), { allowed: true });
+  await ask(other);
+  // Only the owner sees who asks: in Share and as a count on their board in the list.
+  const sharing = async who => (await (await request(`/api/cloud/boards/${board.id}/sharing`, { cookie: who.cookie })).json()).sharing;
+  assert.deepEqual((await sharing(owner)).requests.map(item => [item.email, item.name]), [['guest@mail.example', 'Guest'], ['other@mail.example', 'Other']]);
+  assert.equal((await (await request('/api/cloud/boards', { cookie: owner.cookie })).json()).boards.find(item => item.id === board.id).requests, 2);
+  // Letting someone in invites them and answers their request; declining removes it without access.
+  const change = data => request(`/api/cloud/boards/${board.id}/sharing`, { method: 'PATCH', cookie: owner.cookie, data });
+  assert.deepEqual((await (await change({ member: { email: 'guest@mail.example', role: 'view' } })).json()).sharing.requests.map(item => item.email), ['other@mail.example']);
+  assert.equal((await (await open(guest)).json()).board.role, 'view');
+  assert.deepEqual((await (await change({ dismiss: 'other@mail.example' })).json()).sharing.requests, []);
+  assert.equal((await open(other)).status, 403);
+  assert.equal((await (await open(other)).json()).requested, false);
+  assert.equal((await (await request('/api/cloud/boards', { cookie: owner.cookie })).json()).boards.find(item => item.id === board.id).requests, undefined);
+  // Opening the board to everyone with the link answers every request at once.
+  await ask(other);
+  await change({ access: 'link' });
+  assert.deepEqual((await sharing(owner)).requests, []);
+  assert.equal((await (await request('/api/cloud/boards/00000000-0000-4000-8000-000000000000/access-request', { method: 'POST', cookie: guest.cookie })).status), 404);
+});
+
+runtimeTest('an access request reaches only the owner’s connections on the board', t => {
+  const boardRoom = room(t), owner = connection({ email: 'owner@studio.example', role: 'owner' }), editor = connection({ email: 'editor@studio.example', role: 'edit' });
+  boardRoom.getConnections = () => [owner, editor];
+  boardRoom.accessRequested({ name: 'Guest', email: 'guest@mail.example' });
+  assert.deepEqual(owner.sent.map(message => JSON.parse(String(message).replace(/^__YPS:/, ''))), [{ type: 'access-request', name: 'Guest', email: 'guest@mail.example' }]);
+  assert.deepEqual(editor.sent, []);
 });

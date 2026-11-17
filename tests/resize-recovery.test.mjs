@@ -5,6 +5,7 @@ import { overLimitReferences, resizeRecovery, tooLargeToReduce, transformInputBy
 import { defaultResizeSide, resizeAllTargets, resizeTarget } from '../src/image-resize.mjs';
 import { resizedImageData } from '../src/image-edits.mjs';
 import { generationIntent, intentUnchanged } from '../src/onboarding.mjs';
+import { withGenerator } from '../graph.mjs';
 
 const asset = i => `${String(i).repeat(8)}-${String(i).repeat(4)}-${String(i).repeat(4)}-${String(i).repeat(4)}-${String(i).repeat(12)}.png`;
 const image = (id, file, mask) => ({ id, type: 'image', position: { x: 0, y: 0 }, data: { asset: file, ...(mask ? { mask } : {}) } });
@@ -38,8 +39,8 @@ function editor({ changed = false, fail = false } = {}) {
   let graph = { nodes: [prompt('p'), image('a', asset(1)), image('b', asset(2))], edges: [edge('a', 'p'), edge('b', 'p')] };
   const recovery = { nodeId: 'p', intent: generationIntent(graph, 'board', 'p'), assets: [asset(1), asset(2)] }, calls = [], errors = [], uploads = { current: 0 };
   let checks = 0, undo;
-  const env = { resizingReferences: { current: false }, resizeRecovery: recovery, generationStarting: { current: false }, readOnlyRef: { current: false }, mcpLocked: { current: false }, switchingRef: { current: false }, alive: { current: true }, boardId: 'board', uploads,
-    syncCloud() { if (changed && ++checks === 2) graph.nodes[1].data.asset = asset(6); }, currentGraph: () => graph, intentUnchanged, resizeAllTargets, defaultResizeSide, resizeTarget, resizedImageData,
+  const env = { resizingReferences: { current: false }, resizeRecovery: recovery, generationStarting: { current: new Set() }, readOnlyRef: { current: false }, mcpLocked: { current: false }, switchingRef: { current: false }, alive: { current: true }, boardId: 'board', uploads,
+    syncCloud() { if (changed && ++checks === 2) graph.nodes[1].data.asset = asset(6); }, currentGraph: () => graph, intentUnchanged, withGenerator, resizeAllTargets, defaultResizeSide, resizeTarget, resizedImageData,
     loadResizeImage: async file => { calls.push(['load', file]); return { image: { naturalWidth: 7680, naturalHeight: 4320 } }; }, assetUrl: file => file,
     saveResizedImage: async (data, image, target) => { if (fail && data.asset === asset(2)) throw new Error('Upload failed'); return resizedImageData(data, data.asset === asset(1) ? asset(4) : asset(5), target, { width: 7680, height: 4320 }); }, uploadEdit() {},
     checkpoint() { undo = structuredClone(graph); calls.push(['checkpoint']); }, putNodes(update) { graph = { ...graph, nodes: update(graph.nodes) }; }, markDirty() { calls.push(['dirty']); }, track() {}, setResizeRecovery() {}, setUploading() {},

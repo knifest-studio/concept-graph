@@ -5,16 +5,24 @@ import { t } from './i18n.mjs';
 export const usesSiteGenerator = data => isSiteGenerator(data?.generator) || [upscaleTask, model3dTask].includes(data?.task);
 export const dollars = value => `$${value.toFixed(2).replace(/\.00$/, '')}`;
 
+// Exhausted site models stay visible, so limits never masquerade as a missing model. Codex is also the setup fallback.
+export function promptGenerators({ cloud, describe = false, codexReady, known, nano, gpt }) {
+  const models = cloud && known ? [[generators.nanoBanana, describe ? 'Gemini' : 'Nano Banana', nano], [generators.gptImage, describe ? 'GPT' : 'GPT Image', gpt]]
+    .filter(([, , status]) => status?.selectable).map(([generator, name, status]) => ({ generator, name, disabled: !(describe ? status.selectable : status.ready), note: status.note })) : [];
+  if (!cloud || codexReady || !models.length) models.unshift({ generator: codexGenerator, name: 'Codex', disabled: false, note: '' });
+  return { models, connect: !!cloud && !codexReady && models[0].generator !== codexGenerator, request: !!cloud && !!nano?.requestable };
+}
+
 // The generator a new image prompt or describe node starts on (null is Codex). On Nov 16 a fifth of the newcomers'
 // Generate presses opened helper pairing because every new prompt started on Codex, though they could use the team
 // key. So a prompt starts on the generator this person last used, while it still works for them; failing that, on the
 // team key when their own Codex isn't ready and the key is theirs to use; otherwise on Codex, the only generator
 // everyone has. Until the site says what this person may use, only a generator they used before is assumed to work.
-// `nano` and `gpt` are nanoState results; describe nodes use Gemini on the Nano Banana key and have no GPT Image.
+// `nano` and `gpt` are nanoState results; describe nodes use Gemini or GPT on the respective site key.
 export function startingGenerator({ describe = false, last, codexReady, known, nano, gpt }) {
   const works = generator => generator === codexGenerator ? codexReady
     : generator === generators.nanoBanana ? (known || last === generator) && (describe ? nano.selectable : nano.ready)
-      : generator === generators.gptImage ? !describe && (known || last === generator) && gpt.ready : false;
+      : generator === generators.gptImage ? (known || last === generator) && (describe ? gpt.selectable : gpt.ready) : false;
   if (last && works(last)) return last === codexGenerator ? null : last;
   if (!codexReady) for (const generator of [generators.nanoBanana, generators.gptImage]) if (known && works(generator)) return generator;
   return null;
@@ -27,7 +35,7 @@ export function readLastGenerators(storage = globalThis.localStorage) {
 }
 export function rememberGenerator(data, generator, storage = globalThis.localStorage) {
   const kind = generatorKind(data), value = isSiteGenerator(generator) ? generator : codexGenerator;
-  if (!kind || (kind === 'describe' && value === generators.gptImage)) return;
+  if (!kind) return;
   try { storage.setItem(lastGeneratorKey, JSON.stringify({ ...readLastGenerators(storage), [kind]: value })); } catch {}
 }
 

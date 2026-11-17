@@ -299,7 +299,7 @@ test('Nano Banana prompts start and cancel through the board API, never through 
   await generation.startNano('p');
   assert.equal(calls[0][0], '/api/boards/board/nano'); assert.equal(calls[0][1].method, 'POST');
   // settings: 1 tells the room this page shows generation settings.
-  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID), settings: 1 });
+  assert.deepEqual(JSON.parse(calls[0][1].body), { nodeId: 'p', generator: 'nano-banana', client: doc.clientID, clock: Y.getState(doc.store, doc.clientID), settings: 1 });
   assert.deepEqual(started, ['nano-run']);
   doc.getMap('runs').set('nano-run', { id: 'nano-run', nodeId: 'p', status: 'queued', provider: 'nano-banana', model: 'gemini-nano-banana-2.1', by: user, startedAt: '2026-11-04T10:00:00.000Z' });
   await generation.startNano('p');
@@ -459,7 +459,8 @@ runtimeTest('Generate places Nano Banana images like Codex outputs for everyone 
   // Stored connections also keep when they were made (src/cloud-sync.mjs).
   assert.ok(graph.edges.every(edge => Number.isFinite(edge.order)));
   assert.deepEqual(graph.edges.filter(edge => edge.source === 'p').map(({ order, ...edge }) => edge), expected.edges.filter(edge => edge.source === 'p'));
-  assert.deepEqual(graph.groups, [{ id: `${id}-group`, name: 'Group 1', collapsed: false, slideshow: true, nodeIds: run.outputIds }]);
+  // The finished run's slideshow folds into its card.
+  assert.deepEqual(graph.groups, [{ id: `${id}-group`, name: 'Group 1', collapsed: true, slideshow: true, nodeIds: run.outputIds }]);
   for (const outputId of run.outputIds) {
     const asset = graph.nodes.find(node => node.id === outputId).data.asset;
     assert.match(asset, /^[\da-f-]{36}\.png$/); assert.equal(files.get(`assets/${asset}`).httpMetadata.contentType, 'image/png');

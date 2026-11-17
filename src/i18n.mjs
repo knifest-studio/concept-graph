@@ -44,7 +44,8 @@ export function t(text, values) {
       if ((match = /^(.*) Only (\d+) of (\d+) images fit; connect fewer\.$/s.exec(text))) return t('{reason} Only {count} of {total} images fit; connect fewer.', { reason: t(match[1]), count: match[2], total: match[3] });
     }
     if (text.startsWith('Daily limit reached (') && (match = /^Daily limit reached \((\d+)\/(\d+)\)\.$/.exec(text))) return t('Daily limit reached ({used}/{limit}).', { used: match[1], limit: match[2] });
-    if (text.includes(' took longer than ') && (match = /^(Nano Banana|GPT Image) took longer than (\d+) minutes\. Try again\.$/.exec(text))) return t('{name} took longer than {minutes} minutes. Try again.', { name: match[1], minutes: match[2] });
+    if (text.includes(' took longer than ') && (match = /^(Nano Banana|GPT Image|Gemini|GPT) took longer than (\d+) minutes\. Try again\.$/.exec(text))) return t('{name} took longer than {minutes} minutes. Try again.', { name: match[1], minutes: match[2] });
+    if ((match = /^GPT failed \((\d+)\)\. Try again\.$/.exec(text))) return t('GPT failed ({status}). Try again.', { status: match[1] });
     // Reference size errors from the board room (cloud/reference-prep.mjs) name the image and the provider.
     match = /^Reference images are (still )?too large for (.+?) (after reducing them )?\(([\d.]+) MB in total\)\. (Use fewer or smaller images|Use fewer images)\.$/.exec(text);
     if (match) return t(match[1] ? 'Reference images are still too large for {name} after reducing them ({size} MB in total). Use fewer images.' : 'Reference images are too large for {name} ({size} MB in total). Use fewer or smaller images.', { name: t(match[2]), size: match[4] });
