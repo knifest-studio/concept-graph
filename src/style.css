@@ -414,3 +414,7 @@ button,a,.image-collapse,.image-prompt-from,.image-expand,.image-shade{transitio
 }
 @media(max-height:860px) and (max-width:950px){.tool-list{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px 9px}}
 @media(max-height:860px) and (max-width:650px){.tool-list{grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 6px;gap:4px}.tool-list>button:not(.add-prompt-tool)>.tool-short{display:none}.tool-list>button:not(.add-prompt-tool){padding:4px 0}}
+
+/* Bulk recovery is a persistent action, not the toast's small dismiss icon. */
+.toast.resize-recovery { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.toast.resize-recovery button { width: auto; height: auto; flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }

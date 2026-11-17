@@ -150,3 +150,19 @@ test('error facts give the type and own-script location, flag known noise and ne
     assert.deepEqual(sanitizeEvent({ seq: 1, kind: 'error', time: Date.now(), name: 'window_error', details: bad }).details, {}, JSON.stringify(bad));
   }
 });
+
+
+test('new private-control names remain useful in English and Ukrainian without any user text', async () => {
+  for (const label of ['Done', 'Add', 'Account', 'Team access', 'Product analytics', 'Sign out', 'Switch board', 'Board menu', 'Rename section', 'Rename group', 'Brush', 'Eraser', 'Clear mask', 'Undo', 'Redo', 'Reset crop', 'Apply', 'Resize', 'Connect MCP', 'Keyboard shortcuts', 'Generation', 'Teammate menu', 'Go to teammate', 'Call teammate here', 'Allow', 'Decline', 'Revoke', 'Ask to use', 'Stop using their Codex', 'Cancel request']) {
+    for (const ariaLabel of [label, uk[label]]) {
+      assert.ok(ariaLabel, label);
+      const name = controlName({ ariaLabel, text: secret, tooltip: secret, private: true, tag: 'button', type: 'button' });
+      assert.ok(name && !name.startsWith('button[') && !name.includes(secret), ariaLabel);
+    }
+  }
+  const main = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8'), help = await readFile(new URL('../src/HelpMenu.jsx', import.meta.url), 'utf8');
+  assert.match(main, /role="dialog" aria-label=\{t\('Connect MCP'\)\}/);
+  assert.match(help, /role="dialog" aria-label=\{t\(title\)\}/);
+  assert.match(main, /className="helper-browser-warning" role="alert" data-analytics-notice="helper_browser_compatibility"/);
+  assert.equal(errorMessage('Open this page in ChromeSafari and in-app browsers such as Telegram’s block websites from reaching the helper on your computer, so pairing cannot work here.'), 'Open');
+});

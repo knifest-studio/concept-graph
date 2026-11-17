@@ -83,7 +83,7 @@ test('Generate on a Codex prompt without the helper offers the team key beside t
   const tab = ({ nano = allowed, known = true, readiness = 'helper', task } = {}) => {
     const calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot', ...(task ? { task } : {}) } };
     const env = { alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
-      notify() {}, inform() {}, starting: null, generationStarting: ref(false), nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
+      notify() {}, inform() {}, starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
       model3dRef: ref(nano), gptRef: ref(nano), nanoRef: ref(nano), readinessRef: ref({ key: readiness }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t,
       fixReadiness: () => calls.push(['fix']), cloudSession: { nano: known ? {} : undefined, openPair: (...args) => calls.push(['pair', ...args]) }, track() {}, promptAnalytics: () => ({}),
       setGenerator: (id, generator) => calls.push(['generator', id, generator]), runAction: ref(id => calls.push(['run', id])) };
@@ -225,7 +225,7 @@ test('the picker and the Codex setup dialog let someone without access ask for i
   // Generate without the helper and without access: the setup dialog offers the request, then says it was sent.
   const source = part('  const run = async (nodeId, resumeIntent = null, event) => {', '  runAction.current = run;'), calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot' } };
   const env = { alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
-    notify() {}, inform() {}, starting: null, generationStarting: ref(false), nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
+    notify() {}, inform() {}, starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
     model3dRef: ref(open), gptRef: ref(open), nanoRef: ref(open), readinessRef: ref({ key: 'helper' }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t, nanoState,
     fixReadiness: () => calls.push(['fix']), cloudSession: { nano: { configured: true, allowed: false, admins: ['Olena'] }, openPair: (...args) => calls.push(['pair', ...args]), requestAccess: async () => { calls.push(['request']); return { requested: true }; } },
     track() {}, promptAnalytics: () => ({}), setGenerator() {}, runAction: ref(() => {}) };

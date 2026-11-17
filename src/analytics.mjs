@@ -63,7 +63,7 @@ function createSession() {
   const build = (kind, name, data, area = '') => sanitizeEvent({ seq: 0, time: Date.now(), kind, name, area: area || 'editor', board: context.board, details: { ...context, ...data } });
   function event(kind, name, data, area = '') {
     if (stopped) return;
-    if (name === 'generation_started' && !state.firstGeneration) { state.firstGeneration = true; event('app', 'time_to_first_generation', { duration: Date.now() - started }); }
+    if (name === 'generation_started' && !state.firstGeneration) { state.firstGeneration = true; event('app', 'time_to_first_generation', elapsed()); }
     const clean = build(kind, name, data, area);
     if (clean && !(kind === 'error' && repeated(clean))) send(clean);
   }
@@ -97,7 +97,7 @@ function createSession() {
     if (unload) {
       for (const events of batches) {
         const body = new Blob([JSON.stringify({ session, events })], { type: 'application/json' });
-        if (!navigator.sendBeacon?.('/api/analytics/events', body)) fetch('/api/analytics/events', { method: 'POST', body, credentials: 'same-origin', keepalive: true }).catch(() => {});
+        if (!navigator.sendBeacon?.('/api/analytics/batch', body)) fetch('/api/analytics/batch', { method: 'POST', body, credentials: 'same-origin', keepalive: true }).catch(() => {});
       }
       return;
     }
@@ -106,7 +106,7 @@ function createSession() {
       for (let i = 0; i < batches.length; i++) {
         if (stopped) break;
         try {
-          const response = await fetch('/api/analytics/events', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session, events: batches[i] }), signal: abort.signal });
+          const response = await fetch('/api/analytics/batch', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session, events: batches[i] }), signal: abort.signal });
           if (!response.ok && (response.status === 429 || response.status >= 500)) throw new Error();
           inflight.shift();
         } catch { if (!stopped) queue = [...batches.slice(i).flat(), ...queue].slice(-2000); break; }
@@ -125,7 +125,7 @@ function createSession() {
     lastAction = { via: 'toolbar', time: Date.now() };
     const data = { ...point(e), nodeType }; event('click', name, data, area);
     if (target.closest('[data-analytics-area="context-menu"]')) event('context', 'context_menu_chosen', { target: name }, area);
-    if (e.detail !== 0 && rage({ x: e.clientX, y: e.clientY, time: Date.now() })) event('rage', name, data, area);
+    if (e.detail !== 0 && rage({ x: e.clientX, y: e.clientY, time: Date.now(), repeat: !!target.closest('[data-analytics-repeat]') })) event('rage', name, data, area);
   }, { capture: true, passive: true });
   on(document, 'change', e => { const target = e.target; if (target?.matches?.('select,input[type="checkbox"],input[type="radio"]')) event('change', elementName(target), { ...lastPoint, width: innerWidth, height: innerHeight, zoom: zoom(), checked: target.checked }, elementArea(target)); }, { capture: true });
   on(document, 'keydown', e => {

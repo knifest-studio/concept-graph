@@ -1,6 +1,7 @@
-import { imageSize } from '../graph.mjs';
+import { imageSize, runInputs } from '../graph.mjs';
 import { hasAlpha, headerBytes, megabytes, sniffFormat, targetSize } from '../cloud/reference-prep.mjs';
 import { imageCanvas, loadEditImage } from './image-edit-canvas.mjs';
+import { resizedImageData } from './image-edits.mjs';
 import { t } from './i18n.mjs';
 
 // Uploads are capped at 30 MB (cloud/assets.mjs, server.mjs); browsers draw and display images up to 16,384 px.
@@ -18,6 +19,26 @@ export function resizeTarget(pixels, side) {
   return targetSize(pixels, { side });
 }
 export const halfSide = pixels => Math.max(1, Math.round(longerSide(pixels) / 2));
+// Both Resize… and bulk recovery choose the first smaller preset, then half the image.
+export const defaultResizeSide = pixels => resizePresets.find(([, side]) => resizeTarget(pixels, side))?.[1] ?? halfSide(pixels);
+export function resizeAllTargets(graph, nodeId, assets) {
+  const wanted = new Set(assets), { ordered } = runInputs(graph, nodeId);
+  return ordered.filter(node => node.type === 'image' ? !node.data.mask && wanted.has(node.data.asset)
+    : node.type === 'text' && node.data.template?.assets.some(asset => wanted.has(asset)));
+}
+export async function loadResizeImage(asset, assetUrl) {
+  const response = await fetch(assetUrl(asset), { credentials: 'same-origin' });
+  if (!response.ok) throw new Error(t('Could not load the image for editing.'));
+  const blob = await response.blob(), url = URL.createObjectURL(blob);
+  try { return { image: await loadEditImage(url), bytes: blob.size }; }
+  finally { URL.revokeObjectURL(url); }
+}
+export async function saveResizedImage(data, image, target, upload) {
+  const pixels = { width: image.naturalWidth, height: image.naturalHeight };
+  const asset = await upload(await resizedBlob(image, target, resizedType(data.asset)));
+  return resizedImageData(data, asset, target, pixels);
+}
+
 // A rough guess from the current file: bytes shrink about with the pixel count.
 export const estimatedBytes = (bytes, from, to) => Math.max(1, Math.round(bytes * (to.width * to.height) / (from.width * from.height)));
 export const sizeText = (pixels, bytes) => bytes ? t('{width} × {height}, {size} MB', { width: pixels.width, height: pixels.height, size: megabytes(bytes) }) : `${pixels.width} × ${pixels.height}`;

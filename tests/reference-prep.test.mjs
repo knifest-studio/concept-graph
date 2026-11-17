@@ -256,7 +256,7 @@ runtimeTest('Generate refuses an image that cannot be reduced before reserving a
   const calls = []; t.mock.method(globalThis, 'fetch', async (url, init) => { calls.push(JSON.parse(init.body)); return Response.json({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'image', mime_type: 'image/png', data: Buffer.from(png(64, 64)).toString('base64') }] }], usage: { total_input_tokens: 100, total_output_tokens: 1120 } }); });
   r2.files.set(`assets/${hero}`, { bytes: jpeg(7680, 4320), size: 25 * MB });
   const refused = await room.startNano({ nodeId: 'p', requester });
-  assert.equal(refused.status, 400); assert.match(refused.error, /“Hero” is too large to reduce automatically/);
+  assert.equal(refused.status, 400); assert.match(refused.error, /“Hero” is too large to reduce automatically/); assert.deepEqual(refused.resizeAssets, [hero]);
   assert.equal(readCloudGraph(room.document).runs.length, 0); assert.deepEqual(directory.nanoUsage(requester.email), { usedToday: 0, teamSpentUsd: 0 }); assert.equal(calls.length, 0);
   r2.files.set(`assets/${hero}`, { bytes: jpeg(7680, 4320), size: 12 * MB });
   const started = await room.startNano({ nodeId: 'p', requester }); assert.ok(started.run); await Promise.all(waits);

@@ -719,6 +719,7 @@ runtimeTest('Yjs snapshots chunk, reload, roll back failed writes and remove sta
 runtimeTest('analytics ingestion requires a signed-in cookie, the admin page is the app, and admin reads require the Team access site role', async t => {
   const { request, directory } = setup(t), cookie = `cg_session=${await signSession({ email: 'person@example.com', name: 'Person' }, 'session-test')}`;
   assert.equal((await request('/api/analytics/events', { method: 'POST', data: {} })).status, 401);
+  assert.equal((await request('/api/analytics/batch', { method: 'POST', data: {} })).status, 401);
   // Signed out or not an admin, the page is the app, which asks to sign in or says only admins can view it.
   assert.equal((await request('/admin/analytics')).status, 200);
   assert.equal((await request('/admin/analytics', { cookie })).status, 200);

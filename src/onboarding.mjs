@@ -1,4 +1,5 @@
 import { collectInputs, generators, isDescribe, nodeSize as graphNodeSize, captionHeight } from '../graph.mjs';
+import { usesSiteGenerator } from './generator.mjs';
 import { groupBounds } from './canvas.mjs';
 import { plural, t } from './i18n.mjs';
 import { nearestFreePosition } from './node-placement.mjs';
@@ -32,6 +33,9 @@ export function checklistEvent(state, event) {
 export function checklistSteps(state, helperNeeded, ready) {
   return ['helper', 'prompt', 'generate', 'variation'].filter(step => step !== 'helper' || (helperNeeded && !ready)).map(id => ({ id, done: state.done[id] }));
 }
+
+// A team key can satisfy the current prompt/default without connecting this person's Codex.
+export const generationRequired = ({ teamKey, selected = [], defaultGenerator }) => !teamKey || (selected.length ? selected.some(node => !usesSiteGenerator(node.data)) : !usesSiteGenerator({ generator: defaultGenerator }));
 
 // A granted teammate's Codex stands in only while this person's own Codex is not ready; `own` keeps what to fix.
 export function generationReadiness({ teammate, ...options }) {

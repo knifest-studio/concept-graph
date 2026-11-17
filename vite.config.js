@@ -12,5 +12,10 @@ export function buildVersion() {
   }
   return `${JSON.parse(readFileSync(new URL('package.json', import.meta.url), 'utf8')).version}+${new Date().toISOString().replace(/[-:]|\.\d+/g, '')}`;
 }
-const version = { name: 'concept-graph-version', transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'concept-graph-version', content: buildVersion() }, injectTo: 'head' }] };
+// Capture once: fallback builds include a timestamp, which must match in both files.
+const builtVersion = buildVersion();
+const version = { name: 'concept-graph-version', apply: 'build',
+  transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'concept-graph-version', content: builtVersion }, injectTo: 'head' }],
+  generateBundle() { this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: builtVersion }) }); }
+};
 export default defineConfig({ plugins: [version], build: { assetsDir: 'static' } });

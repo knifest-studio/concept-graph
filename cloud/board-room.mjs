@@ -14,7 +14,7 @@ import { BoardChat } from './chat.mjs';
 import { voiceHasSpace, voiceSignal } from './voice.mjs';
 import { revisionOf, runBoardTool, toolByName } from './mcp-tools.mjs';
 import { reframePng } from './png-frame.mjs';
-import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, inspectImage, planReferences, referenceLimits, referenceProblem, sendsAsIs, sniffFormat, stillTooLarge } from './reference-prep.mjs';
+import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, inspectImage, planReferences, referenceLimits, referenceProblem, resizeRecovery, sendsAsIs, sniffFormat, stillTooLarge } from './reference-prep.mjs';
 import { falModel3d, model3dFile, model3dInput, model3dPoster, model3dPrices, model3dRequest, storeModelGlb } from './model3d.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
@@ -396,7 +396,10 @@ export class BoardRoom extends YServer {
     try {
       // Images that are missing, or too large to send and to reduce, fail here, before anything is reserved or run.
       const problem = await this.referencesProblem(request, gpt, name);
-      if (problem) return { error: problem, status: 400 };
+      if (problem) {
+        const resizeAssets = resizeRecovery(referenceInputs(request), request.inspected || [], problem);
+        return { error: problem, status: 400, ...(resizeAssets.length ? { resizeAssets } : {}) };
+      }
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       // Variants are reserved together, all or none, in one call to the directory however many there are.
       if (variants) {

@@ -23,6 +23,17 @@ function setup(t) {
   const send = (seq = 0, extra = {}) => ({ session: id, user: 'forged', events: [{ seq, time: now, kind: 'session', name: 'session_start', details: { width: 1400, height: 900, platform: 'MacIntel' }, ...extra }] });
   return { sqlite, env, files, call, send };
 }
+test('batch and legacy events share ingestion, deduplication, ownership and origin checks', async t => {
+  const { call, send, sqlite } = setup(t);
+  for (const path of ['/batch', '/events']) {
+    assert.equal((await call(path, { data: send() })).status, 204);
+    await assert.rejects(call(path, { data: send(1), person: { email: 'other@example.com' } }), { status: 403 });
+    await assert.rejects(call(path, { data: send(), headers: { Origin: 'https://other.example' } }), { status: 403 });
+    await assert.rejects(call(path, { bytes: '{}' }), { status: 400 });
+  }
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM analytics_events').get().n, 1);
+});
+
 test('ingestion binds server identity, deduplicates retries, updates session and refuses hijacking', async t => {
   const { call, send, sqlite } = setup(t);
   assert.equal((await call('/events', { data: send() })).status, 204);

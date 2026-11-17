@@ -82,8 +82,18 @@ test('replay keys and retention cutoffs cannot traverse storage paths', () => {
 });
 test('every build names its version in the meta that session_start reads', async () => {
   const plugin = viteConfig.plugins.find(plugin => plugin.name === 'concept-graph-version'), [tag] = plugin.transformIndexHtml();
+  const emitted = []; plugin.generateBundle.call({ emitFile: asset => emitted.push(asset) });
+  assert.equal(emitted[0].fileName, 'version.json'); assert.deepEqual(JSON.parse(emitted[0].source), { version: tag.attrs.content });
+  assert.equal(plugin.apply, 'build');
   assert.equal(tag.tag, 'meta'); assert.equal(tag.injectTo, 'head'); assert.equal(tag.attrs.name, 'concept-graph-version');
   assert.match(tag.attrs.content, /^[\da-f]{7,}(?:-dirty)?$|^\d+\.\d+\.\d+\+\d{8}T\d{6}Z$/);
   assert.ok((await readFile(new URL('../src/analytics.mjs', import.meta.url), 'utf8')).includes(`meta[name="${tag.attrs.name}"]`));
   assert.equal(sanitizeEvent({ ...event(), kind: 'session', name: 'session_start', details: { version: tag.attrs.content } }).details.version, tag.attrs.content);
+});
+
+test('repeatable controls never count toward rage and clear a nearby burst', () => {
+  const rage = rageDetector(), click = (time, repeat = false) => rage({ x: 20, y: 20, time, repeat });
+  assert.equal(click(0), false); assert.equal(click(100), false);
+  for (const time of [200, 300, 400, 500]) assert.equal(click(time, true), false);
+  assert.equal(click(600), false); assert.equal(click(700), false); assert.equal(click(800), true);
 });

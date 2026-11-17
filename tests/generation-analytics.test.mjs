@@ -229,7 +229,7 @@ function editorRun(graph, { site = { selectable: true, ready: true, note: '' }, 
   const begin = async () => { const error = await start?.(); if (error) throw error; return 'run'; };
   const env = {
     alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: (graph, boardId, nodeId) => ({ nodeId }), currentGraph: () => graph, boardId: 'board',
-    notify: message => toasts.push(['error', message]), inform: (message, notice) => toasts.push(['news', message, notice]), starting: null, generationStarting: ref(false), nodeRef: ref(graph.nodes),
+    notify: message => toasts.push(['error', message]), inform: (message, notice) => toasts.push(['news', message, notice]), starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref(graph.nodes),
     cloud: true, usesSiteGenerator, generatorKind, startingGenerator, rememberGenerator() {}, model3dTask, generators, isDescribe, model3dRef: ref(site), gptRef: ref(site), nanoRef: ref(site), readinessRef: ref({ key: readiness }), pendingIntent: ref(null),
     fixReadiness: () => opened.push('pairing'), effects: { start() {}, failedStart() {} }, userGeneration: ref(null), viewerMoved: ref(false), setStarting() {}, saveNow: async () => {},
     cloudSession: { refreshNano() {}, unpair() {}, jobs: { startNano: begin, start: begin } }, helperNeeded: true, setHelperOffline() {}, openHelper() {}, mergeRemote() {}, focusNode() {}, intentUnchanged: () => true, t,

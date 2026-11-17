@@ -106,7 +106,7 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
   // `settings: 1` comes from pages that show generation settings; the room refuses older pages a run that uses them, in
   // the browser's language, since those pages cannot translate the refusal.
   const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
-  return result.error ? error(result.error, result.status) : json({ run: result.run }, 202);
+  return result.error ? json({ error: result.error, ...(result.resizeAssets ? { resizeAssets: result.resizeAssets } : {}) }, result.status) : json({ run: result.run }, 202);
 }
 
 // Anyone who may open a board sees its versions; restoring one changes the board, so it takes edit access.

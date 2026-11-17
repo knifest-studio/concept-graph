@@ -108,9 +108,9 @@ export function ZoomableImage({ src, alt, crossOrigin, onLoad }) {
       style={natural && view ? { width: natural.width, height: natural.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` } : { visibility: 'hidden' }}
       onLoad={event => { const size = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }; latest.current.natural = size; setNatural(size); fit(size); onLoad?.(size); }}/>
     {natural && view && <div className="zoom-tools" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
-      <button type="button" aria-label={t('Zoom out')} data-tooltip={t('Zoom out · −')} disabled={view.fit} onClick={() => zoom(1 / step)}>−</button>
+      <button type="button" data-analytics-repeat aria-label={t('Zoom out')} data-tooltip={t('Zoom out · −')} disabled={view.fit} onClick={() => zoom(1 / step)}>−</button>
       <button type="button" className="zoom-level" aria-label={t('Fit the whole image')} data-tooltip={t('Fit the whole image · 0')} onClick={() => fit()}>{Math.round(scale * 100)}%</button>
-      <button type="button" aria-label={t('Zoom in')} data-tooltip={t('Zoom in · +')} disabled={scale >= maxScale} onClick={() => zoom(step)}>+</button>
+      <button type="button" data-analytics-repeat aria-label={t('Zoom in')} data-tooltip={t('Zoom in · +')} disabled={scale >= maxScale} onClick={() => zoom(step)}>+</button>
       <i/>
       <button type="button" className="zoom-text" aria-pressed={view.fit} data-tooltip={t('Fit the whole image · 0')} onClick={() => fit()}>{t('Fit')}</button>
       <button type="button" className="zoom-text" aria-pressed={Math.abs(scale - 1) < 1e-6} data-tooltip={t('Real pixels, one to one · 1')} onClick={() => zoom(1, undefined, undefined, 1)}>1:1</button>

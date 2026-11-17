@@ -149,6 +149,13 @@ export function referenceProblem(infos, images, limits, { binding = false, name 
   return fitsLimits(infos.map(info => info.bytes), limits) ? null : `Reference images are too large for ${name} (${inTotal(limits)}). Use fewer or smaller images.`;
 }
 
+// Recovery offers only originals the binding cannot read; masks must be removed explicitly first.
+export const overLimitReferences = (images, infos) => [...new Set(images.filter((image, index) => infos[index]?.bytes > transformInputBytes && typeof image.maskOf !== 'string' && !image.mask).map(image => image.asset))];
+export function resizeRecovery(images, infos, problem) {
+  const index = images.findIndex((image, index) => infos[index]?.bytes > transformInputBytes && problem === tooLargeToReduce(image, infos[index].bytes));
+  return index >= 0 && typeof images[index].maskOf !== 'string' ? overLimitReferences(images, infos) : [];
+}
+
 // Rounded down, so the limit shown is never more than the real one (14.8 MB for Gemini, 20 MB otherwise).
 const inTotal = limits => `${Math.floor((limits?.totalBytes ?? referenceTotalBytes) / (1024 * 1024) * 10) / 10} MB in total`;
 // Inputs a mask made (GPT Image's base and mask, Nano Banana's marked copy) carry `maskOf`, the masked image's label.

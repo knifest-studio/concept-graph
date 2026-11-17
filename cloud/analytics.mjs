@@ -119,13 +119,14 @@ export async function analyticsRoute(request, env, user, url, store, now = Date.
   const path = url.pathname.slice('/api/analytics'.length), method = request.method;
   if (method !== 'GET' && method !== 'POST') fail('Method not allowed.', 405);
   if (request.headers.get('Origin') && request.headers.get('Origin') !== url.origin || request.headers.get('Sec-Fetch-Site') === 'cross-site') fail('Invalid origin.', 403);
-  const admin = path !== '/events' && !path.startsWith('/replay/');
+  const batch = path === '/batch' || path === '/events'; // Old tabs keep working across deploys.
+  const admin = !batch && !path.startsWith('/replay/');
   if (admin && !await store.siteRole(user.email)) fail('Only site admins can view analytics.', 403);
   await analyticsSchema(env.DB);
   // Playing a recording fetches every chunk, which would write a counter row each; admins are already checked above.
   const chunkRead = admin && method === 'GET' && /^\/sessions\/[^/]+\/\d+$/.test(path);
   if (!chunkRead) await allowed(env.DB, admin ? `${user.email}:admin` : user.email, now, (admin ? 2000 : 120) * limitWindow);
-  if (path === '/events' && method === 'POST') return events(request, env, user.email, now);
+  if (batch && method === 'POST') return events(request, env, user.email, now);
   const upload = path.match(/^\/replay\/([^/]+)\/(\d+)$/);
   if (upload && method === 'POST' && sessionPattern.test(upload[1]) && replaySequence(upload[2]) !== null) return replay(request, env, user.email, upload[1], Number(upload[2]), now);
   if (method === 'GET' && path === '/overview') return overview(env, url, now);
