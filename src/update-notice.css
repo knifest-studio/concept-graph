@@ -1,0 +1,9 @@
+/* Under the 64 px header (60 px on phones), not at the bottom: there it covered the canvas toolbar and the board's own
+   notifications. */
+.update-notice { position: fixed; top: 76px; left: 50%; transform: translateX(-50%); z-index: 1800; display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 32px); padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--text); box-shadow: 0 4px 24px #0002; font-size: 13px; }
+.update-notice button { flex-shrink: 0; }
+@media (max-width: 650px) { .update-notice { top: 70px; flex-wrap: wrap; } .update-notice span { width: 100%; } }
+/* On a board, centre it over the canvas (the sidebar is 216 / 185 / 125 px wide), clear of the board's title. */
+:root:has(.app-shell) .update-notice { left: calc(50% + 108px); max-width: calc(100vw - 248px); }
+@media (max-width: 950px) { :root:has(.app-shell) .update-notice { left: calc(50% + 92px); max-width: calc(100vw - 217px); } }
+@media (max-width: 650px) { :root:has(.app-shell) .update-notice { left: calc(50% + 62px); max-width: calc(100vw - 157px); } }

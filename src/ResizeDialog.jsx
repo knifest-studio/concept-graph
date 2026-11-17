@@ -1,8 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { resizedImageData, restoreSizeData } from './image-edits.mjs';
-import { loadEditImage } from './image-edit-canvas.mjs';
-import { estimatedBytes, halfSide, longerSide, resizedBlob, resizedType, resizePresets, resizeTarget, sizeText } from './image-resize.mjs';
+import { restoreSizeData } from './image-edits.mjs';
+import { defaultResizeSide, estimatedBytes, halfSide, loadResizeImage, longerSide, saveResizedImage, resizePresets, resizeTarget, sizeText } from './image-resize.mjs';
 import { megabytes } from '../cloud/reference-prep.mjs';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { t } from './i18n.mjs';
@@ -17,19 +16,15 @@ export function ResizeDialog({ node, assetUrl, upload, onApply, onClose, returnF
   useLayoutEffect(() => () => restoreDialogFocus(returnFocus), []);
   useLayoutEffect(() => { dialog.current?.querySelector('[aria-pressed="true"], button:not([disabled])')?.focus(); }, [image]);
   useEffect(() => {
-    let active = true, url;
-    (async () => {
-      // The file is read once: its size gives the estimate and the same bytes are drawn.
-      const response = await fetch(assetUrl(node.data.asset), { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(t('Could not load the image for editing.'));
-      const blob = await response.blob(); url = URL.createObjectURL(blob);
-      const loaded = await loadEditImage(url);
+    let active = true;
+    loadResizeImage(node.data.asset, assetUrl).then(({ image, bytes }) => {
       if (!active) return;
-      const pixels = { width: loaded.naturalWidth, height: loaded.naturalHeight };
-      setImage(loaded); setBytes(blob.size);
-      setChoice(resizePresets.find(([, side]) => resizeTarget(pixels, side))?.[1] ?? (resizeTarget(pixels, halfSide(pixels)) ? 'half' : 'custom'));
-    })().catch(cause => { if (active) setError(cause.message); });
-    return () => { active = false; if (url) URL.revokeObjectURL(url); };
+      setImage(image); setBytes(bytes);
+      const pixels = { width: image.naturalWidth, height: image.naturalHeight };
+      const side = defaultResizeSide(pixels);
+      setChoice(resizePresets.some(([, value]) => value === side) ? side : resizeTarget(pixels, side) ? 'half' : 'custom');
+    }).catch(cause => { if (active) setError(cause.message); });
+    return () => { active = false; };
   }, []);
   const pixels = image && { width: image.naturalWidth, height: image.naturalHeight };
   const side = choice === 'half' ? pixels && halfSide(pixels) : choice === 'custom' ? Number(custom) : choice;
@@ -38,8 +33,7 @@ export function ResizeDialog({ node, assetUrl, upload, onApply, onClose, returnF
     if (busyRef.current || !target) return;
     busyRef.current = true; setBusy(true); setError('');
     try {
-      const asset = await upload(await resizedBlob(image, target, resizedType(node.data.asset)));
-      await onApply(resizedImageData(node.data, asset, target, pixels)); onClose();
+      await onApply(await saveResizedImage(node.data, image, target, upload)); onClose();
     } catch (cause) { setError(cause.message); }
     finally { busyRef.current = false; setBusy(false); }
   };
@@ -56,7 +50,7 @@ export function ResizeDialog({ node, assetUrl, upload, onApply, onClose, returnF
   };
   const option = (value, label, hint) => {
     const available = !!pixels && (value === 'custom' || !!resizeTarget(pixels, value === 'half' ? halfSide(pixels) : value));
-    return <button type="button" key={value} aria-pressed={choice === value} disabled={busy || !available} data-tooltip={available ? hint : t('The image is already this size or smaller.')} onClick={() => setChoice(value)}>{label}</button>;
+    return <button type="button" key={value} aria-label={hint} aria-pressed={choice === value} disabled={busy || !available} data-tooltip={available ? hint : t('The image is already this size or smaller.')} onClick={() => setChoice(value)}>{label}</button>;
   };
   return createPortal(<div className="board-modal" data-analytics-area="dialog:Resize image" role="dialog" aria-modal="true" aria-labelledby="resize-image-title" ref={dialog} onKeyDown={keyDown}>
     <form className="resize-dialog" onSubmit={event => { event.preventDefault(); apply(); }}>
@@ -74,9 +68,9 @@ export function ResizeDialog({ node, assetUrl, upload, onApply, onClose, returnF
       </dl>
       {error && <p className="resize-error" role="alert">{t(error)}</p>}
       <div className="resize-actions">
-        {node.data.unresized && <button type="button" className="resize-restore" disabled={busy} onClick={restore}>{t('Restore original size')}</button>}
-        <button type="button" disabled={busy} onClick={onClose}>{t('Cancel')}</button>
-        <button type="submit" className="primary-button" disabled={busy || !target}>{busy ? t('Saving…') : t('Resize')}</button>
+        {node.data.unresized && <button type="button" className="resize-restore" disabled={busy} aria-label={t('Restore original size')} onClick={restore}>{t('Restore original size')}</button>}
+        <button type="button" disabled={busy} aria-label={t('Cancel')} onClick={onClose}>{t('Cancel')}</button>
+        <button type="submit" aria-label={t('Resize')} className="primary-button" disabled={busy || !target}>{busy ? t('Saving…') : t('Resize')}</button>
       </div>
     </form>
   </div>, document.body);

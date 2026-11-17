@@ -93,7 +93,7 @@ test('only outgoing image-generation prompts suppress automatic prompt creation'
 });
 
 test('image editor, menu and integration JSX compile without running a server or browser', async () => {
-  for (const name of ['ImageEditor', 'ResizeDialog', 'NodeContextMenu', 'main']) {
+  for (const name of ['ImageEditor', 'ResizeDialog', 'NodeContextMenu', 'main', 'UpdateNotice', 'AccountMenu', 'BoardMenu', 'HelpMenu', 'TeamAccessDialog', 'ImageZoom', 'BoardPresence', 'CodexSharing']) {
     const source = await readFile(new URL(`../src/${name}.jsx`, import.meta.url), 'utf8');
     assert.ok((await transformWithEsbuild(source, `${name}.jsx`, { loader: 'jsx' })).code.length);
   }

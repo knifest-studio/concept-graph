@@ -25,13 +25,13 @@ export function AccountMenu({ user, siteRole, requests = 0, onTeam, onSignOut })
     event.stopPropagation();
   };
   return <div className="account-menu" ref={container} onKeyDown={keys} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <button ref={trigger} type="button" className="account-button" aria-haspopup="menu" aria-expanded={open} aria-label={t('Account: {name}', { name: user.name })} data-tooltip={user.name}
+    <button ref={trigger} type="button" className="account-button" aria-haspopup="menu" aria-expanded={open} aria-label={t('Account')} data-tooltip={t('Account')}
       style={{ background: color, color: contrastColor(color) }} onClick={() => setOpen(value => !value)}>{initials}{siteRole && requests > 0 && <span className="account-requests-dot" aria-hidden="true"/>}</button>
     {open && <div ref={panel} className="account-panel" role="menu" aria-label={t('Account')}>
       <div className="account-who"><span className="account-avatar" aria-hidden="true" style={{ background: color, color: contrastColor(color) }}>{initials}</span><span><b>{user.name}</b>{user.email && <small>{user.email}</small>}</span></div>
-      {siteRole && <button type="button" role="menuitem" onClick={() => choose(onTeam)}>{t('Team access')}{requests > 0 && <span className="account-requests">{plural(requests, '{count} request', '{count} requests')}</span>}</button>}
-      {siteRole && <a role="menuitem" href="/admin/analytics">{t('Product analytics')}</a>}
-      <button type="button" role="menuitem" onClick={() => choose(onSignOut)}>{t('Sign out')}</button>
+      {siteRole && <button type="button" role="menuitem" aria-label={t('Team access')} onClick={() => choose(onTeam)}>{t('Team access')}{requests > 0 && <span className="account-requests">{plural(requests, '{count} request', '{count} requests')}</span>}</button>}
+      {siteRole && <a role="menuitem" aria-label={t('Product analytics')} href="/admin/analytics">{t('Product analytics')}</a>}
+      <button type="button" role="menuitem" aria-label={t('Sign out')} onClick={() => choose(onSignOut)}>{t('Sign out')}</button>
     </div>}
   </div>;
 }

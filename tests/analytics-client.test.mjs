@@ -25,7 +25,7 @@ function setup(t, { alerts = [] } = {}) {
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
   t.after(() => { for (const [key, descriptor] of Object.entries(saved)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
   // Everything the tab sent, by beacon or fetch, in order.
-  const sent = async () => (await Promise.all([...beacons.map(beacon => beacon.body.text()), ...requests.filter(request => request.url === '/api/analytics/events').map(request => request.body)])).flatMap(body => JSON.parse(body).events).sort((a, b) => a.seq - b.seq);
+  const sent = async () => (await Promise.all([...beacons.map(beacon => beacon.body.text()), ...requests.filter(request => request.url === '/api/analytics/batch').map(request => request.body)])).flatMap(body => JSON.parse(body).events).sort((a, b) => a.seq - b.seq);
   // Moves the clock and runs the timers that fall due on the way, as the browser would; the minute timers run on whole
   // minutes since the tab opened at 11:00.
   const advance = async ms => {
@@ -37,7 +37,7 @@ function setup(t, { alerts = [] } = {}) {
       await new Promise(resolve => setImmediate(resolve));
     }
   };
-  const posted = () => requests.filter(request => request.url === '/api/analytics/events').length;
+  const posted = () => requests.filter(request => request.url === '/api/analytics/batch').length;
   return { window, document, values, requests, beacons, intervals, timeouts, idle, mutations, sent, clock, advance, posted, observers: () => observers };
 }
 const hide = (env, hidden) => { env.document.hidden = hidden; env.document.dispatchEvent(new Event('visibilitychange')); };
@@ -213,5 +213,30 @@ test('a phone or tablet beacons at once when hidden, since its timers stop and p
   hide(env, true);
   assert.equal(env.timeouts.size, 0); assert.equal(env.beacons.length, 1); if (stub) assert.deepEqual(flushes, [[true]]);
   assert.deepEqual(JSON.parse(await env.beacons[0].body.text()).events.filter(event => event.name === 'visibility').map(event => event.details.visible), [false]);
+  stop();
+});
+
+test('the first generation records active time excluding idle and hidden time, and both transports use batch', async t => {
+  const env = setup(t); setAnalyticsEnabled(true); const stop = startAnalytics('first-active@example.com');
+  await env.advance(10 * 60000); // Nine of these minutes were idle.
+  hide(env, true); await env.advance(20 * 60000); hide(env, false);
+  await env.advance(10000); track('generation_started'); track('generation_started');
+  env.window.dispatchEvent(new Event('pagehide'));
+  const events = await env.sent(), first = events.filter(event => event.name === 'time_to_first_generation');
+  assert.equal(first.length, 1); assert.equal(first[0].details.duration, 1810000); assert.equal(first[0].details.active, 70000);
+  assert.ok(env.requests.length && env.beacons.length);
+  assert.ok([...env.requests, ...env.beacons].every(item => item.url === '/api/analytics/batch'));
+  stop();
+});
+
+test('repeatable controls keep click events without producing rage events', async t => {
+  const env = setup(t); setAnalyticsEnabled(true); const stop = startAnalytics('repeat-controls@example.com');
+  const button = { dataset: { analyticsName: 'Zoom in' }, getAttribute: () => null,
+    closest: selector => selector === '*' || selector.startsWith('button,') || selector === '[data-analytics-repeat]' ? button : null };
+  for (let i = 0; i < 5; i++) env.document.dispatchEvent(Object.defineProperties(new Event('click'), {
+    target: { value: button }, clientX: { value: 20 }, clientY: { value: 20 }, detail: { value: 1 }
+  }));
+  env.window.dispatchEvent(new Event('pagehide'));
+  const events = await env.sent(); assert.equal(events.filter(event => event.kind === 'click').length, 5); assert.equal(events.filter(event => event.kind === 'rage').length, 0);
   stop();
 });

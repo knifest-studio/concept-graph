@@ -119,7 +119,7 @@ function BoardsHome({ user, siteRole, accessRequests, setAccessRequests, boards,
     <input ref={input} id="new-cloud-board" placeholder={t('Board name')} maxLength={80} value={name} disabled={busy} aria-describedby={createError ? 'cloud-create-error' : 'cloud-create-hint'} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }}/>
     <small id="cloud-create-hint">{t('Enter to create · Esc to cancel')}</small>
     {createError && <p id="cloud-create-error" className="cloud-error" role="alert">{createError}</p>}
-    <div><button type="button" className="cloud-nav" disabled={busy} onClick={cancel}>{t('Cancel')}</button><button className="primary-button" disabled={busy}>{busy ? t('Creating…') : t('Create board')}</button></div>
+    <div><button type="button" className="cloud-nav" disabled={busy} onClick={cancel}>{t('Cancel')}</button><button className="primary-button" aria-label={t('Create board')} disabled={busy}>{busy ? t('Creating…') : t('Create board')}</button></div>
   </form> : <button type="button" className="cloud-new-tile" onClick={start}><span className="cloud-new-plus" aria-hidden="true">+</span><strong>{t('New board')}</strong><small>{t('Start a new direction')}</small></button>}</>;
   const restore = async board => {
     setRestoring(board.id); setTrashError('');

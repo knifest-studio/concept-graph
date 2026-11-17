@@ -67,7 +67,9 @@ export function shortcut(event, { editing = isTextEntry(event.target), ...ctx } 
 export const shortcutControl = action => ({ 'edit.undo': 'Undo', 'edit.redo': 'Redo', 'prompt.generate': 'Generate' })[action] || action;
 export function rageDetector() {
   let recent = [], last = -Infinity;
-  return ({ x, y, time }) => {
+  return ({ x, y, time, repeat = false }) => {
+    // Step controls invite repeated presses; they also break a burst on a nearby control.
+    if (repeat) { recent = []; return false; }
     recent = recent.filter(point => time - point.time <= 1000 && Math.hypot(x - point.x, y - point.y) <= 30);
     recent.push({ x, y, time });
     if (recent.length < 3 || time - last < 1000) return false;

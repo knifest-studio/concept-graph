@@ -51,7 +51,7 @@ export function TeamAccessDialog({ services, onClose, onRequests }) {
       <form className="share-invite team-add" onSubmit={add}>
         <label htmlFor="team-entry">{t('Give Nano Banana and GPT Image access')}</label>
         <div><input ref={first} id="team-entry" autoComplete="off" placeholder="name@example.com, @example.com" maxLength={254} value={entry} disabled={busy} onChange={event => setEntry(event.target.value)}/>
-          <button className="primary-button" disabled={busy || !entry.trim()}>{t('Add')}</button></div>
+          <button className="primary-button" aria-label={t('Add')} disabled={busy || !entry.trim()}>{t('Add')}</button></div>
         <small>{t('People appear below once they sign in. A domain such as @example.com gives everyone with that address access.')}</small>
       </form>
       {error && <p className="cloud-error share-error" role="alert">{error}</p>}
@@ -79,7 +79,7 @@ export function TeamAccessDialog({ services, onClose, onRequests }) {
           {!shown.length && <li className="share-muted">{query ? t('Nobody matches.') : access.people ? t('Nobody has signed in yet.') : t('Nobody is listed.')}</li>}
         </ul></div></>}
       {owner && access.imported?.entries > 0 && <p className="share-note team-imported">{t('This list started as a copy of NANO_BANANA_ALLOWED. The site no longer reads that variable, so you can delete it in Cloudflare.')}</p>}
-      <div className="share-actions"><span/><button className="primary-button" type="button" onClick={onClose}>{t('Done')}</button></div>
+      <div className="share-actions"><span/><button className="primary-button" type="button" aria-label={t('Done')} onClick={onClose}>{t('Done')}</button></div>
     </div>
   </div>;
 }

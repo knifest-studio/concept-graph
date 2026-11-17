@@ -54,19 +54,19 @@ export function BoardPresence({ peers, pages, onFollow, onCall }) {
   };
   if (!people.length) return null;
   return <div className="cloud-presence" ref={container} aria-label={t('People on this board')} onKeyDown={keys} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    {shown.map(peer => <button type="button" key={peer.id} className="presence-person" aria-haspopup="menu" aria-expanded={open === peer.id} data-tooltip={open === peer.id ? undefined : peer.user.name} aria-label={peer.user.name} onClick={event => menu(event, peer.id)}><Avatar user={peer.user}/><VoiceMark voice={peer.voice}/></button>)}
+    {shown.map(peer => <button type="button" key={peer.id} className="presence-person" aria-haspopup="menu" aria-expanded={open === peer.id} data-tooltip={open === peer.id ? undefined : peer.user.name} aria-label={t('Teammate menu')} onClick={event => menu(event, peer.id)}><Avatar user={peer.user}/><VoiceMark voice={peer.voice}/></button>)}
     {hidden > 0 && <button type="button" className="presence-more" aria-haspopup="menu" aria-expanded={open === 'more'} aria-label={t('Everyone on this board')} data-tooltip={open ? undefined : t('Everyone on this board')} onClick={event => menu(event, 'more')}>+{hidden}</button>}
     {people.length > 0 && <button type="button" className="presence-call-all" aria-label={t('Call everyone here')} data-tooltip={t('Call everyone here')} onClick={() => call('all')}><Bell/></button>}
     {open && open !== 'more' && people.find(peer => peer.id === open) && (peer => <div ref={panel} className="presence-panel presence-person-menu" role="menu" aria-label={peer.user.name} style={{ left }}>
       <div className="presence-who"><Avatar user={peer.user}/><span><b>{peer.user.name}</b>{pageName(peer.page) && <small>{pageName(peer.page)}</small>}</span></div>
-      <button type="button" role="menuitem" onClick={() => follow(peer)}><Arrow/><span>{t('Go to {name}', { name: peer.user.name })}</span></button>
-      <button type="button" role="menuitem" onClick={() => call(peer.id)}><Bell/><span>{t('Call {name} here', { name: peer.user.name })}</span></button>
+      <button type="button" role="menuitem" aria-label={t('Go to teammate')} onClick={() => follow(peer)}><Arrow/><span>{t('Go to {name}', { name: peer.user.name })}</span></button>
+      <button type="button" role="menuitem" aria-label={t('Call teammate here')} onClick={() => call(peer.id)}><Bell/><span>{t('Call {name} here', { name: peer.user.name })}</span></button>
     </div>)(people.find(peer => peer.id === open))}
     {open === 'more' && <div ref={panel} className="presence-panel" role="menu" aria-label={t('Everyone on this board')}>
       <strong>{t('Everyone on this board')} · {people.length}</strong>
-      <button type="button" role="menuitem" className="presence-call-row" onClick={() => call('all')}><Bell/><span>{t('Call everyone here')}</span></button>
-      {people.map(peer => <div className="presence-row" key={peer.id}><button type="button" role="menuitem" onClick={() => follow(peer)}><span className="presence-voice-avatar"><Avatar user={peer.user}/><VoiceMark voice={peer.voice}/></span><span><b>{peer.user.name}</b>{pageName(peer.page) && <small>{pageName(peer.page)}</small>}</span></button>
-        <button type="button" role="menuitem" className="presence-call" aria-label={t('Call {name} here', { name: peer.user.name })} data-tooltip={t('Call {name} here', { name: peer.user.name })} onClick={() => call(peer.id)}><Bell/></button></div>)}
+      <button type="button" role="menuitem" className="presence-call-row" aria-label={t('Call everyone here')} onClick={() => call('all')}><Bell/><span>{t('Call everyone here')}</span></button>
+      {people.map(peer => <div className="presence-row" key={peer.id}><button type="button" role="menuitem" aria-label={t('Go to teammate')} onClick={() => follow(peer)}><span className="presence-voice-avatar"><Avatar user={peer.user}/><VoiceMark voice={peer.voice}/></span><span><b>{peer.user.name}</b>{pageName(peer.page) && <small>{pageName(peer.page)}</small>}</span></button>
+        <button type="button" role="menuitem" className="presence-call" aria-label={t('Call teammate here')} data-tooltip={t('Call {name} here', { name: peer.user.name })} onClick={() => call(peer.id)}><Bell/></button></div>)}
     </div>}
   </div>;
 }

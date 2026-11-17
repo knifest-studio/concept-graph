@@ -40,3 +40,7 @@ test('chip labels translate into Ukrainian', () => {
     assert.equal(generationChip({ ...base, remaining: 46 }).label, 'Codex · Залишилося 46%');
   } finally { setLanguage('en'); }
 });
+
+test('a usable team key shows ready without helper warnings and keeps the normal chip', () => {
+  assert.deepEqual(generationChip({ required: false, readiness: { key: 'ready', label: 'Ready to generate' }, helperNeeded: true, status: {}, outdated: true }), { label: 'Ready to generate', tone: 'neutral' });
+});

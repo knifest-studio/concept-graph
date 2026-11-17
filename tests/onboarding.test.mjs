@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyChecklist, readChecklist, writeChecklist, checklistEvent, checklistSteps, directInputs, inputLabel, freePromptPosition, freeSpot, focusViewport, generationIntent, intentUnchanged, generationReadiness } from '../src/onboarding.mjs';
+import { emptyChecklist, readChecklist, writeChecklist, checklistEvent, checklistSteps, directInputs, inputLabel, freePromptPosition, freeSpot, focusViewport, generationIntent, intentUnchanged, generationReadiness, generationRequired } from '../src/onboarding.mjs';
 
 const text = (id, value = 'A bird', x = 0, y = 0) => ({ id, type: 'text', position: { x, y }, data: { text: value } });
 const asset = '12345678-1234-1234-1234-123456789abc.png';
@@ -102,4 +102,15 @@ test('helper readiness distinguishes pairing, Codex availability, sign-in and ge
   assert.equal(generationReadiness({ required: true, paired: true, status: { ...missing, codexInstall: { supported: false } } }).key, 'codex');
   assert.equal(generationReadiness({ required: true, paired: true, status }).label, 'Ready to generate');
   assert.equal(generationReadiness({ required: false, paired: false, status: {} }).key, 'ready');
+});
+
+test('Codex is required for a chosen/default Codex prompt or when no team key is usable', () => {
+  const prompt = generator => ({ type: 'text', data: { generator } });
+  assert.equal(generationRequired({ teamKey: true, defaultGenerator: 'nano-banana' }), false);
+  assert.equal(generationRequired({ teamKey: true, defaultGenerator: 'gpt-image' }), false);
+  assert.equal(generationRequired({ teamKey: true, defaultGenerator: null }), true);
+  assert.equal(generationRequired({ teamKey: false, selected: [prompt('nano-banana')] }), true);
+  assert.equal(generationRequired({ teamKey: true, defaultGenerator: null, selected: [prompt('gpt-image')] }), false);
+  assert.equal(generationRequired({ teamKey: true, defaultGenerator: 'nano-banana', selected: [prompt(undefined)] }), true);
+  assert.equal(generationRequired({ teamKey: true, selected: [prompt('nano-banana'), prompt(undefined)] }), true);
 });
