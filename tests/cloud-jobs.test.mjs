@@ -145,6 +145,7 @@ test('cloud jobs validate, persist, queue with local runs, cancel and acknowledg
     for (const overrides of [
       { jobId: '../escape' }, { boardId: 'not-a-uuid' }, { nodeId: '' }, { prompt: ' ' }, { prompt: 'x'.repeat(150001) },
       { model: '../model?' }, { effort: 'invalid effort' }, { labelOutputs: 'yes' }, { images: Array(11).fill({}) },
+      { variants: 1 }, { variants: 33 }, { variants: 2.5 }, { variants: '4' },
       { images: [{ asset: randomUUID() + '.png', data: Buffer.from('not an image').toString('base64') }] },
       { images: [{ asset: '../escape.png', data: png.toString('base64') }] },
       { images: [{ asset: randomUUID() + '.png', data: '!!!!' }] },
@@ -159,6 +160,12 @@ test('cloud jobs validate, persist, queue with local runs, cancel and acknowledg
     const { job } = await call('/api/cloud-jobs', 'POST', newJob({ prompt: 'MULTI', images: [], labelOutputs: false }));
     const result = await completed(job.id);
     assert.deepEqual(result.outputs.map(output => output.caption), [undefined, 'Вид збоку', undefined]);
+  });
+
+  await t.test('a chosen variant count is kept with the job for Codex, whose request already asks for it', async () => {
+    const { job } = await call('/api/cloud-jobs', 'POST', newJob({ prompt: 'MULTI', images: [], variants: 3 }));
+    await completed(job.id);
+    assert.equal(JSON.parse(await readFile(path.join(jobDirectory(job.id), 'job.json'), 'utf8')).variants, 3);
   });
 
   await t.test('cloud jobs ignore legacy model and effort overrides', async () => {

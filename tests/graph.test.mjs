@@ -226,3 +226,37 @@ test('a model card keeps a turned camera in the shape model-viewer writes, and c
   for (const bad of [{}, { orbit: '45deg 75deg 2m' }, { orbit: '1rad 1rad' }, { orbit: '1rad 1rad 2m', target: '0 0 0' }, { orbit: '1rad 1rad 2m', extra: 1 }, { orbit: `1rad 1rad ${'9'.repeat(130)}m` }, 'front'])
     assert.throws(() => validateGraph(graph({ view: bad })), /Invalid model view/);
 });
+
+test('a Codex prompt with chosen variants asks for exactly that many images, above any count its text names', () => {
+  const prompt = { ...text('p', 'Make 3 posters of a fox'), data: { text: 'Make 3 posters of a fox', variants: 4 } };
+  const inputs = collectInputs({ nodes: [prompt], edges: [] }, 'p');
+  assert.equal(inputs.variants, 4);
+  assert.match(inputs.prompt, /IMAGE COUNT \(strict rule\): return exactly 4 images, as 4 separate image tool calls/);
+  assert.match(inputs.prompt, /overrides any number of images the text asks for/);
+  // Without a chosen count the text still decides, as before.
+  delete prompt.data.variants;
+  const plain = collectInputs({ nodes: [prompt], edges: [] }, 'p');
+  assert.equal(plain.variants, undefined); assert.doesNotMatch(plain.prompt, /IMAGE COUNT/);
+  // A describe node never carries a count.
+  const describe = { ...image('i', 'Fox'), id: 'i' }, node = { ...text('d', ''), data: { text: '', task: 'describe', variants: 4 } };
+  const described = collectInputs({ nodes: [describe, node], edges: [edge('i', 'd')] }, 'd');
+  assert.equal(described.variants, undefined); assert.doesNotMatch(described.prompt, /IMAGE COUNT/);
+});
+
+test('a finished run’s slideshow folds into its card, and images from one prompt group as a folded slideshow', async () => {
+  const { foldRunGroup, onePromptImages } = await import('../graph.mjs');
+  const graph = { revision: 1, nodes: [], groups: [{ id: 'g', name: 'Group 1', nodeIds: ['a', 'b'], collapsed: false, slideshow: true }] };
+  assert.equal(foldRunGroup(graph, { autoGroupId: 'g' }), true); assert.equal(graph.groups[0].collapsed, true); assert.equal(graph.revision, 2);
+  // Already folded, not a slideshow (3D models), a lone result or no group of its own: nothing to fold.
+  assert.equal(foldRunGroup(graph, { autoGroupId: 'g' }), false);
+  for (const group of [{ slideshow: false }, { nodeIds: ['a'] }]) assert.equal(foldRunGroup({ groups: [{ ...graph.groups[0], collapsed: false, ...group }] }, { autoGroupId: 'g' }), false);
+  assert.equal(foldRunGroup(graph, {}), false);
+  const shot = (id, runId) => ({ ...image(id, id), data: { asset: '12345678-1234-1234-1234-123456789abc.png', ...(runId ? { runId } : {}) } });
+  const runs = [{ id: 'r1', nodeId: 'p' }, { id: 'r2', nodeId: 'p' }, { id: 'r3', nodeId: 'q' }];
+  assert.equal(onePromptImages([shot('a', 'r1'), shot('b', 'r2')], [], runs), true);
+  // Connected from one prompt, without run records, counts too; two prompts, a prompt in the mix or one image do not.
+  assert.equal(onePromptImages([shot('c'), shot('d')], [edge('p', 'c'), edge('p', 'd')], []), true);
+  assert.equal(onePromptImages([shot('a', 'r1'), shot('e', 'r3')], [], runs), false);
+  assert.equal(onePromptImages([shot('a', 'r1'), text('p', 'A bird')], [], runs), false);
+  assert.equal(onePromptImages([shot('a', 'r1')], [], runs), false);
+});

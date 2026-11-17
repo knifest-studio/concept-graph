@@ -67,8 +67,9 @@ test('generation sends collected inputs without legacy model settings; collectio
   let updates = 0; doc.on('update', () => updates++);
   await generation.tick();
   const graph = readCloudGraph(doc), run = graph.runs[0];
-  assert.equal(updates, 3); assert.equal(run.status, 'completed'); assert.equal(run.count, 2);
-  assert.equal(graph.groups.length, 1); assert.deepEqual(graph.groups[0].nodeIds, run.outputIds);
+  // Two outputs, the finished run, then its slideshow folding into one card.
+  assert.equal(updates, 4); assert.equal(run.status, 'completed'); assert.equal(run.count, 2);
+  assert.equal(graph.groups.length, 1); assert.deepEqual(graph.groups[0].nodeIds, run.outputIds); assert.equal(graph.groups[0].collapsed, true);
   assert.equal(graph.nodes.find(node => node.id === run.outputIds[0]).data.caption, 'Front');
   assert.equal(graph.nodes.find(node => node.id === run.outputIds[1]).data.caption, 'Image 1');
   assert.equal(graph.edges.filter(edge => edge.source === 'p').length, 2); assert.doesNotThrow(() => validateGraph(graph));
@@ -296,6 +297,35 @@ test('starting with a session user stores only display name and color in the sha
   await generation.start('p');
   const run = [...doc.getMap('runs').values()][0]; assert.deepEqual(run.by, user); assert.equal(JSON.stringify(run).includes('private@example.com'), false);
   generation.stop(); await new Promise(resolve => setImmediate(resolve)); doc.destroy();
+});
+
+test('cloud starts isolate provider locks and Codex reads its own inputs even while the default is GPT', async () => {
+  const { doc, generation, calls } = setup(), sent = [], owned = [];
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  generation.onStart = run => owned.push(run);
+  generation.api = async (url, options) => { sent.push(JSON.parse(options.body)); await waiting; return { run: { id: `site-${sent.length}` } }; };
+  doc.getMap('nodes').get('p').get('data').set('generator', 'gpt-image');
+  const nano = generation.startNano('p', 'nano-banana'), duplicate = generation.startNano('p', 'nano-banana'), gpt = generation.startNano('p', 'gpt-image');
+  await generation.start('p'); await duplicate;
+  assert.equal(sent.length, 2); assert.deepEqual(sent.map(input => input.generator), ['nano-banana', 'gpt-image']);
+  assert.equal(calls.filter(call => call[0] === 'helper-api' && call[2]?.method === 'POST').length, 1);
+  release(); await Promise.all([nano, gpt]);
+  assert.deepEqual(owned.filter(run => run.provider).map(run => run.provider), ['nano-banana', 'gpt-image']);
+  const count = calls.length; await generation.start('p'); assert.equal(calls.length, count);
+  assert.equal(generation.starting.size, 0); generation.stop(); doc.destroy();
+});
+
+test('Codex submission locks before loading images and retries after an input failure', async () => {
+  const { doc, generation, calls } = setup();
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; }), inputs = generation.inputs.bind(generation);
+  generation.inputs = async () => { await waiting; throw new Error('Bad reference'); };
+  const first = generation.start('p'); await generation.start('p');
+  release(); await assert.rejects(first, /Bad reference/); assert.equal(generation.starting.size, 0);
+  generation.inputs = inputs; await generation.start('p');
+  assert.equal(calls.filter(call => call[0] === 'helper-api' && call[2]?.method === 'POST').length, 1);
+  generation.stop(); doc.destroy();
 });
 
 test('runs record the generation settings and template at submission, then what the helper reports', async () => {

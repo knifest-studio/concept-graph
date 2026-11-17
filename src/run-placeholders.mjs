@@ -1,3 +1,4 @@
+import { isSiteGenerator } from '../graph.mjs';
 import { nextLayer } from './layers.mjs';
 import { plannedOutputs } from './output-placement.mjs';
 import { defaultPageId } from './pages.mjs';
@@ -20,7 +21,8 @@ export function runPlaceholders(graph, runs, page, spawns) {
   for (const run of runs) {
     const slots = plans.get(run.id) || [], task = slots.length && (run.task || graph.nodes.find(node => node.id === run.nodeId)?.data.task);
     // A run of many variants starts a few calls at a time and counts them in variantsStarted; the slots after them are queued.
-    const first = run.outputIds?.length || 0, started = run.variantsStarted ?? Infinity;
+    // Codex draws a chosen count one image after another in its single turn, so only its next slot is generating.
+    const first = run.outputIds?.length || 0, started = run.variantsStarted ?? (run.variants > 1 && !isSiteGenerator(run.provider) ? first + 1 : Infinity);
     for (const [index, { id, position, size, type, aspect }] of slots.entries()) {
       const slot = first + index, describe = type === 'text', spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
       const status = run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : task === 'model3d' ? 'Generating 3D' : task === 'upscale' ? 'Upscaling' : 'Generating';

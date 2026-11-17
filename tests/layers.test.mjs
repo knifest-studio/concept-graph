@@ -36,9 +36,10 @@ test('a stamp below its parent renders directly above it, and rendering and plac
   assert.deepEqual(ids(nodes), ['cover', 'note', 'stamp', 'top', 'apart']);
   const view = canvasView(nodes, [], [{ id: 'g', name: 'G', collapsed: false, nodeIds: ['cover', 'top'] }]);
   const z = new Map(view.nodes.map(node => [node.id, node.zIndex]));
-  // Frames sit under the connections (zIndex 0), which sit under every node.
-  assert.equal(z.get('g'), -1);
-  assert.deepEqual(['cover', 'note', 'stamp', 'top', 'apart'].map(id => z.get(id)), [1, 2, 3, 4, 5]);
+  // Cards draw in this order above the connections (zIndex 0); an open group's frame sits just under its lowest member.
+  const order = ['cover', 'note', 'stamp', 'top', 'apart'].map(id => z.get(id));
+  assert.ok(order[0] > 0 && order.every((value, index) => !index || value > order[index - 1]));
+  assert.ok(z.get('g') > 0 && z.get('g') < z.get('cover'));
   // A free stamp is not lifted.
   assert.deepEqual(ids([stamp('free', 1), sticky('note', 2)]), ['free', 'note']);
   // Placement hits the visibly topmost target, with or without render indices.

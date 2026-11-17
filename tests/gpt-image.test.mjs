@@ -8,9 +8,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { transformWithEsbuild } from 'vite';
 import { signSession } from '../cloud/auth.mjs';
 import { gptImageCost, gptImageError, gptImageEstimate, gptImageModel, gptImagePrompt, gptImageRequest, gptImageResult, gptImageSettings } from '../cloud/gpt-image.mjs';
-import { clampVariants, generators, gptImagePixels, imageSize, maxVariants, modelNames, validateGraph, variantPresets } from '../graph.mjs';
+import { clampVariants, generators, gptDescribeModel, gptImagePixels, imageSize, maxVariants, modelNames, validateGraph, variantPresets } from '../graph.mjs';
+import { gptDescribeCost, gptDescribeEstimate } from '../cloud/gpt-describe.mjs';
 import { NanoError, nanoPrompt } from '../cloud/nano-banana.mjs';
-import { nanoState, usesSiteGenerator } from '../src/generator.mjs';
+import { nanoState, promptGenerators, usesSiteGenerator } from '../src/generator.mjs';
 import { CloudGeneration } from '../src/cloud-generation.mjs';
 import { applyLocalGraph, readCloudGraph } from '../src/cloud-sync.mjs';
 import { runPlaceholders } from '../src/run-placeholders.mjs';
@@ -228,23 +229,28 @@ test('GPT Image is a site generator with shared quotas and four placeholders; de
   assert.equal(nanoState({ configured: true, allowed: false }, generators.gptImage).selectable, false);
   const run = { id: 'r', nodeId: 'p', provider: generators.gptImage, variants: 4, status: 'running' };
   assert.equal(runPlaceholders(graph, [run], 'page-1').nodes.length, 4);
-  for (const task of ['describe', 'upscale']) assert.throws(() => validateGraph(boardGraph({ task })), /GPT Image only generates images/);
+  validateGraph(boardGraph({ task: 'describe' }));
+  for (const task of ['upscale', 'model3d']) assert.throws(() => validateGraph(boardGraph({ task })), /GPT Image only generates images/);
 });
 
-test('changed JSX compiles and the real picker renders three cloud generators, setup reasons, and no GPT descriptions', async () => {
+test('changed JSX compiles and the real buttons render independent models, limits, and GPT descriptions', async () => {
   for (const file of ['main.jsx', 'CloudWorkspace.jsx', 'TeamAccessDialog.jsx']) await transformWithEsbuild(await readFile(new URL(`../src/${file}`, import.meta.url), 'utf8'), file, { loader: 'jsx' });
   const source = (await readFile(new URL('../src/GeneratorPicker.jsx', import.meta.url), 'utf8')).replace(/import .*?;\n/g, '');
   const compiled = await transformWithEsbuild(source, 'GeneratorPicker.jsx', { loader: 'jsx', format: 'cjs' });
   const module = { exports: {} };
   new Function('module', 'exports', 'React', 'generators', 'maxVariants', 'variantPresets', 'clampVariants', 't', compiled.code)(module, module.exports, React, generators, maxVariants, variantPresets, clampVariants, translate);
-  const props = { id: 'p', generator: generators.gptImage, nano: { selectable: true, note: 'Ready' }, gpt: nanoState({ configured: false }, generators.gptImage), choose() {} };
-  const markup = renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, generator: null }));
-  assert.match(markup, /value="nano-banana"/); assert.match(markup, /value="gpt-image">GPT Image · not set up/); assert.match(markup, /GPT Image isn’t set up/);
-  assert.doesNotMatch(renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, describe: true })), /GPT Image/);
+  const ready = nanoState({ configured: true, allowed: true, dailyImages: 100, usedToday: 2, monthlyUsd: 100, teamSpentUsd: 0 }), spent = nanoState({ configured: true, allowed: true, dailyImages: 100, usedToday: 100, monthlyUsd: 100, teamSpentUsd: 0 });
+  const props = { id: 'p', cloud: true, canRun: true, nano: ready, gpt: spent, run() {}, cancel() {}, fix() {}, ...promptGenerators({ cloud: true, known: true, codexReady: true, nano: ready, gpt: spent }) };
+  const markup = renderToStaticMarkup(React.createElement(module.exports.GeneratorButtons, props));
+  assert.match(markup, />Codex<\/span>/); assert.match(markup, />Nano Banana<\/span>/); assert.match(markup, /aria-label="Generate with GPT Image"[^>]*disabled=""/);
+  assert.match(markup, /Daily limit reached/);
+  const describe = { ...props, describe: true, ...promptGenerators({ cloud: true, describe: true, known: true, codexReady: true, nano: ready, gpt: spent }) };
+  const described = renderToStaticMarkup(React.createElement(module.exports.GeneratorButtons, describe));
+  assert.match(described, /aria-label="Describe with GPT"/); assert.match(described, />Gemini<\/span>/);
   setLanguage('uk');
   try {
-    const uk = renderToStaticMarkup(React.createElement(module.exports.GeneratorPicker, { ...props, generator: null, gpt: nanoState({ configured: false }, generators.gptImage) }));
-    assert.match(uk, /GPT Image не налаштовано/); assert.equal(translate('Generate with GPT Image'), 'Згенерувати через GPT Image');
+    const uk = renderToStaticMarkup(React.createElement(module.exports.GeneratorButtons, describe));
+    assert.match(uk, /Описати через GPT/); assert.match(uk, /Параметри генераторів/);
   } finally { setLanguage('en'); }
   // The variants row: one-click presets, then a field for any other count, which shows a typed count as chosen.
   const { VariantRow, typedVariants } = module.exports, row = props => renderToStaticMarkup(React.createElement(VariantRow, { id: 'p', choose() {}, ...props }));
@@ -271,8 +277,8 @@ test('the local OpenAI stand-in validates real requests and produces PNGs withou
   let handler;
   const createServer = callback => { handler = callback; return { listen() {} }; };
   new Function('createServer', 'picture', 'send', 'process', 'console', source)(createServer, picture, send, { env: {} }, { log() {} });
-  const respond = async (prompt, references = []) => {
-    const { url, init } = gptImageRequest(prompt, references, { key: 'fake' });
+  const respond = async (prompt, references = [], options = {}) => {
+    const { url, init } = gptImageRequest(prompt, references, { key: 'fake', ...options });
     const request = { method: 'POST', url: new URL(url).pathname, headers: { authorization: init.headers.Authorization }, async *[Symbol.asyncIterator]() { yield Buffer.from(init.body); } };
     let status, body;
     await handler(request, { writeHead(value) { status = value; }, end(value) { body = JSON.parse(value); } });
@@ -281,6 +287,10 @@ test('the local OpenAI stand-in validates real requests and produces PNGs withou
   const generated = await respond('robot'); assert.equal(generated.status, 200); assert.deepEqual(imageSize(gptImageResult(200, generated.body).images[0].bytes), { width: 1024, height: 1024 });
   const edited = await respond('robot', [{ mimeType: 'image/png', data: b64(png()) }]); assert.equal(edited.status, 200); assert.equal(edited.body.usage.input_tokens_details.image_tokens, 1120);
   for (const [mode, code] of [['refuse', 'moderation_blocked'], ['busy', 'rate_limit_exceeded'], ['credit', 'insufficient_quota'], ['key', 'invalid_api_key'], ['verify', 'permission_denied']]) assert.equal((await respond(`[${mode}]`)).body.error.code, code);
+  // Generation settings send documented custom sizes, other qualities and a transparent background; the stand-in takes them.
+  const wide = await respond('robot', [], { size: '1568x672', quality: 'high', background: 'transparent' });
+  assert.equal(wide.status, 200); assert.deepEqual(imageSize(gptImageResult(200, wide.body).images[0].bytes), { width: 1568, height: 672 });
+  assert.equal((await respond('robot', [], { size: '1000x1000' })).status, 400);
 });
 
 function setup(t, extra = {}, data, refs) {
@@ -433,10 +443,74 @@ test('cloud start/cancel uses the shared server route and never a helper', async
   const doc = new Y.Doc(), calls = [], graph = boardGraph({}, false);
   applyLocalGraph(doc, graph, empty, 'seed');
   const jobs = new CloudGeneration({ doc, boardId: 'board', user, ready: () => true, helperApi: () => assert.fail('helper called'), api: async (path, options) => { calls.push([path, options]); return { run: { id: 'run' } }; } });
-  await jobs.startNano('p');
+  await jobs.startNano('p', generators.gptImage);
+  assert.equal(JSON.parse(calls[0][1].body).generator, generators.gptImage);
   doc.getMap('runs').set('run', { id: 'run', nodeId: 'p', provider: generators.gptImage, status: 'running', by: user });
   assert.equal(jobs.remote('run'), true); await jobs.cancel('run');
   assert.equal(calls[0][0], '/api/boards/board/nano'); assert.equal(calls[1][0], '/api/boards/board/nano/run/cancel'); doc.destroy();
+});
+
+runtimeTest('one prompt runs Nano and GPT together beside Codex, refuses duplicate Nano, and honours each explicit provider', async t => {
+  const app = setup(t, {}, { variants: 2 }), held = gate(); t.after(held.open);
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) }); await held.promise;
+    return Response.json(String(url).includes('openai') ? answer() : { status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'image', mime_type: 'image/png', data: b64(png()) }] }] });
+  });
+  app.room.document.getMap('runs').set('codex', { id: 'codex', nodeId: 'p', status: 'queued' });
+  const path = `/api/boards/${app.board.id}/nano`, start = generator => app.request(path, { method: 'POST', data: { nodeId: 'p', generator } });
+  const [first, gpt, second] = await Promise.all([start(generators.nanoBanana), start(generators.gptImage), start(generators.nanoBanana)]);
+  // Authentication is asynchronous: either Nano request may win, but exactly one must start.
+  assert.deepEqual([first.status, second.status].sort(), [202, 409]); assert.equal(gpt.status, 202);
+  const nano = first.status === 202 ? first : second;
+  const nanoId = (await nano.json()).run.id, gptId = (await gpt.json()).run.id;
+  assert.equal(app.room.document.getMap('runs').get(nanoId).provider, generators.nanoBanana);
+  assert.equal(app.room.document.getMap('runs').get(gptId).provider, generators.gptImage);
+  // The saved default remains GPT; the Nano request used a copy, including its input snapshot.
+  assert.equal(readCloudGraph(app.room.document).nodes.find(node => node.id === 'p').data.generator, generators.gptImage);
+  assert.equal(app.room.nanoJobs.get(nanoId).request.target.data.generator, generators.nanoBanana);
+  assert.equal(app.room.nanoJobs.get(gptId).request.target.data.generator, generators.gptImage);
+  held.open(); await app.settle();
+  const graph = readCloudGraph(app.room.document);
+  assert.equal(graph.runs.find(run => run.id === nanoId).status, 'completed');
+  assert.equal(graph.runs.find(run => run.id === gptId).status, 'completed');
+  assert.equal(graph.groups.length, 2); assert.equal(calls.length, 4);
+  const groups = graph.groups.map(group => group.nodeIds.map(id => graph.nodes.find(node => node.id === id)));
+  assert.notDeepEqual(groups[0][0].position, groups[1][0].position); validateGraph(graph);
+  for (const generator of [null, 'codex', 'bogus', {}, 42]) assert.equal((await start(generator)).status, 400);
+  assert.equal(calls.length, 4);
+});
+
+runtimeTest('the room blocks duplicate provider starts while references are still being checked', async t => {
+  const app = setup(t), held = gate(); t.after(held.open);
+  const checking = app.room.referencesProblem.bind(app.room);
+  app.room.referencesProblem = async (...args) => { await held.promise; return checking(...args); };
+  fake(t);
+  const first = app.room.startNano({ nodeId: 'p', generator: generators.gptImage, requester: user });
+  await new Promise(resolve => setImmediate(resolve));
+  const duplicate = await app.room.startNano({ nodeId: 'p', generator: generators.gptImage, requester: user });
+  assert.equal(duplicate.status, 409);
+  held.open(); assert.ok((await first).run.id); await app.settle();
+  assert.equal(app.room.nanoStarting.size, 0);
+});
+
+runtimeTest('describe models run together and cancelling Gemini leaves GPT running', async t => {
+  const app = setup(t, {}, { task: 'describe' }), held = gate(); t.after(held.open);
+  t.mock.method(globalThis, 'fetch', async url => {
+    await held.promise;
+    return Response.json(String(url).includes('openai') ? { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'GPT description' }] }] }
+      : { status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'Gemini description' }] }] });
+  });
+  const [gemini, gpt] = await Promise.all([generators.nanoBanana, generators.gptImage].map(generator => app.room.startNano({ nodeId: 'p', generator, requester: user })));
+  assert.ok(gemini.run?.id); assert.ok(gpt.run?.id);
+  await app.room.cancelNano({ runId: gemini.run.id, email: user.email });
+  assert.equal(app.room.document.getMap('runs').get(gemini.run.id).status, 'cancelled');
+  assert.ok(['queued', 'running'].includes(app.room.document.getMap('runs').get(gpt.run.id).status));
+  held.open(); await app.settle();
+  const graph = readCloudGraph(app.room.document), gptRun = graph.runs.find(run => run.id === gpt.run.id);
+  assert.equal(gptRun.status, 'completed');
+  assert.equal(graph.nodes.find(node => node.id === gptRun.outputIds[0]).data.text, 'GPT description');
+  assert.equal(app.directory.nanoUsage(user.email).usedToday, 0);
 });
 
 runtimeTest('the room sends GPT Image the chosen size, quality and background, and keeps a masked image’s shape', async t => {
@@ -475,4 +549,74 @@ runtimeTest('large GPT Image variants go one (4K) or two (2K) at a time, so a ro
     assert.equal(calls.length, 6, imageSize); assert.equal(peak, lanes, imageSize);
     assert.equal(app.room.document.getMap('runs').get(id).status, 'completed');
   }
+});
+
+runtimeTest('GPT descriptions run on the OpenAI key without Gemini, spend zero daily images, and place one text output', async t => {
+  const app = setup(t, { GEMINI_API_KEY: '', NANO_BANANA_DAILY_IMAGES: '0' }, { task: 'describe', variants: 4 });
+  const usage = { input_tokens: 1000, output_tokens: 500, output_tokens_details: { reasoning_tokens: 100 } };
+  const calls = fake(t, () => Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Only the lighting.' }] }], usage }));
+  assert.equal((await app.start()).status, 202); await app.settle();
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer company-key'); assert.equal(calls[0].init.redirect, 'manual');
+  assert.equal(calls[0].body.model, gptDescribeModel); assert.equal(calls[0].body.store, false);
+  assert.match(calls[0].body.input[0].content[0].text, /Describe the attached images/);
+  const image = calls[0].body.input[0].content.find(block => block.type === 'input_image');
+  assert.equal(image.image_url, `data:image/png;base64,${b64(png(640, 480))}`); assert.equal(image.detail, 'high');
+  const graph = readCloudGraph(app.room.document), [run] = graph.runs, output = graph.nodes.find(node => node.id === run.outputIds[0]);
+  assert.deepEqual([run.status, run.task, run.model, run.provider, run.outputIds.length], ['completed', 'describe', gptDescribeModel, generators.gptImage, 1]);
+  assert.deepEqual([output.type, output.data.text, output.data.runId], ['text', 'Only the lighting.', run.id]);
+  assert.ok(graph.edges.some(edge => edge.source === 'p' && edge.target === output.id));
+  const spent = app.directory.nanoUsage(user.email); assert.equal(spent.usedToday, 0); assert.equal(spent.teamSpentUsd, gptDescribeCost(usage));
+});
+
+runtimeTest('GPT descriptions enforce setup, access and monthly budget before paid calls', async t => {
+  const calls = fake(t);
+  for (const [extra, status] of [[{ OPENAI_API_KEY: '' }, 503], [{ NANO_BANANA_ALLOWED: '' }, 403], [{ NANO_BANANA_MONTHLY_USD: '0' }, 429]]) {
+    const app = setup(t, extra, { task: 'describe' }); assert.equal((await app.start()).status, status); await app.settle();
+  }
+  assert.equal(calls.length, 0);
+});
+
+runtimeTest('GPT description failures settle billed usage or the estimate and never create an empty text node or retry', async t => {
+  for (const mode of ['refusal', 'incomplete', 'http', 'lost']) await t.test(mode, async t => {
+    const app = setup(t, {}, { task: 'describe' }), usage = { input_tokens: 100, output_tokens: 20 };
+    const calls = fake(t, () => {
+      if (mode === 'lost') throw new Error('Lost response');
+      return mode === 'http' ? Response.json({ error: { code: 'invalid_api_key', message: 'SECRET' } }, { status: 401 })
+        : Response.json({ status: mode === 'incomplete' ? 'incomplete' : 'completed', incomplete_details: { reason: 'max_output_tokens' },
+          output: mode === 'refusal' ? [{ type: 'message', content: [{ type: 'refusal', refusal: 'SECRET' }] }] : [], usage });
+    });
+    assert.equal((await app.start()).status, 202); await app.settle();
+    const graph = readCloudGraph(app.room.document), [run] = graph.runs;
+    assert.equal(run.status, 'failed'); assert.equal(graph.nodes.length, 2); assert.equal(calls.length, 1); assert.doesNotMatch(run.error, /SECRET|GPT Image/);
+    const spent = app.directory.nanoUsage(user.email); assert.equal(spent.usedToday, 0);
+    assert.equal(spent.teamSpentUsd, mode === 'http' ? 0 : mode === 'lost' ? gptDescribeEstimate({ promptLength: calls[0].body.input[0].content[0].text.length, references: 1 }) : gptDescribeCost(usage));
+  });
+});
+
+runtimeTest('MCP creates and starts a GPT description on the server with no helper or Gemini key', async t => {
+  const app = setup(t, { GEMINI_API_KEY: '' }), calls = fake(t, () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A robot.' }] }], usage: { input_tokens: 200, output_tokens: 100 } }));
+  await app.room.setName(app.board.id);
+  const { mcpApi } = await import('../cloud/mcp.mjs');
+  const tool = async (name, args) => {
+    const response = await mcpApi.fetch(new Request('http://localhost:8787/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) }), app.env, { props: user });
+    const { result } = await response.json(); assert.equal(result.isError, undefined, JSON.stringify(result)); return JSON.parse(result.content[0].text);
+  };
+  const { nodeId } = await tool('add_text_node', { boardId: app.board.id, text: 'Only lighting', describe: true, generator: 'gpt-image' });
+  await tool('connect_nodes', { boardId: app.board.id, source: 'i', target: nodeId });
+  const started = await tool('start_run', { boardId: app.board.id, nodeId }); await app.settle();
+  assert.equal(started.generator, 'gpt-image'); assert.equal(calls.length, 1);
+  const run = readCloudGraph(app.room.document).runs[0]; assert.equal(run.status, 'completed'); assert.equal(run.model, gptDescribeModel);
+  assert.equal(app.directory.nanoUsage(user.email).usedToday, 0);
+});
+
+runtimeTest('cancelled GPT descriptions keep the billed estimate and discard late text', async t => {
+  const app = setup(t, {}, { task: 'describe' }), held = gate(); t.after(held.open);
+  const calls = fake(t, async () => { await held.promise; return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'Late text.' }] }] }); });
+  const { run: { id } } = await (await app.start()).json();
+  assert.deepEqual(app.room.cancelNano({ runId: id, email: user.email }), { ok: true }); assert.equal(calls[0].init.signal.aborted, true);
+  held.open(); await app.settle();
+  assert.equal(app.room.document.getMap('runs').get(id).status, 'cancelled'); assert.equal(calls.length, 1);
+  assert.equal(readCloudGraph(app.room.document).nodes.length, 2);
+  assert.deepEqual(app.directory.nanoUsage(user.email), { usedToday: 0, teamSpentUsd: gptDescribeEstimate({ promptLength: calls[0].body.input[0].content[0].text.length, references: 1 }) });
 });

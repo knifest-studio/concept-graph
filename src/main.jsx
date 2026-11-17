@@ -1,6 +1,6 @@
 import { track, analyticsView, analyticsReady, analyticsViewport, analyticsVia } from './analytics.mjs';
 import { promptAnalytics } from './generation-analytics.mjs';
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext, useId } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal, flushSync } from 'react-dom';
 import { ReactFlow, ReactFlowProvider, Background, BaseEdge, getBezierPath, Handle, useUpdateNodeInternals, NodeResizer, NodeResizeControl, Position, SelectionMode, ViewportPortal, applyNodeChanges, applyEdgeChanges, addEdge, useReactFlow, useNodesInitialized, useStore, useStoreApi } from '@xyflow/react';
@@ -9,7 +9,7 @@ import { XYDrag } from '@xyflow/system';
 import '@xyflow/react/dist/style.css';
 import './style.css';
 import { formatDuration, runElapsed } from '../timing.mjs';
-import { codexGenerator, generationFields, generatorOf, takesGenerationSettings, generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
+import { codexGenerator, withGenerator, onePromptImages, generationFields, generatorOf, takesGenerationSettings, generators, maxNodes, runInputList, templatePalette, templateColor, nextTemplateColor, templateSnapshot, describeTask, isDescribe, isGptImage, imageSize, nodeSize, captionHeight, model3dTask, modelNames, modelers, modelerOf, maxModel3dImages, upscaleTask, upscalers, upscalerOf, upscaleScale, maxUpscaleImages, resolutionLabel, imageName, uniqueImageName, nameImageConnections, mainImageFor, uniqueModelName } from '../graph.mjs';
 import { ButtonHelp } from './ButtonHelp.jsx';
 import { nodeClipboardType, selectedGraph, readNodeClipboard, cloneSelection, copyImageToClipboard } from './clipboard.mjs';
 import { duplicateGesture, dropDrag, handBackSelection, handOverSelection, planDragDuplicate, positionChanges, retargetDrag } from './duplicate-drag.mjs';
@@ -29,7 +29,8 @@ import { CustomNodesCard } from './CustomNodesCard.jsx';
 import { CustomNodeActions } from './CustomNodeActions.jsx';
 import { CopyCustomNodes } from './CopyCustomNodes.jsx';
 import { discoveryKey, plainPrompt, readDiscovery, reusableDuplicate, writeDiscovery, invitationDue } from './custom-node-discovery.mjs';
-import { GeneratorPicker, VariantRow } from './GeneratorPicker.jsx';
+import { GeneratorButtons, VariantRow } from './GeneratorPicker.jsx';
+import { DeckAnimation } from './DeckAnimation.jsx';
 import { GenerationSettings } from './GenerationSettings.jsx';
 import { appliedSummary } from './generation-settings.mjs';
 import { ZoomableImage } from './ImageZoom.jsx';
@@ -41,7 +42,7 @@ import { ResizeDialog } from './ResizeDialog.jsx';
 import { hasGenerationPrompt, imageAssets, originalAsset, resizedImageData, restoreSizeData } from './image-edits.mjs';
 import { defaultResizeSide, loadResizeImage, resizeAllTargets, resizeTarget, saveResizedImage, shrinkUpload, sizeText } from './image-resize.mjs';
 import { FirstPromptHint, dismissFirstPromptHint, firstPromptHintDismissed, firstPromptStep } from './FirstPromptHint.jsx';
-import { dollars, generatorKind, nanoState, readLastGenerators, rememberGenerator, startingGenerator, usesSiteGenerator } from './generator.mjs';
+import { dollars, generatorKind, nanoState, promptGenerators, readLastGenerators, rememberGenerator, startingGenerator, usesSiteGenerator } from './generator.mjs';
 import { imageInfo } from './image-info.mjs';
 import { RunDiagnostics } from './RunDiagnostics.jsx';
 import { GenerationTray, trayCollapsedFor } from './GenerationTray.jsx';
@@ -77,7 +78,7 @@ import { arrangeLayers, nextLayer, stackOnTop } from './layers.mjs';
 import { assignPage, boardPages, defaultPageId, defaultPages, maxPages, mergePages, nextPageName, nodePage, pageContent, pageName, pageResolver, openingViewport, readPagePreference, resolvePage, storedPages, writePagePreference } from './pages.mjs';
 import { checklistSteps, gettingStartedKey, generationRequired, generationReadiness, generationIntent, intentUnchanged, inputLabel, freePromptPosition, freeSpot, focusViewport } from './onboarding.mjs';
 import { CanvasContext, useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
-import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual } from './canvas-store.mjs';
+import { createCanvasStore, detailLevel, inputCounts, latestCommands, outsideViewport, runAuthor, runLookups, shallowEqual, generationKey, nodeStarting } from './canvas-store.mjs';
 
 const cloud = import.meta.env.VITE_CONCEPT_GRAPH_CLOUD === '1';
 const hosted = !cloud && import.meta.env.VITE_CONCEPT_GRAPH_HOSTED === '1';
@@ -105,6 +106,8 @@ const deselected = item => item.selected ? { ...item, selected: false } : item;
 // A card that folds or unfolds changes size; its old measurement would misplace its connections until React Flow re-measures.
 const refolded = (node, collapsed) => { const { measured, ...rest } = node; return { ...rest, data: { ...node.data, collapsed } }; };
 const busy = run => ['running', 'queued'].includes(run?.status);
+// How long the camera waits after a model button is clicked before showing that run's first result.
+const revealPause = 1500;
 // Deleting this many nodes and sections at once asks first.
 const bulkDeleteCount = 20;
 // Only an explicit selection is aligned, so drawings and stamps around other nodes never shift by accident.
@@ -141,9 +144,9 @@ const failedRun = run => ['error', 'failed'].includes(run?.status);
 const NanoReadiness = ({ note }) => <div className="node-readiness nodrag"><span>{note}</span></div>;
 const Readiness = ({ readiness, action, fix }) => <div className="node-readiness nodrag"><span>{readiness === 'helper' ? t('Helper not connected.') : readiness === 'install' ? t('Codex is not installed.') : readiness === 'signin' ? t('Sign-in needed.') : t('Codex is not ready.')}</span><button type="button" onClick={fix}>{action}</button></div>;
 // What a prompt shows about its latest run; `now` counts only while that run is active, so idle cards ignore the timer.
-const runView = (state, id) => {
-  const run = state.latestRun.get(id), active = busy(run);
-  return { runId: run?.id, status: run?.status, error: run?.error, active, starting: state.starting === id, byName: run?.by?.name, timer: active ? formatDuration(runElapsed(run, state.now)) : '' };
+const runView = (state, id, generator) => {
+  const run = generator ? state.modelRuns.get(id)?.get(generator) : state.latestRun.get(id), active = busy(run);
+  return { runId: run?.id, status: run?.status, error: run?.error, active, starting: generator ? !!state.starting?.has(generationKey(id, generator)) : nodeStarting(state.starting, id), byName: run?.by?.name, timer: active ? formatDuration(runElapsed(run, state.now)) : '' };
 };
 
 const toolType = 'application/x-concept-graph-tool';
@@ -183,28 +186,29 @@ function PromptInputs({ data, light = false }) {
 }
 
 function FullTextNode(props) {
-  const working = useCanvasValue(state => busy(state.latestRun.get(props.id)) || state.starting === props.id);
+  const working = useCanvasValue(state => state.activeNodes.has(props.id) || nodeStarting(state.starting, props.id));
   return <NodeFeedback id={props.id} working={working}>{props.data.collapsed ? <CollapsedNode {...props} kind="text"/> : props.data.task === model3dTask ? <Model3dNode {...props}/> : props.data.task === upscaleTask ? <UpscaleNode {...props}/> : <ExpandedTextNode {...props}/>}</NodeFeedback>;
 }
 
 function ExpandedTextNode({ id, data, selected }) {
-  const canvas = useCanvas(), shortcuts = useShortcutOverrides();
-  const view = useCanvasValue(state => ({ ...runView(state, id), userName: state.userName, inputs: inputLabel(state.inputs.get(id) || noInputs), readiness: state.readinessKey, readinessAction: state.readinessAction,
+  const canvas = useCanvas();
+  const view = useCanvasValue(state => ({ modelRuns: state.modelRuns.get(id), startingKeys: state.starting, now: state.activeNodes.has(id) ? state.now : null, working: state.activeNodes.has(id) || nodeStarting(state.starting, id), known: state.nanoKnown, codexReady: state.codexReady, userName: state.userName, inputs: inputLabel(state.inputs.get(id) || noInputs), readiness: state.readinessKey, readinessAction: state.readinessAction,
     focus: state.focusId === id ? state.focusControl : null, highlight: state.highlight === `${id}:generate`, templates: state.templates, images: (state.inputs.get(id) || noInputs).images, nanoSelectable: state.nanoSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, nanoShort: state.nanoShort, nanoRequestable: state.nanoRequestable, nanoBudget: state.nanoBudget, gptSelectable: state.gptSelectable, gptReady: state.gptReady, gptNote: state.gptNote, gptShort: state.gptShort, gptBudget: state.gptBudget, readOnly: state.readOnly }), shallowEqual);
-  const pending = view.active || view.starting;
-  const canCancel = !cloud || view.starting || view.byName === view.userName;
+  const pending = view.working;
   const [draft, setDraft] = useState(data.text), [more, setMore] = useState(false);
   // A describe node needs only images; its text is an optional focus for the description.
   const describe = data.task === describeTask, canRun = describe ? view.images > 0 : !!draft.trim() || !!data.template?.instructions?.trim();
   const editor = useRef(null), generateButton = useRef(null), edited = useRef(false);
   const changeText = value => { setDraft(value); if (!edited.current) { canvas.checkpoint(); edited.current = true; } canvas.editText(id, value); };
   const dictation = usePromptDictation(editor, draft, changeText, canvas.dictationLanguage, canvas);
-  // Site generators need no helper; they are blocked only by what the site allows this person.
-  // A Gemini description needs no daily images, only the person's place on the allowed list.
-  const nano = cloud && usesSiteGenerator(data), gpt = nano && data.generator === generators.gptImage;
-  const site = gpt ? { selectable: view.gptSelectable, ready: view.gptReady, note: view.gptNote } : { selectable: view.nanoSelectable, ready: view.nanoReady, note: view.nanoNote };
-  const blocked = nano ? (describe ? !site.selectable : !site.ready) : view.readiness !== 'ready', connect = blocked && !nano;
-  const generateLabel = gpt ? t('Generate with GPT Image') : t('Generate with Nano Banana');
+  const nano = { selectable: view.nanoSelectable, ready: view.nanoReady, note: view.nanoNote, requestable: view.nanoRequestable, budget: view.nanoBudget }, gpt = { selectable: view.gptSelectable, ready: view.gptReady, note: view.gptNote, budget: view.gptBudget };
+  const offered = promptGenerators({ cloud, describe, codexReady: view.codexReady, known: view.known, nano, gpt });
+  // Keep a running model visible if access or the helper changes while another model is generating.
+  const models = [...offered.models];
+  for (const [generator, run] of view.modelRuns || []) if (busy(run) && !models.some(model => model.generator === generator)) models.push({ generator, name: generator === codexGenerator ? 'Codex' : generator === generators.gptImage ? describe ? 'GPT' : 'GPT Image' : describe ? 'Gemini' : 'Nano Banana', disabled: true });
+  const modelViews = Object.fromEntries(models.map(({ generator }) => [generator, runView({ modelRuns: new Map([[id, view.modelRuns]]), starting: view.startingKeys, now: view.now }, id, generator)]));
+  const failure = [...(view.modelRuns?.values() || [])].filter(failedRun).sort((a, b) => String(b.finishedAt || b.startedAt || b.createdAt || '').localeCompare(String(a.finishedAt || a.startedAt || a.createdAt || '')))[0];
+  const failureName = failure?.provider === generators.gptImage ? describe ? 'GPT' : 'GPT Image' : failure?.provider === generators.nanoBanana ? describe ? 'Gemini' : 'Nano Banana' : 'Codex';
   // React Flow propagates node data through its store after the input event.
   // Keep the controlled input synchronous so React never restores an old value/caret.
   useLayoutEffect(() => {
@@ -233,9 +237,9 @@ function ExpandedTextNode({ id, data, selected }) {
   return <NodeContextMenu id={id} type="text" actions={canvas}><article className={`node-card text-node ${pending ? 'working' : ''} ${data.template ? 'custom-node' : ''}${describe ? ' describe-node' : ''}${data.height ? ' sized' : ''}`} style={{ ...(data.template ? { '--template-color': templateColor(data.template) } : {}), ...textHeight(data) }}>
     {!view.readOnly && <NodeResizeControl position="bottom" variant="line" resizeDirection="vertical" minHeight={textHeights.min} maxHeight={textHeights.max} className="text-height-handle" title={t('Drag to change the height')}/>}
     <PromptInputs data={data}/>
-    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button><div className="run-controls nodrag"><div className="generate-slot">{pending && <span className="generation-label" role="status">{view.starting && !view.active ? t('Starting…') : canCancel ? `${describe ? t('Describing') : t('Generating')}… ${view.timer}` : `${describe ? t('Describing') : t('Generating')}… (${view.byName})`}</span>}<button ref={generateButton} data-analytics-name={describe ? 'Describe' : 'Generate'} className={`run-button ${pending ? 'run-pending' : ''} ${view.highlight ? 'onboarding-highlight' : ''}${nano ? ' nano' : ''}`} type="button" aria-label={connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe images') : t('Generate image')} onClick={event => canvas.run(id, null, event)} disabled={pending || !canRun} data-tooltip={!canRun ? (describe ? t('Connect an image first') : t('Write a prompt first')) : nano && blocked ? site.note : withShortcut(`${connect ? describe ? t('Connect and describe') : t('Connect and generate') : nano ? describe ? t('Describe with Gemini') : generateLabel : describe ? t('Describe connected images') : t('Generate image')}`, 'prompt.generate', shortcuts)}><Icon name="play" size={12}/><span>{connect ? t('Connect') : describe ? t('Describe') : nano ? gpt ? 'GPT Image' : 'Nano Banana' : t('Generate')}</span></button></div>{cloud && !pending && <GeneratorPicker describe={describe} id={id} generator={data.generator} nano={{ selectable: view.nanoSelectable, note: view.nanoNote, short: view.nanoShort, requestable: view.nanoRequestable, budget: view.nanoBudget }} request={canvas.requestAccess} gpt={{ selectable: view.gptSelectable, note: view.gptNote, short: view.gptShort, budget: view.gptBudget }} choose={canvas.setGenerator}/>}{pending && canCancel && view.active && <button className="run-cancel" type="button" disabled={view.starting} onClick={() => canvas.cancel(view.runId)}>{t('Cancel')}</button>}</div></header>
+    <header className="node-drag">{describe ? <span className="describe-label"><Icon name="describe" size={14}/>{t('Describe image')}</span> : <NodeTemplatePicker id={id} template={data.template} templates={view.templates} switchTemplate={canvas.switchTemplate} viewTemplate={canvas.viewTemplate} disabled={view.readOnly}/>}<button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse text node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button></header>
     <div className={`prompt-editor${more ? ' has-more' : ''}`}>
-      <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if (matchShortcut(event, { scopes: ['prompt'], editing: true }) === 'prompt.generate') { event.preventDefault(); dictation.cancel(); if (!pending && canRun) canvas.run(id); } }}/>
+      <textarea ref={editor} className="nodrag" rows={1} onScroll={event => setMore(hiddenBelow(event.currentTarget))} aria-label={describe ? t('Description focus') : t('Image prompt')} readOnly={view.readOnly} value={draft} placeholder={describe ? t('Optional: what should the description focus on?') : t('Describe the image you want, then click Generate')} onFocus={() => { edited.current = false; }} onChange={event => { if (dictation.active) dictation.cancel(); changeText(event.target.value); }} onKeyDown={event => { if (matchShortcut(event, { scopes: ['prompt'], editing: true }) === 'prompt.generate') { event.preventDefault(); dictation.cancel(); if (canRun) canvas.run(id); } }}/>
       {dictation.supported && <button type="button" className={`dictation-button nodrag ${dictation.active ? 'active' : ''} ${dictation.listening ? 'recording' : ''}`} aria-label={dictation.active ? t('Stop dictation') : t('Dictate prompt')} aria-pressed={dictation.active} disabled={dictation.stopping} data-tooltip={dictation.active ? dictation.stopping ? t('Finishing dictation…') : t('Stop dictation · Esc') : t('Dictate (speech is recognised by your browser’s service)')} onPointerDown={event => event.preventDefault()} onClick={dictation.toggle} onDoubleClick={event => event.stopPropagation()}><Icon name="mic" size={13}/>{dictation.active && <i aria-hidden="true"/>}</button>}
       {dictation.active && <button type="button" className="dictation-lang nodrag" aria-label={t('Dictation language {language}, click to switch', { language: dictation.language || '…' })} data-tooltip={t('Switch language · UK / EN / RU')} disabled={!dictation.language || dictation.stopping} onPointerDown={event => event.preventDefault()} onClick={dictation.switchLanguage}>{dictation.language || '…'}</button>}
       {more && !view.readOnly && <button type="button" className="prompt-more nodrag" onClick={showAll}>{t('Show all')}</button>}
@@ -243,12 +247,12 @@ function ExpandedTextNode({ id, data, selected }) {
       {dictation.active && <span className="sr-only" role="status">{dictation.stopping ? t('Finishing dictation') : dictation.listening ? t('Recording {language}', { language: dictation.language }) : t('Starting dictation')}</span>}
     </div>
     {dictation.error && <div className="node-error nodrag" role="alert">{dictation.error}</div>}
-    {/* The variant counts (site generators) and the generation settings chip; Codex prompts have the chip alone. */}
-    {!describe && <div className="variant-row nodrag">{nano && <VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly} compact/>}
+    {/* The variant counts and the generation settings chip. Codex gets the count as a strict rule in its request. */}
+    {!describe && <div className="variant-row nodrag"><VariantRow id={id} variants={data.variants || 1} choose={canvas.setVariants} disabled={view.readOnly} compact/>
       <GenerationSettings id={id} data={data} generator={cloud ? generatorOf({ data }) : codexGenerator} readOnly={view.readOnly} references={view.images} cloud={cloud} change={canvas.setGenerationSettings}/></div>}
+    <GeneratorButtons id={id} {...offered} models={models} runs={modelViews} canRun={canRun} readOnly={view.readOnly} userName={view.userName} cloud={cloud} describe={describe} run={canvas.run} cancel={canvas.cancel} fix={canvas.fixReadiness} request={canvas.requestAccess} nano={nano} gpt={gpt} buttonRef={generateButton} highlight={view.highlight}/>
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
-    {selected && blocked && !pending && (nano ? <NanoReadiness note={site.note}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
-    {failedRun(view) && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}
+    {failure && <div className="node-error nodrag">{failureName} · {t(failure.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(failure.id)}>{t('View run details')}</button>}</div>}
     <Handle type="source" position={Position.Right} aria-label={t('Connect prompt to another node')}/>
   </article></NodeContextMenu>;
 }
@@ -331,7 +335,7 @@ function CollapsedImage({ asset, id }) {
 function CollapsedNode({ id, data, kind }) {
   const canvas = useCanvas(), isImage = kind === 'image', fromModel = useCanvasValue(state => state.modelViewIds.has(id)), updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => { updateNodeInternals(id); }, [fromModel]);
-  const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return run ? { status: run.status, error: run.error } : null; }, shallowEqual);
+  const run = useCanvasValue(state => { const run = !isImage && state.latestRun.get(id); return !isImage ? { status: state.activeNodes.has(id) || nodeStarting(state.starting, id) ? 'running' : run?.status, error: run?.error } : null; }, shallowEqual);
   return <NodeContextMenu id={id} type={kind} actions={canvas} masked={!!data.mask} resized={!!data.unresized}>
     <article className={`collapsed-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'} ${!isImage && data.template ? 'custom-node' : ''}`} style={!isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined}>
       {isImage ? (data.runId || fromModel) && <Handle type="target" position={Position.Left} isConnectable={false} aria-label={t('Image input')}/> : <PromptInputs data={data}/>}
@@ -430,10 +434,10 @@ function LightNode({ id, type, data, selected }) {
   const isImage = type === 'image', canvas = useCanvas(), fromModel = useCanvasValue(state => state.modelViewIds.has(id));
   const view = useCanvasValue(state => {
     const run = !isImage && state.latestRun.get(id);
-    return { working: busy(run) || state.starting === id, failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, falReady: state.falReady, create: state.detail !== 'tiny' || !state.crowded,
-      readiness: state.readinessKey, readinessAction: state.readinessAction, nanoReady: state.nanoReady, nanoNote: state.nanoNote, gptReady: state.gptReady, gptNote: state.gptNote };
+    return { working: state.activeNodes.has(id) || nodeStarting(state.starting, id), failed: failedRun(run), error: run?.error, runId: run?.id, inputs: isImage ? '' : inputLabel(state.inputs.get(id) || noInputs), images: isImage ? 0 : (state.inputs.get(id) || noInputs).images, falReady: state.falReady, create: state.detail !== 'tiny' || !state.crowded,
+      readiness: state.readinessKey, readinessAction: state.readinessAction, known: state.nanoKnown, codexReady: state.codexReady, nanoSelectable: state.nanoSelectable, gptSelectable: state.gptSelectable, nanoReady: state.nanoReady, nanoNote: state.nanoNote, gptReady: state.gptReady, gptNote: state.gptNote };
   }, shallowEqual);
-  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), nano = cloud && usesSiteGenerator(data), sized = textHeight(data);
+  const template = !isImage && data.template ? { '--template-color': templateColor(data.template) } : undefined, text = String(data.text || ''), sized = textHeight(data);
   if (data.collapsed) return <article data-feel-node={id} className={`collapsed-node lod-node ${isImage ? 'collapsed-node-image-card' : 'collapsed-node-text-card'}${template ? ' custom-node' : ''}`} style={template}>
     {isImage ? (data.runId || fromModel) && <LodHandle type="target"/> : <PromptInputs data={data} light/>}{isImage ? <LightImage id={id} asset={data.asset} create={view.create} collapsed/> : <Icon name="text" size={26}/>}
     {isImage && data.mask && <ImageMask data={data} preview={false}/>} {view.working && <span className="collapsed-run-dot"/>}{view.error && <span className="collapsed-run-dot failed"/>}<LodHandle type="source"/>
@@ -456,13 +460,13 @@ function LightNode({ id, type, data, selected }) {
       {view.failed && <div className="node-error nodrag">{t(view.error)}</div>}<LodHandle type="source"/>
     </article>;
   }
-  const describe = data.task === describeTask, gpt = nano && data.generator === generators.gptImage;
-  const siteReady = gpt ? view.gptReady : view.nanoReady, siteNote = gpt ? view.gptNote : view.nanoNote;
+  const describe = data.task === describeTask;
   return <article data-feel-node={id} className={`node-card text-node lod-node${view.working ? ' working' : ''}${template ? ' custom-node' : ''}${describe ? ' describe-node' : ''}${sized ? ' sized' : ''}`} style={{ ...template, ...sized }}>
     <PromptInputs data={data} light/><header/><div className={`lod-text${text ? '' : ' empty'}${text && promptOverflows({ data }) ? ' has-more' : ''}`}>{text || (describe ? t('Connect images, then click Describe') : t('Describe the image you want, then click Generate'))}</div>
     {!describe && <div className="variant-row" aria-hidden="true"/>}
+    {/* From afar the model buttons are hidden, like the variants above; the empty row keeps the card the height it has up close. */}
+    <div className="generator-buttons generator-chips" aria-hidden="true"/>
     {view.inputs && <div className="node-inputs">{t('Inputs: {inputs}', { inputs: view.inputs })}</div>}
-    {selected && (nano ? !siteReady : view.readiness !== 'ready') && !view.working && (nano ? <NanoReadiness note={siteNote}/> : <Readiness readiness={view.readiness} action={view.readinessAction} fix={canvas.fixReadiness}/>)}
     {view.failed && <div className="node-error nodrag">{t(view.error)}{!cloud && <button type="button" className="run-details-link" onClick={() => canvas.openRunDetails(view.runId)}>{t('View run details')}</button>}</div>}<LodHandle type="source"/>
   </article>;
 }
@@ -585,7 +589,12 @@ function FeedbackEdge(props) {
   const [path] = getBezierPath(props);
   return <BaseEdge id={props.id} path={path} pathLength="1" style={props.style} markerStart={props.markerStart} markerEnd={props.markerEnd}/>;
 }
-const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge, numbered: NumberedEdge };
+// A link's copy over a card that its own card lies on (canvas.mjs linkCopies): the same curve, cut to the covered card.
+function OverEdge({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, data }) {
+  const clip = `link-over${useId().replace(/[^\w-]/g, '')}`, [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition }), box = data.clip;
+  return <><clipPath id={clip}><rect x={box.x} y={box.y} width={box.width} height={box.height} rx="10"/></clipPath><path d={path} className="react-flow__edge-path" style={style} clipPath={`url(#${clip})`}/></>;
+}
+const edgeTypes = { feedback: FeedbackEdge, pending: PendingEdge, numbered: NumberedEdge, over: OverEdge };
 // Constant props: React Flow copies changed props into its store, and every copy re-runs every card's and edge's selector.
 // As in FigJam, Shift (or ⌘) toggles a card in or out of the selection, and a Shift drag starts on empty canvas like any box.
 const defaultEdgeOptions = { type: 'default' }, panButtons = [1, 2], multiSelectKeys = ['Shift', 'Meta'], proOptions = { hideAttribution: true };
@@ -831,7 +840,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const effects = useInteractionFeedback(viewer);
   const waiting = useWaitingVideos(viewer);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const userGeneration = useRef(null), runsToReveal = useRef(new Set());
+  const userGeneration = useRef(new Map()), runsToReveal = useRef(new Set()), revealHold = useRef(new Map());
   const feedbackSeeded = useRef(false);
   const [resizeRecovery, setResizeRecovery] = useState(null), resizingReferences = useRef(false);
   const [fileOver, setFileOver] = useState(false);
@@ -845,7 +854,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const strokePreview = useRef(null), stroke = useRef(null), toolRef = useRef('select'), sectionPreview = useRef(null), sectionDraft = useRef(null), sectionMoves = useRef(new Map());
   const chooseTool = value => { if (stroke.current || sectionDraft.current || arrowDraft.current) moving.current = false; toolRef.current = value; setTool(value); stroke.current = null; sectionDraft.current = null; arrowDraft.current = null; strokePreview.current?.show([]); sectionPreview.current?.show(null); };
   const [focusControl, setFocusControl] = useState('text'), [highlight, setHighlight] = useState(null), [helperOffline, setHelperOffline] = useState(false);
-  const viewOnlyNoticed = useRef(0), imageDrop = useRef(null), canvasElement = useRef(null), highlightTimer = useRef(null), pendingIntent = useRef(null), alive = useRef(true), runAction = useRef(null), generationStarting = useRef(false);
+  const viewOnlyNoticed = useRef(0), imageDrop = useRef(null), canvasElement = useRef(null), highlightTimer = useRef(null), pendingIntent = useRef(null), alive = useRef(true), runAction = useRef(null), generationStarting = useRef(new Set());
   const guide = useGettingStarted(gettingStartedKey(viewer));
   const groupRef = useRef([]), sectionRef = useRef(noSections);
   // Pages are part of the board; the open page and its viewport are this person's preference.
@@ -1089,6 +1098,13 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const size = measureView(viewCache.current)(node), caption = captionHeight(node);
     return { x: node.position.x, y: node.position.y - caption, width: size.width, height: size.height + caption };
   };
+  // The board area visible inside the canvas, less the margins revealViewport keeps clear, in board coordinates.
+  const visibleBoard = () => {
+    const element = canvasElement.current;
+    if (!element) return undefined;
+    const { x, y, zoom } = flow.getViewport(), { width, height } = element.getBoundingClientRect();
+    return width > 60 && height > 150 ? { x: Math.round((30 - x) / zoom), y: Math.round((60 - y) / zoom), width: Math.round((width - 60) / zoom), height: Math.round((height - 150) / zoom) } : undefined;
+  };
   const revealCreated = (node, source) => {
     if (!alive.current || !canvasElement.current || nodePage(node, pagesRef.current) !== activePageRef.current) return;
     viewerMoved.current = true;
@@ -1122,9 +1138,10 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       if (target) flow.setCenter(target.x, target.y, { zoom: target.zoom, duration: 180 });
     });
   };
-  const trackOwnRun = runId => {
+  const trackOwnRun = (runId, run) => {
     effects.ownRun(runId); guide.report({ type: 'run-started', id: runId });
-    if (userGeneration.current) { userGeneration.current.runId = runId; runsToReveal.current.add(runId); }
+    const start = run && userGeneration.current.get(generationKey(run.nodeId, run.provider));
+    if (start) { start.runId = runId; runsToReveal.current.add(runId); }
   };
   useEffect(() => {
     if (cloudSession) { cloudSession.onOwnRun = trackOwnRun; cloudSession.onAgentRun = nodeId => agentRunRef.current(nodeId); }
@@ -1153,7 +1170,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   useEffect(() => {
     if (pairing || codexReadiness.key !== 'ready' || !pendingIntent.current) return;
     const intent = pendingIntent.current; pendingIntent.current = null;
-    if (intentUnchanged(intent, currentGraph(), boardId)) runAction.current(intent.nodeId, intent);
+    if (intentUnchanged(intent, withGenerator(currentGraph(), intent.nodeId, intent.generator), boardId)) runAction.current(intent.nodeId, intent, undefined, intent.generator);
     else { focusNode(intent.nodeId); inform(t('Prompt changed — review and click Generate'), 'prompt_changed'); }
   }, [codexReadiness.key, pairing]);
   useEffect(() => {
@@ -1873,7 +1890,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     checkpoint();
     const usedNames = new Set(groupRef.current.map(group => group.name));
     let number = 1; while (usedNames.has(`Group ${number}`)) number++;
-    putGroups(current => [...current.map(deselected), { id: id(), name: `Group ${number}`, nodeIds: members.map(node => node.id), collapsed: false, selected: true }]);
+    // Images that all came from one prompt become its slideshow, folded into one card, as a finished run's do.
+    const slides = onePromptImages(members, edgeRef.current, runs);
+    putGroups(current => [...current.map(deselected), { id: id(), name: `Group ${number}`, nodeIds: members.map(node => node.id), collapsed: slides, ...(slides ? { slideshow: true } : {}), selected: true }]);
     putNodes(current => current.map(deselected)); markDirty();
     return true;
   };
@@ -1969,8 +1988,11 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // Menu actions on an unselected node arrange only that node, like Figma's right-click selection.
   const arrange = (action, nodeId) => {
     if (mcpLocked.current || !loaded || switchingRef.current) return;
-    const scoped = pageGraph(), target = nodeId && scoped.nodes.find(node => node.id === nodeId);
-    const layers = arrangeLayers(scoped.nodes, target && !target.selected ? [target.id] : scoped.nodes.filter(node => node.selected).map(node => node.id), action);
+    // A group (a folded slideshow card above all) moves its members together, keeping their order among themselves.
+    const scoped = pageGraph(), target = nodeId && scoped.nodes.find(node => node.id === nodeId), group = nodeId && scoped.groups.find(item => item.id === nodeId);
+    const chosen = group && !group.selected ? group.nodeIds : target && !target.selected ? [target.id]
+      : [...scoped.nodes.filter(node => node.selected).map(node => node.id), ...scoped.groups.filter(item => item.selected).flatMap(item => item.nodeIds)];
+    const layers = arrangeLayers(scoped.nodes, chosen, action);
     if (!layers.size) return;
     checkpoint(); putNodes(current => current.map(node => layers.has(node.id) ? { ...node, z: layers.get(node.id) } : node)); markDirty();
   };
@@ -2100,12 +2122,12 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (mcpLocked.current || readOnlyRef.current || node?.data.task !== model3dTask || node.data.modeler === modeler) return;
     checkpoint(); putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, modeler } } : item)); markDirty();
   };
-  const setGenerator = (nodeId, generator) => {
+  const setGenerator = (nodeId, generator, undo = true) => {
     const node = nodeRef.current.find(item => item.id === nodeId);
     if (mcpLocked.current || node?.type !== 'text' || (node.data.generator || null) === (generator || null)) return;
     const site = generator && (generator === generators.gptImage ? gptRef.current : nanoRef.current);
     if (site && !site.selectable) { inform(site.note, 'generator_unavailable'); cloudSession?.refreshNano?.(); return; }
-    checkpoint();
+    if (undo) checkpoint();
     putNodes(current => current.map(item => { if (item.id !== nodeId) return item; const data = { ...item.data }; if (generator) data.generator = generator; else delete data.generator; const main = mainImageFor(current, edgeRef.current, { ...item, data }); if (main) data.mainImage = main; return { ...item, data }; }));
     markDirty(); rememberGenerator(node.data, generator);
     if (generator) cloudSession?.refreshNano?.();
@@ -2165,7 +2187,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     checkpoint(); putPages(current => current.map(page => page.id === pageId ? { ...page, name } : page)); markDirty();
   };
   const pageBusy = pageId => runRef.current.some(run => busy(run) && resolvePage(pagesRef.current, run.page) === pageId)
-    || (!!starting && nodePage(nodeRef.current.find(node => node.id === starting), pagesRef.current) === pageId);
+    || (!!starting && [...starting].some(key => nodePage(nodeRef.current.find(node => node.id === JSON.parse(key)[0]), pagesRef.current) === pageId));
   const requestPageDelete = pageId => {
     if (mcpLocked.current) return;
     const page = pagesRef.current.find(item => item.id === pageId);
@@ -2544,22 +2566,29 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     return () => { document.removeEventListener('paste', paste); document.removeEventListener('copy', copy); document.removeEventListener('keydown', key); window.removeEventListener('beforeunload', unload); };
   }, [loaded]);
 
-  const run = async (nodeId, resumeIntent = null, event) => {
+  const run = async (nodeId, resumeIntent = null, event, generator) => {
     if (!alive.current || pairing || mcpLocked.current || readOnlyRef.current) return;
+    const original = nodeRef.current.find(node => node.id === nodeId);
+    generator = cloud ? generator === undefined ? resumeIntent?.generator ?? generatorOf(original) : generator || codexGenerator : codexGenerator;
+    if (cloud && [upscaleTask, model3dTask].includes(original?.data.task)) generator = generators.nanoBanana;
+    const key = generationKey(nodeId, generator);
+    if (generationStarting.current.has(key) || resizingReferences.current) return;
+    if (cloud && generatorKind(original?.data) && generatorOf(original) !== generator) setGenerator(nodeId, generator === codexGenerator ? null : generator, false);
+    const graph = withGenerator(currentGraph(), nodeId, generator), runNode = graph.nodes.find(node => node.id === nodeId);
     let requested;
-    try { requested = generationIntent(currentGraph(), boardId, nodeId); }
+    try { requested = { ...generationIntent(graph, boardId, nodeId), generator }; }
     catch (error) { notify(error.message); return; }
-    if (starting || generationStarting.current || resizingReferences.current) return;
-    const runNode = nodeRef.current.find(node => node.id === nodeId), nanoRun = cloud && usesSiteGenerator(runNode?.data);
-    const site = runNode?.data.task === model3dTask ? model3dRef.current : runNode?.data.generator === generators.gptImage ? gptRef.current : nanoRef.current;
+    if (graph.runs?.some(run => run.nodeId === nodeId && busy(run) && (!cloud || [upscaleTask, model3dTask].includes(runNode?.data.task) || (run.provider || codexGenerator) === generator))) return;
+    const nanoRun = cloud && usesSiteGenerator(runNode?.data);
+    const site = runNode?.data.task === model3dTask ? model3dRef.current : generator === generators.gptImage ? gptRef.current : nanoRef.current;
     // A Generate that does not start is logged once, as what it would have run and why: site access or limits (the note
     // says which), or the Codex step pairing opens next.
     if (nanoRun && !(isDescribe(runNode) ? site.selectable : site.ready)) {
-      if (cloud) track('generation_blocked', { ...promptAnalytics(currentGraph(), nodeId), errorKind: site.selectable ? 'quota' : 'access', message: site.note });
+      if (cloud) track('generation_blocked', { ...promptAnalytics(graph, nodeId), errorKind: site.selectable ? 'quota' : 'access', message: site.note });
       inform(site.note); cloudSession.refreshNano?.(); return;
     }
     if (!nanoRun && readinessRef.current.key !== 'ready') {
-      if (cloud) track('generation_blocked', { ...promptAnalytics(currentGraph(), nodeId, { site: false }), errorKind: readinessRef.current.key });
+      if (cloud) track('generation_blocked', { ...promptAnalytics(graph, nodeId, { site: false }), errorKind: readinessRef.current.key });
       pendingIntent.current = requested;
       // Without the helper, a Codex prompt this person could run on the team key offers that beside the pairing steps.
       const kind = cloud && generatorKind(runNode?.data), own = (readinessRef.current.own || readinessRef.current).key;
@@ -2574,31 +2603,36 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         return;
       }
       if (!alternative) { fixReadiness(); return; }
-      const describe = kind === 'describe', name = alternative === generators.gptImage ? 'GPT Image' : 'Nano Banana';
-      cloudSession.openPair(null, false, { title: t('Or use the team’s API key'), note: describe ? t('This node describes with Codex. Gemini on the team’s key can describe it now; you can switch back in its generator menu.') : t('This prompt generates with Codex. {name} on the team’s key can generate it now; you can switch back in its generator menu.', { name }),
-        label: describe ? t('Describe with Gemini') : alternative === generators.gptImage ? t('Generate with GPT Image') : t('Generate with Nano Banana'), run: () => { setGenerator(nodeId, alternative); runAction.current(nodeId); } });
+      const describe = kind === 'describe', name = alternative === generators.gptImage ? describe ? 'GPT' : 'GPT Image' : describe ? 'Gemini' : 'Nano Banana';
+      cloudSession.openPair(null, false, { title: t('Or use the team’s API key'), note: describe ? t('This node describes with Codex. {name} on the team’s key can describe it now; you can switch back with its Codex button.', { name }) : t('This prompt generates with Codex. {name} on the team’s key can generate it now; you can switch back with its Codex button.', { name }),
+        label: describe ? alternative === generators.gptImage ? t('Describe with GPT') : t('Describe with Gemini') : alternative === generators.gptImage ? t('Generate with GPT Image') : t('Generate with Nano Banana'), run: () => { pendingIntent.current = null; runAction.current(nodeId, null, undefined, alternative); } });
       return;
     }
     setResizeRecovery(null);
     effects.start(nodeId, event);
-    if (cloud) rememberGenerator(runNode?.data, runNode?.data.generator);
-    userGeneration.current = { nodeId, started: Date.now() };
+    if (cloud) rememberGenerator(runNode?.data, generator);
+    const start = { nodeId, started: Date.now() };
+    userGeneration.current.set(key, start);
+    // Another model button on this prompt may be clicked next; the camera waits until the clicks stop (see runsToReveal).
+    revealHold.current.set(nodeId, start.started + revealPause);
     viewerMoved.current = true;
-    generationStarting.current = true;
-    setStarting(nodeId);
+    generationStarting.current.add(key);
+    setStarting(current => new Set([...(current || []), key]));
     try {
       await saveNow();
-      if (resumeIntent && !intentUnchanged(resumeIntent, currentGraph(), boardId)) { focusNode(nodeId); inform(t('Prompt changed — review and click Generate'), 'prompt_changed'); return; }
-      if (nanoRun) { await cloudSession.jobs.startNano(nodeId); cloudSession.refreshNano?.(); return; }
-      if (cloudSession) { await cloudSession.jobs.start(nodeId, readinessRef.current.delegate); return; }
-      const options = jsonOptions('POST', { nodeId, revision: base.current.revision });
+      if (resumeIntent && !intentUnchanged(resumeIntent, withGenerator(currentGraph(), nodeId, generator), boardId)) { focusNode(nodeId); inform(t('Prompt changed — review and click Generate'), 'prompt_changed'); return; }
+      // Its results land where this person can see them now (startView in src/output-placement.mjs).
+      const view = visibleBoard();
+      if (nanoRun) { start.runId = await cloudSession.jobs.startNano(nodeId, generator, view); cloudSession.refreshNano?.(); return; }
+      if (cloudSession) { start.runId = await cloudSession.jobs.start(nodeId, readinessRef.current.delegate, view); return; }
+      const options = jsonOptions('POST', { nodeId, revision: base.current.revision, ...(view ? { view } : {}) });
       if (editorId.current) options.headers['X-Concept-Graph-UI-Session'] = editorId.current;
       const result = await api(boardPath + '/runs', options);
-      trackOwnRun(result.id);
+      trackOwnRun(result.id, result);
       observeSpawns({ ...currentGraph(), pages: pagesRef.current }, [result], true);
       setRuns(current => current.some(r => r.id === result.id) ? current : [...current, result]);
     } catch (error) {
-      if (cloud && !userGeneration.current?.runId) track('generation_failed', { ...promptAnalytics(currentGraph(), nodeId, { site: nanoRun }), duration: Date.now() - (userGeneration.current?.started || Date.now()), errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
+      if (cloud && !start.runId) track('generation_failed', { ...promptAnalytics(graph, nodeId, { site: nanoRun }), duration: Date.now() - start.started, errorKind: error.status === 429 ? 'quota' : error.status === 403 ? 'access' : 'start', message: error.message });
       effects.failedStart();
       if (error.value?.graph) mergeRemote(error.value.graph);
       if (nanoRun) cloudSession.refreshNano?.();
@@ -2606,20 +2640,20 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         pendingIntent.current = requested;
         if (cloudSession) cloudSession.unpair(); setHelperOffline(true); openHelper();
       }
-      if (nanoRun && error.value?.resizeAssets?.length) setResizeRecovery({ nodeId, intent: requested, assets: error.value.resizeAssets, message: error.message });
-      else notify(error.message);
+      if (nanoRun && error.value?.resizeAssets?.length) setResizeRecovery({ nodeId, generator, intent: requested, assets: error.value.resizeAssets, message: error.message });
+      else notify(t(error.message));
     }
-    finally { userGeneration.current = null; generationStarting.current = false; setStarting(null); }
+    finally { userGeneration.current.delete(key); generationStarting.current.delete(key); setStarting(current => { const next = new Set(current); next.delete(key); return next.size ? next : null; }); }
   };
   // Upload copies first, then commit once: a failed upload or a teammate's edit cannot leave a half-resized prompt.
   const resizeAllAndGenerate = async () => {
-    if (resizingReferences.current || !resizeRecovery || generationStarting.current || readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
+    if (resizingReferences.current || !resizeRecovery || generationStarting.current.size || readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
     const recovery = resizeRecovery, board = boardId;
     resizingReferences.current = true; uploads.current++; setUploading(true);
     try {
       syncCloud();
       const graph = currentGraph();
-      if (!intentUnchanged(recovery.intent, graph, board)) throw new Error(t('Prompt changed — review and click Generate'));
+      if (!intentUnchanged(recovery.intent, withGenerator(graph, recovery.nodeId, recovery.generator), board)) throw new Error(t('Prompt changed — review and click Generate'));
       const targets = resizeAllTargets(graph, recovery.nodeId, recovery.assets), copies = new Map();
       const needed = new Set(targets.flatMap(node => node.type === 'image' ? [node.data.asset] : node.data.template.assets.filter(asset => recovery.assets.includes(asset))));
       if (needed.size !== new Set(recovery.assets).size) throw new Error(t('Remove the mask before resizing this image.'));
@@ -2629,7 +2663,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         copies.set(asset, await saveResizedImage({ asset }, image, target, uploadEdit));
       }
       syncCloud();
-      if (!alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current || !intentUnchanged(recovery.intent, currentGraph(), board)) throw new Error(t('Prompt changed — review and click Generate'));
+      if (!alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current || !intentUnchanged(recovery.intent, withGenerator(currentGraph(), recovery.nodeId, recovery.generator), board)) throw new Error(t('Prompt changed — review and click Generate'));
       const ids = new Set(targets.map(node => node.id));
       checkpoint();
       putNodes(current => current.map(node => !ids.has(node.id) ? node : { ...node, data: node.type === 'image'
@@ -2637,7 +2671,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         : { ...node.data, template: { ...node.data.template, assets: node.data.template.assets.map(asset => copies.get(asset)?.asset || asset) } } }));
       markDirty(); track('resize_applied', { count: targets.length }); setResizeRecovery(null);
       resizingReferences.current = false;
-      await runAction.current(recovery.nodeId);
+      await runAction.current(recovery.nodeId, null, undefined, recovery.generator);
     } catch (error) { setResizeRecovery(null); notify(error.message); }
     finally { resizingReferences.current = false; uploads.current--; setUploading(uploads.current > 0); }
   };
@@ -2649,16 +2683,17 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     generationIntent(currentGraph(), boardId, nodeId);
     const fix = { helper: 'Connect the Concept Graph helper on the open board first.', install: 'Install Codex from the open board first.', signin: 'Sign in to Codex on the open board first.' }[readinessRef.current.key];
     if (readinessRef.current.key !== 'ready') throw new Error(fix || 'Codex is not ready on this computer. Check its connection on the open board.');
-    if (pairing || mcpLocked.current || generationStarting.current) throw new Error('Another generation is starting on the open board. Try again in a moment.');
+    const key = generationKey(nodeId, codexGenerator);
+    if (pairing || mcpLocked.current || generationStarting.current.has(key)) throw new Error('Another generation is starting on the open board. Try again in a moment.');
     effects.start(nodeId);
-    generationStarting.current = true; setStarting(nodeId);
+    generationStarting.current.add(key); setStarting(current => new Set([...(current || []), key]));
     try {
       await saveNow();
       const runId = await cloudSession.jobs.start(nodeId, readinessRef.current.delegate);
       if (runId) inform(t('Your agent started a generation'), 'agent_generation');
       return runId;
     } catch (error) { effects.failedStart(); throw error; }
-    finally { generationStarting.current = false; setStarting(null); }
+    finally { generationStarting.current.delete(key); setStarting(current => { const next = new Set(current); next.delete(key); return next.size ? next : null; }); }
   };
   const agentRunRef = useRef(agentRun); agentRunRef.current = agentRun;
   const cancel = async runId => { pendingIntent.current = null; try { if (cloudSession) { if (!cloudSession.paired && !cloudSession.jobs.remote(runId)) return cloudSession.openPair(() => cancel(runId)); await cloudSession.jobs.cancel(runId); } else await api(`${boardPath}/runs/${runId}/cancel`, { method: 'POST' }); } catch (error) { notify(error.message); } };
@@ -2838,14 +2873,19 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const view = useMemo(() => { viewCache.current.aspects = learnedAspects; return canvasView(displayed.nodes, displayed.edges, shownGroups, viewCache.current, displayed.sections); }, [displayed, shownGroups, learnedAspects]);
   const extent = useMemo(() => boardExtent(displayed, measureView(viewCache.current)), [displayed]);
   useEffect(() => {
+    // Moving the camera right after a click would pull the prompt's next model button from under the pointer, so a prompt's
+    // new runs wait until no model was started on it for revealPause (the active runs' one-second timer re-checks), and
+    // then only the first of them is shown; the rest show their progress on their buttons and in the tray.
+    const revealed = new Set();
     for (const runId of runsToReveal.current) {
       const run = runs.find(run => run.id === runId);
-      if (!run) continue;
+      if (!run || (revealHold.current.get(run.nodeId) || 0) > Date.now()) continue;
       runsToReveal.current.delete(runId);
-      if (!busy(run)) continue;
+      if (!busy(run) || revealed.has(run.nodeId)) continue;
       const target = view.nodes.find(node => node.id === run.outputIds?.[0]) || view.nodes.find(node => node.type === 'pending' && node.data.runId === runId);
       if (!target || target.hidden) continue;
       const prompt = view.nodes.find(node => node.id === run.nodeId && !node.hidden);
+      revealed.add(run.nodeId);
       revealCreated(target, prompt);
     }
   });
@@ -2881,6 +2921,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // A new connection animates for 300 ms; otherwise the edge list keeps its identity and React Flow skips it.
   const viewEdges = useMemo(() => effects.edges.size || numbered.size ? view.edges.map(edge => effects.edges.has(edge.id) ? { ...edge, type: 'feedback', className: 'feedback-edge' }
     : numbered.has(edge.id) && !edge.hidden ? numberedView(edge, numbered.get(edge.id)) : edge) : view.edges, [view.edges, effects.edges, numbered]);
+  const flowEdges = useMemo(() => view.copies.length ? [...viewEdges, ...view.copies] : viewEdges, [viewEdges, view.copies]);
   // An Alt-drag copy looks picked up, as the card under the pointer does in a plain drag (duplicate-drag.css).
   const flowNodes = useMemo(() => dragCopy ? view.nodes.map(node => node.id === dragCopy ? { ...node, className: node.className ? `${node.className} dragging drag-copy` : 'dragging drag-copy' } : node) : view.nodes, [view.nodes, dragCopy]);
   const fitNodes = useMemo(() => view.nodes.filter(node => node.selected && !node.hidden), [view.nodes]);
@@ -2900,7 +2941,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   const modelViewIds = useMemo(() => { const models = new Set(nodes.filter(node => node.type === 'model').map(node => node.id)); return new Set(edges.filter(edge => models.has(edge.source)).map(edge => edge.target)); }, [nodes, edges]);
   const runPage = pageResolver(pages), pageNames = new Map(pages.map(page => [page.id, page.name]));
   const crowded = useMemo(() => scoped.nodes.reduce((count, node) => count + (node.type === 'image'), 0) > 600, [scoped.nodes]);
-  const edgesChanged = changes => { changes = changes.filter(change => flow.getEdge(change.id)?.className !== 'pending-edge'); if (!changes.length || mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
+  const edgesChanged = changes => { changes = changes.filter(change => !['pending-edge', 'link-over'].includes(flow.getEdge(change.id)?.className)); if (!changes.length || mcpLocked.current) return; putEdges(current => applyEdgeChanges(changes, current)); if (marquee.current?.ids) boxSelect(); if (changes.some(c => c.type !== 'select')) markDirty(); };
   const connectStart = (_, params) => { if (mcpLocked.current) return; connecting.current = true; setConnectionType(nodeRef.current.find(n => n.id === slideSource(params.nodeId))?.type || 'text'); };
   const nodeDragStart = (event, node, dragged = [node]) => {
     if (mcpLocked.current) return;
@@ -2976,7 +3017,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     run, cancel, showRun, view: setViewId, viewTemplate: setTemplateDetails, fire: (...args) => effects.fire(...args), outputReady: nodeId => effects.outputReady(nodeId), outputFailed: nodeId => effects.outputFailed(nodeId),
     nodesChanged, edgesChanged, connect, connectStart, connectEnd, nodeDragStart, nodeDrag, nodeDragStopped, moveStart, moveEnd, paneClick: () => setViewId(null),
     marqueeDown, shiftTextClick, nodeClick, marqueeEnd: () => { marquee.current = null; } };
-  const canvasState = { imageIds, modelViewIds, latestRun: lookups.latestRun, runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
+  const canvasState = { imageIds, modelViewIds, latestRun: lookups.latestRun, modelRuns: lookups.modelRuns, activeNodes: lookups.activeNodes, nanoKnown: !!cloudSession?.nano, codexReady: codexReadiness.key === 'ready', runById: lookups.runById, now, starting, focusId, focusControl, highlight, renaming, readinessKey: readiness.key, readinessAction: readiness.action,
     nanoSelectable: nano.selectable, nanoReady: nano.ready, nanoNote: nano.note, nanoShort: nano.short, nanoRequestable: nano.requestable, nanoBudget: nano.budget, falReady: nano.fal, model3dReady: model3d.ready, model3dNote: model3d.note, gptSelectable: gpt.selectable, gptReady: gpt.ready, gptNote: gpt.note, gptShort: gpt.short, gptBudget: gpt.budget, userName: cloudSession?.user?.name, inputs: inputs.counts, templates, readOnly, effectNodes: effects.nodes, pending: effects.pending, pendingIds: [...effects.pending.keys()].join(' '), crowded, waitingVideos: waiting.enabled, reducedMotion: waiting.reducedMotion };
   const [canvasStore] = useState(() => createCanvasStore({ detail: 'full', ...canvasState }));
   const [canvas] = useState(() => ({ ...latestCommands(latest), store: canvasStore, dictationLanguage, upscale: cloud, imageEditing: cloud, model3d: cloud, nodeLinks: !!cloudSession }));
@@ -3045,9 +3086,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     </aside>
     <main ref={canvasRef} data-board-tool={tool} onClickCapture={annotationClick} onDoubleClickCapture={annotationClick} onTouchStartCapture={event => { if (toolRef.current !== 'select' && event.target.closest('.react-flow')) event.stopPropagation(); }} onPointerDownCapture={annotationDown} onPointerMoveCapture={annotationMove} onPointerUpCapture={event => annotationUp(event)} onPointerCancelCapture={event => annotationUp(event, true)} onLostPointerCapture={event => annotationUp(event, true)} className={`canvas${fileOver ? ' file-drag-over' : ''}`} inert={switching || !!transfer || !loaded ? true : undefined} onPointerMove={event => { mouse.current = { x: event.clientX, y: event.clientY }; cloudSession?.pointer(flow.screenToFlowPosition(mouse.current)); }} onPointerLeave={() => cloudSession?.pointer(null)} onDragOver={event => { event.preventDefault(); if (mcpLocked.current || readOnly) return; const types = [...event.dataTransfer.types]; if (types.includes(toolType)) event.dataTransfer.dropEffect = 'copy'; else if (types.includes('Files')) { event.dataTransfer.dropEffect = 'copy'; setFileOver(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileOver(false); }} onDrop={event => { event.preventDefault(); setFileOver(false); if (mcpLocked.current || readOnly) return; const position = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }); if ([...event.dataTransfer.types].includes(toolType)) dropTool(event.dataTransfer.getData(toolType), position); else addFiles([...event.dataTransfer.files], position); }}>
       <div className="canvas-top"><span>{currentBoard?.name}</span>{loaded && <GenerationTray launching={!!starting} runs={runs} user={cloudSession?.user} viewer={viewer} onCancel={cancel} onFocus={showRun} onHistory={() => setTab('history')}/>}</div>
-      <ReactFlow nodes={flowNodes} edges={viewEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
+      <ReactFlow nodes={flowNodes} edges={flowEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onlyRenderVisibleElements elevateNodesOnSelect={false} onNodesChange={canvas.nodesChanged} onEdgesChange={canvas.edgesChanged} onConnect={canvas.connect} onConnectStart={canvas.connectStart} onConnectEnd={canvas.connectEnd} connectionLineStyle={connectionLineStyle} onNodeDragStart={canvas.nodeDragStart} onNodeDrag={canvas.nodeDrag} onNodeDragStop={canvas.nodeDragStopped} onMoveStart={canvas.moveStart} onMoveEnd={canvas.moveEnd} onPaneClick={canvas.paneClick} zoomOnDoubleClick={tool === 'select'} nodesDraggable={tool === 'select' && !readOnly} nodesConnectable={tool === 'select' && !readOnly} elementsSelectable={tool === 'select'} defaultEdgeOptions={defaultEdgeOptions} translateExtent={extent} minZoom={minZoom} maxZoom={2} deleteKeyCode={null} panOnScroll selectionOnDrag={tool === 'select'} selectionMode={SelectionMode.Partial} panOnDrag={panButtons} selectionKeyCode={null} multiSelectionKeyCode={multiSelectKeys} onNodeClick={canvas.nodeClick} onPointerDownCapture={canvas.marqueeDown} onClickCapture={canvas.shiftTextClick} onPointerUp={canvas.marqueeEnd} onPointerCancel={canvas.marqueeEnd} proOptions={proOptions}>
         {!readOnly && !modalOpen.current && <CustomNodeActions node={selectedCount === 1 ? view.nodes.find(node => node.selected && !node.hidden && plainPrompt(node)) : null} tip={!discovery.used && templateTip && selectedCount === 1 ? view.nodes.find(node => node.id === templateTip.id && node.selected && !node.hidden) : null} actions={canvas} onDismiss={() => { if (cloud) track('tip_event', { tip: 'duplicate_to_custom_node', action: 'dismissed' }); setTemplateTip(null); }}/>}
-        <Background color="var(--grid)" gap={24} size={1}/><ConnectionNumbers/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
+        <Background color="var(--grid)" gap={24} size={1}/><ConnectionNumbers/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/><DeckAnimation page={activePage} groups={scoped.groups} nodes={view.nodes} edges={scoped.edges} links={view.edges} copies={view.copies} src={assetUrl}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
       {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}

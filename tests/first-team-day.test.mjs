@@ -1,12 +1,14 @@
+import { withGenerator, generatorOf, codexGenerator as runCodex, upscaleTask as runUpscale } from '../graph.mjs';
+import { generationKey } from '../src/canvas-store.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeModule from 'node:module';
 import { readFile } from 'node:fs/promises';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { createServer } from 'vite';
+import { loadGeneratorButtons } from './generator-buttons.mjs';
 import { codexGenerator, describeTask, generators, upscaleTask } from '../graph.mjs';
-import { generatorKind, lastGeneratorKey, nanoState, readLastGenerators, rememberGenerator, startingGenerator } from '../src/generator.mjs';
+import { generatorKind, lastGeneratorKey, nanoState, promptGenerators, readLastGenerators, rememberGenerator, startingGenerator } from '../src/generator.mjs';
 import { invitationDue } from '../src/custom-node-discovery.mjs';
 import { firstPromptStep } from '../src/first-prompt.mjs';
 import { setLanguage, t } from '../src/i18n.mjs';
@@ -24,9 +26,9 @@ test('a new prompt starts on the generator that works for this person, and on Co
   // Nov 16: team access, no helper. Image prompts and describe nodes start on the team key instead of opening pairing.
   assert.equal(start({}), generators.nanoBanana);
   assert.equal(start({ describe: true }), generators.nanoBanana);
-  // The generator this person last used wins while it still works for them; a describe node never gets GPT Image.
+  // The generator this person last used wins while it still works for them; describe nodes remember GPT separately from image prompts.
   assert.equal(start({ last: generators.gptImage }), generators.gptImage);
-  assert.equal(start({ describe: true, last: generators.gptImage }), generators.nanoBanana);
+  assert.equal(start({ describe: true, last: generators.gptImage }), generators.gptImage);
   assert.equal(start({ last: codexGenerator, codexReady: true }), null);
   assert.equal(start({ last: generators.nanoBanana, codexReady: true }), generators.nanoBanana);
   // Codex stays the default where it is the only option, or ready with nothing else chosen before.
@@ -36,6 +38,8 @@ test('a new prompt starts on the generator that works for this person, and on Co
   // A used-up day keeps image prompts off the team key; a description costs no daily images, so it still may use it.
   assert.equal(start({ nano: spent, gpt: spent }), null);
   assert.equal(start({ describe: true, nano: spent, gpt: spent }), generators.nanoBanana);
+  assert.equal(start({ describe: true, nano: noAccess, gpt: spent }), generators.gptImage);
+  assert.equal(start({ describe: true, last: generators.gptImage, gpt: noAccess }), generators.nanoBanana);
   // Before the site says what this person may use, only a generator they used before is assumed to work.
   assert.equal(start({ known: false, nano: unknown, gpt: unknown }), null);
   assert.equal(start({ known: false, nano: unknown, gpt: unknown, last: generators.nanoBanana }), generators.nanoBanana);
@@ -48,7 +52,7 @@ test('the last generator is remembered per kind, and upscale or 3D nodes are not
   rememberGenerator({ task: describeTask }, generators.nanoBanana, storage);
   rememberGenerator({ task: describeTask }, generators.gptImage, storage);
   rememberGenerator({ task: upscaleTask }, generators.nanoBanana, storage);
-  assert.deepEqual(readLastGenerators(storage), { image: generators.gptImage, describe: generators.nanoBanana });
+  assert.deepEqual(readLastGenerators(storage), { image: generators.gptImage, describe: generators.gptImage });
   rememberGenerator({ text: '' }, undefined, storage);
   assert.equal(readLastGenerators(storage).image, codexGenerator);
   storage.values.set(lastGeneratorKey, 'broken');
@@ -79,14 +83,14 @@ test('prompts the editor adds start on the team key for someone with access and 
 
 test('Generate on a Codex prompt without the helper offers the team key beside the pairing steps', async () => {
   setLanguage('en');
-  const source = part('  const run = async (nodeId, resumeIntent = null, event) => {', '  runAction.current = run;');
-  const tab = ({ nano = allowed, known = true, readiness = 'helper', task } = {}) => {
+  const source = part('  const run = async (nodeId, resumeIntent = null, event, generator) => {', '  runAction.current = run;');
+  const tab = ({ nano = allowed, gpt = nano, known = true, readiness = 'helper', task } = {}) => {
     const calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot', ...(task ? { task } : {}) } };
-    const env = { alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
-      notify() {}, inform() {}, starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
-      model3dRef: ref(nano), gptRef: ref(nano), nanoRef: ref(nano), readinessRef: ref({ key: readiness }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t,
+    const env = { withGenerator, generatorOf, generationKey, codexGenerator: runCodex, upscaleTask: runUpscale, busy: run => ['queued', 'running'].includes(run?.status), alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
+      notify() {}, inform() {}, starting: null, generationStarting: ref(new Set()), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
+      model3dRef: ref(nano), gptRef: ref(gpt), nanoRef: ref(nano), readinessRef: ref({ key: readiness }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t,
       fixReadiness: () => calls.push(['fix']), cloudSession: { nano: known ? {} : undefined, openPair: (...args) => calls.push(['pair', ...args]) }, track() {}, promptAnalytics: () => ({}),
-      setGenerator: (id, generator) => calls.push(['generator', id, generator]), runAction: ref(id => calls.push(['run', id])) };
+      setGenerator: (id, generator) => calls.push(['generator', id, generator]), runAction: ref((...args) => calls.push(['run', ...args])) };
     return { run: new Function(...Object.keys(env), `${source}; return run;`)(...Object.values(env)), calls };
   };
   let { run, calls } = tab();
@@ -95,10 +99,13 @@ test('Generate on a Codex prompt without the helper offers the team key beside t
   assert.deepEqual([kind, callback, downloads, alternative.label, alternative.title], ['pair', null, false, 'Generate with Nano Banana', 'Or use the team’s API key']);
   assert.match(alternative.note, /This prompt generates with Codex\. Nano Banana on the team’s key/);
   alternative.run();
-  assert.deepEqual(calls.slice(1), [['generator', 'p', generators.nanoBanana], ['run', 'p']]);
+  assert.deepEqual(calls.slice(1), [['run', 'p', null, undefined, generators.nanoBanana]]);
   ({ run, calls } = tab({ task: describeTask }));
   await run('p');
   assert.equal(calls[0][3].label, 'Describe with Gemini');
+  ({ run, calls } = tab({ task: describeTask, nano: noAccess, gpt: allowed })); await run('p');
+  assert.equal(calls[0][3].label, 'Describe with GPT'); assert.match(calls[0][3].note, /GPT on the team’s key/);
+  calls[0][3].run(); assert.deepEqual(calls.slice(1), [['run', 'p', null, undefined, generators.gptImage]]);
   // Without team access, before the site answers, or with the helper paired but Codex signed out: setup as before.
   for (const options of [{ nano: noAccess }, { known: false }, { readiness: 'signin' }]) { ({ run, calls } = tab(options)); await run('p'); assert.deepEqual(calls, [['fix']]); }
 });
@@ -113,18 +120,12 @@ test('a team-key option this person cannot use says why and who gives access, in
   setLanguage('uk');
   assert.match(nanoState({ configured: true, allowed: false, admins: ['Olena'] }).note, /^Поки недоступно для вашого облікового запису\. Попросіть Olena/);
   setLanguage('en');
-  const vite = await createServer({ configFile: false, appType: 'custom', server: { middlewareMode: true, ws: false }, optimizeDeps: { noDiscovery: true, include: [] } });
-  let html;
-  try { const { GeneratorPicker } = await vite.ssrLoadModule('/src/GeneratorPicker.jsx'); html = renderToStaticMarkup(React.createElement(GeneratorPicker, { id: 'p', generator: undefined, nano: named, gpt: named, choose() {} })); }
-  finally { await vite.close(); }
-  assert.doesNotMatch(html, /<option value="nano-banana" disabled/); assert.doesNotMatch(html, /<option value="gpt-image" disabled/);
-  assert.match(html, /<option value="nano-banana">Nano Banana · no access<\/option>/);
-  assert.match(html, /data-tooltip="Nano Banana \/ GPT Image · Not available for your account yet\. Ask Olena, Taras/);
-  // The editor hands each prompt's picker the short reason as well as the note.
-  assert.match(editor, /nano=\{\{ selectable: view\.nanoSelectable, note: view\.nanoNote, short: view\.nanoShort, requestable: view\.nanoRequestable, budget: view\.nanoBudget \}\} request=\{canvas\.requestAccess\} gpt=\{\{ selectable: view\.gptSelectable, note: view\.gptNote, short: view\.gptShort,/);
-  assert.match(editor, /nanoShort: nano\.short,/); assert.match(editor, /gptShort: gpt\.short,/);
+  const { GeneratorButtons } = await loadGeneratorButtons();
+  const html = renderToStaticMarkup(React.createElement(GeneratorButtons, { id: 'p', cloud: true, canRun: true, nano: named, gpt: named, ...promptGenerators({ cloud: true, known: true, nano: named, gpt: named }) }));
+  assert.match(html, />Codex<\/span>/); assert.doesNotMatch(html, /aria-label="Generate with Nano Banana"/);
+  assert.match(html, /Not available for your account yet\. Ask Olena, Taras/);
   // Choosing it explains and keeps the prompt as it is.
-  const source = part('  const setGenerator = (nodeId, generator) => {', '  const toggleNodeCollapsed = ');
+  const source = part('  const setGenerator = (nodeId, generator, undo = true) => {', '  const toggleNodeCollapsed = ');
   const told = [], changed = [];
   const setGenerator = new Function('nodeRef', 'mcpLocked', 'gptRef', 'nanoRef', 'inform', 'cloudSession', 'checkpoint', 'putNodes', 'markDirty', 'rememberGenerator', 'generators', 'edgeRef', 'mainImageFor', `${source}; return setGenerator;`)(
     ref([{ id: 'p', type: 'text', data: { text: 'A robot' } }]), ref(false), ref(named), ref(named), (message, notice) => told.push([message, notice]), { refreshNano() {} }, () => {}, value => changed.push(value), () => {}, () => {}, generators, ref([]), () => undefined);
@@ -210,22 +211,19 @@ function site(t) {
   assert.deepEqual([answer.access.requests, (await status('max@gmail.com')).allowed, (await me('owner@studio.example')).accessRequests], [[], false, 0]);
 });
 
-test('the picker and the Codex setup dialog let someone without access ask for it, once', async () => {
+test('the model options and the Codex setup dialog let someone without access ask for it, once', async () => {
   setLanguage('en');
   const open = nanoState({ configured: true, allowed: false, admins: ['Olena'], requested: false }), asked = nanoState({ configured: true, allowed: false, admins: ['Olena'], requested: true });
   assert.deepEqual([open.requestable, asked.requestable, asked.short, asked.note], [true, false, 'requested', 'Access requested. Olena will see it in Team access.']);
   assert.equal(nanoState({ configured: true, allowed: false }, 'model3d').requestable, false, '3D access is given per person in Team access, not asked for here');
-  const vite = await createServer({ configFile: false, appType: 'custom', server: { middlewareMode: true, ws: false }, optimizeDeps: { noDiscovery: true, include: [] } });
-  let render;
-  try { const { GeneratorPicker } = await vite.ssrLoadModule('/src/GeneratorPicker.jsx'); render = props => renderToStaticMarkup(React.createElement(GeneratorPicker, { id: 'p', choose() {}, request() {}, ...props })); }
-  finally { await vite.close(); }
-  assert.match(render({ nano: open, gpt: open }), /<option value="request">Request access…<\/option>/);
-  assert.doesNotMatch(render({ nano: asked, gpt: asked }), /value="request"/);
-  assert.match(render({ nano: asked, gpt: asked }), /Nano Banana · requested/);
+  const { GeneratorButtons } = await loadGeneratorButtons(), render = nano => renderToStaticMarkup(React.createElement(GeneratorButtons, { id: 'p', cloud: true, canRun: true, nano, gpt: nano, request() {}, ...promptGenerators({ cloud: true, known: true, nano, gpt: nano }) }));
+  assert.match(render(open), />Request access…<\/button>/);
+  assert.doesNotMatch(render(asked), />Request access…<\/button>/);
+  assert.match(render(asked), /Access requested. Olena will see it in Team access/);
   // Generate without the helper and without access: the setup dialog offers the request, then says it was sent.
-  const source = part('  const run = async (nodeId, resumeIntent = null, event) => {', '  runAction.current = run;'), calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot' } };
-  const env = { alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
-    notify() {}, inform() {}, starting: null, generationStarting: ref(false), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
+  const source = part('  const run = async (nodeId, resumeIntent = null, event, generator) => {', '  runAction.current = run;'), calls = [], node = { id: 'p', type: 'text', position: { x: 0, y: 0 }, data: { text: 'A robot' } };
+  const env = { withGenerator, generatorOf, generationKey, codexGenerator: runCodex, upscaleTask: runUpscale, busy: run => ['queued', 'running'].includes(run?.status), alive: ref(true), pairing: false, mcpLocked: ref(false), readOnlyRef: ref(false), generationIntent: () => ({ nodeId: 'p' }), currentGraph: () => ({ nodes: [node], edges: [] }), boardId: 'b',
+    notify() {}, inform() {}, starting: null, generationStarting: ref(new Set()), resizingReferences: ref(false), setResizeRecovery() {}, nodeRef: ref([node]), cloud: true, usesSiteGenerator: () => false, model3dTask: 'model3d', generators, isDescribe: () => false,
     model3dRef: ref(open), gptRef: ref(open), nanoRef: ref(open), readinessRef: ref({ key: 'helper' }), pendingIntent: ref(null), generatorKind, startingGenerator, rememberGenerator() {}, t, nanoState,
     fixReadiness: () => calls.push(['fix']), cloudSession: { nano: { configured: true, allowed: false, admins: ['Olena'] }, openPair: (...args) => calls.push(['pair', ...args]), requestAccess: async () => { calls.push(['request']); return { requested: true }; } },
     track() {}, promptAnalytics: () => ({}), setGenerator() {}, runAction: ref(() => {}) };

@@ -1,10 +1,11 @@
 import { getState } from 'yjs';
-import { codexGenerator, collectInputs, generationSettings, imageSize, isSiteGenerator, resolveGeneration, runInputRecord, runSettings } from '../graph.mjs';
+import { foldRunGroup, codexGenerator, collectInputs, generationSettings, generatorOf, imageSize, isSiteGenerator, resolveGeneration, runInputRecord, runSettings, withGenerator } from '../graph.mjs';
 import { applyLocalGraph, CloudGraphReader } from './cloud-sync.mjs';
 import { boardAuthor } from './annotations.mjs';
 import { t } from './i18n.mjs';
 import { delegateAction } from './codex-sharing.mjs';
 import { placeRunOutput, placeRunText, runOutputId, runSummary, terminalRun as terminal } from './run-outputs.mjs';
+import { startView } from './output-placement.mjs';
 import { referenceCopy } from './image-resize.mjs';
 
 const timestamp = () => new Date().toISOString();
@@ -32,7 +33,7 @@ export class CloudGeneration {
     Object.assign(this, { doc, boardId, user: boardAuthor(user) || { name: 'Teammate' }, helperApi, helperRequest, api, request, ready, onError, onStart, sharing, can, shrink });
     // The editor's incremental reader when there is one; it returns shared objects, which this class never mutates.
     this.read = read || (() => (this.reader ||= new CloudGraphReader(doc)).read());
-    this.origin = {}; this.active = false; this.polling = false; this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map(); this.cancelling = new Set();
+    this.origin = {}; this.active = false; this.polling = false; this.starting = new Set(); this.submitting = new Set(); this.uncertain = new Set(); this.uploaded = new Map(); this.cancelling = new Set();
   }
   setRun(run) { this.doc.transact(() => this.doc.getMap('runs').set(run.id, run), this.origin); }
   // Only an active run changes, so a cancellation or failure written by someone else is never undone.
@@ -55,50 +56,63 @@ export class CloudGeneration {
   stop() { this.active = false; clearInterval(this.timer); }
   // With an owner, the run is queued for that teammate's helper; their client submits it and places the images. Returns the
   // run's ID, or nothing when the prompt is already generating.
-  async start(nodeId, owner) {
+  async start(nodeId, owner, view) {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
-    const graph = this.read();
-    if (graph.runs.some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
-    const { prompt, images, target, task } = collectInputs(graph, nodeId);
-    if (task === 'model3d') throw new Error('3D generation runs on the site, not in Codex.');
-    if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
-    if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
-    // The images the run is given, for its results' details (a teammate's helper refreshes them when it takes the run).
-    const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), inputs: runInputRecord(graph, nodeId), ...generationSettings, ...runSettings(resolveGeneration(target, codexGenerator)), ...(task ? { task } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
-    run.createdAt = run.startedAt;
-    if (owner !== undefined) {
-      if (this.sharing?.using()?.to !== owner) throw new Error(t('Your teammate’s Codex is no longer available. Ask for access again.'));
-      this.setRun({ ...run, delegate: { owner, requester: this.doc.clientID } });
-      this.onStart?.(run);
-      return run.id;
-    }
-    const inputs = await this.inputs(images);
-    if (!this.active || !this.ready()) throw new Error(t('Board disconnected. Try generating when it is live.'));
-    run.startedAt = run.createdAt = timestamp();
-    this.setRun(run); this.submitting.add(run.id);
-    this.onStart?.(run);
+    const graph = withGenerator(this.read(), nodeId, codexGenerator), key = `codex:${nodeId}`;
+    if (this.starting.has(key) || graph.runs.some(run => run.nodeId === nodeId && (!run.provider || ['upscale', 'model3d'].includes(run.task)) && ['running', 'queued'].includes(run.status))) return;
+    this.starting.add(key);
     try {
-      await this.helperApi('/api/cloud-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        jobId: run.id, boardId: this.boardId, nodeId, prompt, labelOutputs: target.data.labelOutputs, ...(task ? { task } : {}), images: inputs,
-      }) });
-    } catch (error) {
-      // A lost response may hide an accepted job; discovery will recover it without resubmitting.
-      if (this.active && error.status) this.setRun({ ...run, status: 'failed', finishedAt: timestamp(), error: error.message });
-      else this.uncertain.add(run.id);
-      throw error;
-    } finally { this.submitting.delete(run.id); }
-    this.tick();
-    return run.id;
+      const { prompt, images, target, task, variants } = collectInputs(graph, nodeId);
+      if (task === 'model3d') throw new Error('3D generation runs on the site, not in Codex.');
+      if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
+      if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
+      // The images the run is given, for its results' details (a teammate's helper refreshes them when it takes the run).
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, target), inputs: runInputRecord(graph, nodeId), ...generationSettings, ...runSettings(resolveGeneration(target, codexGenerator)), ...(task ? { task } : {}), ...(variants ? { variants } : {}), ...(startView(view) ? { view: startView(view) } : {}), status: 'queued', by: this.user, startedAt: timestamp() };
+      run.createdAt = run.startedAt;
+      if (owner !== undefined) {
+        if (this.sharing?.using()?.to !== owner) throw new Error(t('Your teammate’s Codex is no longer available. Ask for access again.'));
+        this.setRun({ ...run, delegate: { owner, requester: this.doc.clientID } });
+        this.onStart?.(run);
+        return run.id;
+      }
+      const inputs = await this.inputs(images);
+      if (!this.active || !this.ready()) throw new Error(t('Board disconnected. Try generating when it is live.'));
+      run.startedAt = run.createdAt = timestamp();
+      this.setRun(run); this.submitting.add(run.id);
+      this.onStart?.(run);
+      try {
+        await this.helperApi('/api/cloud-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          jobId: run.id, boardId: this.boardId, nodeId, prompt, labelOutputs: target.data.labelOutputs, ...(task ? { task } : {}), ...(variants ? { variants } : {}), images: inputs,
+        }) });
+      } catch (error) {
+        // A lost response may hide an accepted job; discovery will recover it without resubmitting.
+        if (this.active && error.status) this.setRun({ ...run, status: 'failed', finishedAt: timestamp(), error: error.message });
+        else this.uncertain.add(run.id);
+        throw error;
+      } finally { this.submitting.delete(run.id); }
+      this.tick();
+      return run.id;
+    } finally { this.starting.delete(key); }
   }
-  // Site API generators share this route; the room reads the provider from the prompt and places the images.
+  // Site API generators share this route; the click owns the provider and the room places the images.
   // The room first waits for this client's own latest edits (its clock), so it reads the prompt as it is shown here.
-  async startNano(nodeId) {
+  async startNano(nodeId, generator, view) {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
-    if ([...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && ['running', 'queued'].includes(run.status))) return;
-    const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nodeId, client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID), settings: 1 }) });
-    // The room answers with the run's ID; its record may reach this tab later, so the caller is told which prompt it ran.
-    this.onStart?.({ nodeId, ...run });
+    const node = this.read().nodes.find(node => node.id === nodeId), special = ['upscale', 'model3d'].includes(node?.data.task);
+    generator ??= generatorOf(node);
+    if (!isSiteGenerator(generator)) generator = 'nano-banana';
+    // Special nodes keep their own one-run rule and always use the site's existing route.
+    if (special) generator = 'nano-banana';
+    const key = `${generator}:${nodeId}`;
+    if (this.starting.has(key) || [...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && (special || ['upscale', 'model3d'].includes(run.task) || run.provider === generator) && ['running', 'queued'].includes(run.status))) return;
+    this.starting.add(key);
+    try {
+      const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId, generator: isSiteGenerator(generator) ? generator : undefined, ...(startView(view) ? { view: startView(view) } : {}), client: this.doc.clientID, clock: getState(this.doc.store, this.doc.clientID), settings: 1 }) });
+      // The room answers with the run's ID; its record may reach this tab later, so the caller is told which prompt it ran.
+      this.onStart?.({ nodeId, provider: generator, ...run });
+      return run.id;
+    } finally { this.starting.delete(key); }
   }
   // Runs that need no local helper to start or cancel.
   remote(id) { const run = this.doc.getMap('runs').get(id); return !!run?.delegate || isSiteGenerator(run?.provider); }
@@ -152,6 +166,11 @@ export class CloudGeneration {
       const run = { ...(current || { id: job.id, nodeId: job.nodeId, label: 'Recovered generation' }), by: boardAuthor(current?.by || this.user), ...jobSettings(job), createdAt: current?.createdAt || current?.startedAt || job.startedAt, startedAt: job.startedAt || current?.startedAt, status: job.status,
         ...(terminal(job.status) ? { finishedAt: job.finishedAt || timestamp(), count: current?.outputIds?.length || 0 } : {}), ...(job.error ? { error: job.error } : {}) };
       if (JSON.stringify(run) !== JSON.stringify(current)) this.setRun(run);
+      // The run has ended: its slideshow folds into its card (foldRunGroup in graph.mjs).
+      if (terminal(run.status)) this.doc.transact(() => {
+        const before = this.read(), graph = { ...before, groups: before.groups.map(group => ({ ...group })) };
+        if (foldRunGroup(graph, map.get(job.id))) applyLocalGraph(this.doc, graph, before, this.origin);
+      }, this.origin);
     }
     return true;
   }
@@ -210,11 +229,11 @@ export class CloudGeneration {
       let body;
       try {
         // Inputs are read now, from the board as it is when this helper takes the run, and its record follows them.
-        const graph = this.read(), { prompt, images, target, task } = collectInputs(graph, run.nodeId);
+        const graph = withGenerator(this.read(), run.nodeId, codexGenerator), { prompt, images, target, task, variants } = collectInputs(graph, run.nodeId);
         if (task && !this.can(task)) throw new Error(outdatedHelper);
         const inputs = runInputRecord(graph, run.nodeId), current = this.doc.getMap('runs').get(run.id);
         if (current && !terminal(current.status) && JSON.stringify(current.inputs) !== JSON.stringify(inputs)) this.setRun({ ...current, inputs });
-        body = { jobId: run.id, boardId: this.boardId, nodeId: run.nodeId, prompt, labelOutputs: target.data.labelOutputs, ...(task ? { task } : {}), images: await this.inputs(images) };
+        body = { jobId: run.id, boardId: this.boardId, nodeId: run.nodeId, prompt, labelOutputs: target.data.labelOutputs, ...(task ? { task } : {}), ...(variants ? { variants } : {}), images: await this.inputs(images) };
       } catch (error) { if (this.ready()) this.settle(run.id, { status: 'failed', error: error.message || 'Could not prepare this generation.' }); return; }
       if (terminal(this.doc.getMap('runs').get(run.id)?.status)) return;
       if (!this.active || !this.ready()) { this.settle(run.id, { status: 'failed', error: 'The Codex owner disconnected before this generation started. Run the prompt again.' }); return; }

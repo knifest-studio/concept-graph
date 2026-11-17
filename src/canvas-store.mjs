@@ -2,6 +2,9 @@ import { boardAuthor } from './annotations.mjs';
 import { sameShape } from './layers.mjs';
 import { directInputCounts } from './onboarding.mjs';
 
+export const generationKey = (nodeId, generator = 'codex') => JSON.stringify([nodeId, generator || 'codex']);
+export const nodeStarting = (starting, nodeId) => !!starting && [...starting].some(key => JSON.parse(key)[0] === nodeId);
+
 // One snapshot of the editor's changing values. Node components subscribe to their own slice of it,
 // so an editor render re-renders only the nodes whose slice changed.
 export function createCanvasStore(initial = {}) {
@@ -37,9 +40,14 @@ export function shallowEqual(a, b) {
 
 // Built once per runs change instead of a reverse scan per node render. The latest run for a node is its last in the list.
 export function runLookups(runs) {
-  const latestRun = new Map(), runById = new Map();
-  for (const run of runs) { latestRun.set(run.nodeId, run); runById.set(run.id, run); }
-  return { latestRun, runById };
+  const latestRun = new Map(), runById = new Map(), modelRuns = new Map(), activeNodes = new Set();
+  for (const run of runs) {
+    latestRun.set(run.nodeId, run); runById.set(run.id, run);
+    if (!modelRuns.has(run.nodeId)) modelRuns.set(run.nodeId, new Map());
+    modelRuns.get(run.nodeId).set(run.provider || 'codex', run);
+    if (['running', 'queued'].includes(run.status)) activeNodes.add(run.nodeId);
+  }
+  return { latestRun, runById, modelRuns, activeNodes };
 }
 
 export const runAuthor = (data, runById) => boardAuthor(data.author) || (data.runId ? boardAuthor(runById.get(data.runId)?.by) : undefined);

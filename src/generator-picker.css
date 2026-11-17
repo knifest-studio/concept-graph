@@ -1,18 +1,22 @@
-/* The generator arrow joins the Generate button as one split control and follows its colours. */
-.generator-picker{position:relative;display:grid;place-items:center;flex:0 0 auto;width:18px;height:27px;margin-left:-5px;border-left:1px solid color-mix(in srgb,var(--blue) 25%,transparent);border-radius:0 6px 6px 0;background:var(--soft-blue);color:var(--text);cursor:pointer}
-.generator-picker:hover{background:color-mix(in srgb,var(--blue) 23%,var(--card))}
-.generator-picker select{position:absolute;inset:0;width:100%;height:100%;min-width:0;max-width:none;margin:0;padding:0;border:0;opacity:0;cursor:pointer;font-size:12px}
-.generator-picker:focus-within{outline:2px solid var(--blue);outline-offset:1px}
-.react-flow__node.selected .generator-picker,.text-node:focus-within .generator-picker{background:var(--blue);color:#fff;border-left-color:#ffffff55}
-.run-controls .generate-slot:has(+.generator-picker) .run-button{border-top-right-radius:0;border-bottom-right-radius:0}
-/* Nano Banana prompts are banana-coloured, so the generator is clear at a glance. */
-.run-controls .run-button.nano,.generator-picker.nano{background:#fbefc6;color:#6b4800}
-.generator-picker.nano{border-left-color:#e9cf7a}
-.run-controls .run-button.nano:hover:not(:disabled),.generator-picker.nano:hover{background:#f7e09a}
-.react-flow__node.selected .run-controls .run-button.nano,.text-node:focus-within .run-controls .run-button.nano,.react-flow__node.selected .generator-picker.nano,.text-node:focus-within .generator-picker.nano{background:#f2c230;color:#2e2000;border-left-color:#c99a10}
-:root[data-theme=dark] .run-controls .run-button.nano,:root[data-theme=dark] .generator-picker.nano{background:#3b3420;color:#f3cf63}
-:root[data-theme=dark] .generator-picker.nano{border-left-color:#5a4d26}
-:root[data-theme=dark] .react-flow__node.selected .run-controls .run-button.nano,:root[data-theme=dark] .text-node:focus-within .run-controls .run-button.nano,:root[data-theme=dark] .react-flow__node.selected .generator-picker.nano,:root[data-theme=dark] .text-node:focus-within .generator-picker.nano{background:#e0b52c;color:#241a00;border-left-color:#a98417}
+/* Three model controls share the card width; progress and cancellation stay inside their own slot. */
+.generator-buttons{display:flex;align-items:center;gap:4px;padding:0 12px 10px;flex-shrink:0}
+/* Each slot starts at its name's width, so "Codex" leaves room for "Nano Banana" before any name shortens. */
+.generator-slot{display:flex;position:relative;min-width:0;flex:1 1 auto;border-radius:6px;background:var(--soft-blue)}
+.model-generate{position:relative;display:flex;align-items:center;justify-content:center;gap:4px;overflow:hidden;min-width:0;width:100%;height:29px;border-radius:6px;padding:4px 5px;background:var(--soft-blue);color:var(--text);font-size:10px;font-weight:650;font-variant-numeric:tabular-nums}
+.model-generate>span{position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:1}.model-generate>span:first-child{flex-shrink:0}
+/* Names may shorten at three columns; the elapsed time must stay readable. */
+.model-generate>.model-time{flex-shrink:0;font-size:9px}.model-generate>.model-owner{flex-shrink:1;max-width:55%}
+.model-generate.nano{background:#fbefc6;color:#6b4800}.model-generate:hover:not(:disabled){background:color-mix(in srgb,var(--blue) 23%,var(--card))}.model-generate:disabled{opacity:.5;cursor:default}.pending .model-generate:disabled{opacity:1}.pending:has(.model-cancel) .model-generate{padding-right:20px}
+.model-cancel{position:absolute;right:0;top:0;z-index:2;width:19px;height:29px;border-radius:0 6px 6px 0;color:var(--error);font-size:14px}.model-cancel:hover{background:var(--card)}
+/* With a mouse the × waits for the pointer, so three running buttons keep their names and timers readable; touch keeps it shown. */
+@media(hover:hover){.generator-slot .model-cancel{opacity:0;pointer-events:none}.generator-slot:hover .model-cancel,.generator-slot:focus-within .model-cancel{opacity:1;pointer-events:auto}.pending:has(.model-cancel):not(:hover):not(:focus-within) .model-generate{padding-right:5px}}
+.model-progress{position:absolute;inset:0;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--blue) 25%,transparent),transparent);animation:model-progress 1.5s linear infinite}.model-spinner{width:9px;height:9px;flex-shrink:0;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:model-spin .8s linear infinite}
+.generator-more{position:relative;flex:0 0 18px;color:var(--muted);font-size:11px}.generator-more>summary{list-style:none;cursor:pointer;text-align:center;padding:5px 0;border-radius:4px}.generator-more>summary::-webkit-details-marker{display:none}.generator-more>summary:hover{background:var(--soft-blue)}
+.generator-menu{position:absolute;right:0;top:100%;z-index:20;width:235px;padding:8px;background:var(--card);border:1px solid var(--border);border-radius:7px;box-shadow:var(--shadow)}.generator-menu button{display:block;width:100%;padding:6px;text-align:left;color:var(--blue);font-size:11px}.generator-menu small{display:block;padding:5px 6px;font-size:10px;line-height:1.5}
+.generator-chips{pointer-events:none;height:39px;box-sizing:border-box}
+:root[data-theme=dark] .model-generate.nano{background:#3b3420;color:#f3cf63}
+@keyframes model-progress{from{transform:translateX(-100%)}to{transform:translateX(100%)}}@keyframes model-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.model-progress,.model-spinner{animation:none}}
 /* An image prompt's row under its text: the variant counts on site generators, then the generation settings chip. */
 .variant-row{display:flex;align-items:center;gap:3px;height:28px;flex-shrink:0;padding:0 16px 8px;font-size:10px;color:var(--muted)}
 .variant-group{display:flex;align-items:center;gap:3px;flex:0 0 auto}.variant-group>span{margin-right:5px}.variant-group button{display:grid;place-items:center;width:24px;height:20px;border-radius:5px;font-size:11px;font-weight:600;color:var(--muted)}.variant-group button:hover:not(:disabled){background:#fbefc6;color:#6b4800}.variant-group button[aria-pressed=true]{background:#f2c230;color:#2e2000}:root[data-theme=dark] .variant-group button[aria-pressed=true]{background:#5a4d26;color:#f3cf63}

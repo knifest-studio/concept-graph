@@ -3,29 +3,30 @@ import { clampVariants, generators, maxVariants, variantPresets } from '../graph
 import { t } from './i18n.mjs';
 import './generator-picker.css';
 
-// Cloud prompts choose a personal Codex or a site API key. Status lines explain setup, access and the shared allowance.
-// A describe node offers the same two: Codex, or Gemini on the same site key (a text model, not Nano Banana itself).
-export function GeneratorPicker({ id, generator, nano, gpt, choose, request, describe = false }) {
-  // Without access the reason and who gives it is the picker's tip, so it reads before the menu is opened.
-  const locked = !nano.selectable && nano.note;
-  const line = status => `${status.note}${status.budget ? ` · ${status.budget}` : ''}`, shared = !describe && line(nano) === line(gpt);
-  const nanoChosen = generator === generators.nanoBanana, gptChosen = !describe && generator === generators.gptImage, siteModel = describe ? 'Gemini' : 'Nano Banana';
-  return <label className={`generator-picker nodrag nopan${nanoChosen || gptChosen ? ' nano' : ''}`} data-tooltip={gptChosen ? `GPT Image · ${gpt.note}` : nanoChosen ? `${siteModel} · ${nano.note}` : locked ? `${siteModel}${describe ? '' : ' / GPT Image'} · ${nano.note}` : describe ? t('Describe with Codex or Gemini') : t('Generate with Codex, Nano Banana or GPT Image')}>
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-    <select aria-label={t('Image generator')} value={nanoChosen || gptChosen ? generator : ''} onChange={event => event.target.value === 'request' ? request?.() : choose(id, event.target.value || null)}>
-      <option value="">Codex</option>
-      {/* One this person can't use stays clickable and says why when chosen (setGenerator), instead of ignoring the click. */}
-      <option value={generators.nanoBanana}>{siteModel}{!nano.selectable && !nanoChosen && nano.short ? ` · ${nano.short}` : ''}</option>
-      {!describe && <option value={generators.gptImage}>GPT Image{!gpt.selectable && !gptChosen && gpt.short ? ` · ${gpt.short}` : ''}</option>}
-      {/* Access stays manual: someone without it can ask, and the request waits for admins in Team access. */}
-      {nano.requestable && request && <option value="request">{t('Request access…')}</option>}
-      {/* Both share access and limits, so one line says it when their status matches (e.g. "50 of 50 left today"). */}
-      {shared ? <option value="note" disabled>{line(nano)}</option> : <>
-        <option value="note" disabled>{siteModel} · {line(nano)}</option>
-        {!describe && <option value="gpt-note" disabled>GPT Image · {line(gpt)}</option>}
-      </>}
-    </select>
-  </label>;
+// Each model owns its run, timer and cancel control; changing the prompt's default cannot hide a sibling run.
+export function GeneratorButtons({ id, models, runs = {}, canRun, readOnly, userName, cloud, describe = false, run, cancel, connect, request, nano, gpt, fix, buttonRef, highlight }) {
+  const line = status => `${status?.note || ''}${status?.budget ? ` · ${status.budget}` : ''}`;
+  return <div className="generator-buttons nodrag nopan" role="group" aria-label={t('Generators')}>
+    {models.map(({ generator, name, disabled, note }, index) => {
+      const view = runs[generator] || {}, pending = view.active || view.starting, canCancel = !cloud || view.byName === userName;
+      const label = describe ? t('Describe with {name}', { name }) : t('Generate with {name}', { name });
+      const status = view.starting && !view.active ? t('Starting…') : canCancel ? view.timer : `(${view.byName || t('Teammate')})`;
+      const tip = !canRun ? describe ? t('Connect an image first') : t('Write a prompt first') : `${label}${pending ? ` · ${status}` : ''}${note ? ` · ${note}` : ''}`;
+      return <div key={generator} className={`generator-slot${pending ? ' pending' : ''}`}>
+        <button ref={index === 0 ? buttonRef : undefined} type="button" className={`model-generate${generator === generators.nanoBanana ? ' nano' : ''}${highlight ? ' onboarding-highlight' : ''}`}
+          data-analytics-name={label} aria-label={label} aria-busy={!!pending} data-tooltip={tip} disabled={readOnly || pending || disabled || !canRun} onClick={event => run(id, null, event, generator)}>
+          {/* Running, a button also holds its spinner and timer, so it shows the name's first word (Nano, GPT); the tooltip and label keep it whole. */}
+          {pending ? <><i className="model-progress" aria-hidden="true"/><i className="model-spinner" aria-hidden="true"/><span>{name.split(' ')[0]}</span><span className={`model-time${canCancel ? '' : ' model-owner'}`} role="status">{status}</span></> : <><span aria-hidden="true">▶</span><span>{name}</span></>}
+        </button>
+        {view.active && canCancel && !readOnly && <button type="button" className="model-cancel" aria-label={t('Cancel {name}', { name })} data-tooltip={t('Cancel {name}', { name })} onClick={() => cancel(view.runId)}>×</button>}
+      </div>;
+    })}
+    {cloud && <details className="generator-more"><summary aria-label={t('Generator options')} data-tooltip={t('Generator options')}>⋯</summary><div className="generator-menu">
+      {connect && <button type="button" disabled={readOnly} onClick={event => { event.currentTarget.closest('details').removeAttribute('open'); fix(); }}>{t('Connect Codex')}</button>}
+      {nano?.requestable && request && <button type="button" disabled={readOnly} onClick={event => { event.currentTarget.closest('details').removeAttribute('open'); request(); }}>{t('Request access…')}</button>}
+      <small>{line(nano)}</small>{line(gpt) !== line(nano) && <small>GPT Image · {line(gpt)}</small>}
+    </div></details>}
+  </div>;
 }
 
 // With a site API key one Generate starts several images at once; they arrive as one slideshow. The counts sit under the

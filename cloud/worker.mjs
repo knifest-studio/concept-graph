@@ -8,7 +8,7 @@ import { gptImageStatus } from './gpt-image.mjs';
 import { model3dStatus, storeModelGlb } from './model3d.mjs';
 import { upscaleSettings } from './upscale.mjs';
 import { canEdit } from './access.mjs';
-import { imageSize, validateTemplate } from '../graph.mjs';
+import { imageSize, isSiteGenerator, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
 import { clipPattern } from '../src/waiting-videos.mjs';
 import { mcpApi } from './mcp.mjs';
@@ -61,6 +61,12 @@ function admitted(request, role, user) {
 }
 
 // Everyone connected to the board gets their new role at once; if this fails, they get it when they next connect.
+// The owner, if they are on the board, hears at once that someone asked for access.
+async function announceRequest(env, id, request) {
+  try { await (await getServerByName(env.BoardRoom, id)).accessRequested(request); }
+  catch (cause) { console.error('Could not tell the board about an access request:', cause); }
+}
+
 async function refreshRoom(env, id) {
   try { await (await getServerByName(env.BoardRoom, id)).refreshAccess(); }
   catch (cause) { console.error('Could not update access on the open board:', cause); }
@@ -103,9 +109,10 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
   // The room checks setup and the image or 3D allowed list for the saved node.
   const input = await body(request), counter = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   if (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 120) return error('Choose a prompt to generate.', 400);
+  if (input.generator !== undefined && !isSiteGenerator(input.generator)) return error('Choose a site generator.', 400);
   // `settings: 1` comes from pages that show generation settings; the room refuses older pages a run that uses them, in
   // the browser's language, since those pages cannot translate the refusal.
-  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
+  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, generator: input.generator, view: input.view, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
   return result.error ? json({ error: result.error, ...(result.resizeAssets ? { resizeAssets: result.resizeAssets } : {}) }, result.status) : json({ run: result.run }, 202);
 }
 
@@ -261,10 +268,19 @@ async function route(request, env) {
   }
   const versionMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)\/versions(?:\/([^/]+)\/restore)?$/);
   if (versionMatch) return versionRoute(request, env, user, url, versionMatch[1], versionMatch[2]);
-  const boardMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)(\/sharing)?$/);
+  const boardMatch = path.match(/^\/api\/cloud\/boards\/([^/]+)(\/sharing|\/access-request)?$/);
   if (boardMatch) {
     const id = boardMatch[1], store = directory(env);
     if (!boardPattern.test(id)) return error('Board not found.', 404);
+    if (boardMatch[2] === '/access-request') {
+      if (method !== 'POST') return error('Method not allowed.', 405);
+      const origin = request.headers.get('Origin');
+      if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+      const result = await store.requestBoardAccess(id, user);
+      if (result.error) return error(result.error, result.status);
+      if (result.created) await announceRequest(env, id, { name: result.name, email: result.email });
+      return json(result.allowed ? { allowed: true } : { requested: true });
+    }
     if (boardMatch[2]) {
       if (method === 'GET') {
         const sharing = await store.sharing(id, user.email);
@@ -273,14 +289,14 @@ async function route(request, env) {
       if (method !== 'PATCH') return error('Method not allowed.', 405);
       const origin = request.headers.get('Origin');
       if (origin && origin !== url.origin) return error('Invalid origin.', 403);
-      const input = await body(request), result = await store.changeSharing(id, user.email, { access: input.access, linkRole: input.linkRole, member: input.member });
+      const input = await body(request), result = await store.changeSharing(id, user.email, { access: input.access, linkRole: input.linkRole, member: input.member, dismiss: input.dismiss });
       if (result.error) return error(result.error, result.status);
       await refreshRoom(env, id);
       return json(result);
     }
     if (method === 'GET') {
       const result = await store.openBoard(id, user);
-      return result.error ? json({ error: result.error, ...(result.owner ? { owner: result.owner } : {}) }, result.status) : json(result);
+      return result.error ? json({ error: result.error, ...(result.owner ? { owner: result.owner, requested: !!result.requested } : {}) }, result.status) : json(result);
     }
     if (!['PATCH', 'DELETE'].includes(method)) return error('Method not allowed.', 405);
     const board = await store.boardFor(id, user.email);

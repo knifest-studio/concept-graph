@@ -308,7 +308,7 @@ export class Codex extends EventEmitter {
   }
 
   // `task: 'describe'` asks for a written description of the images instead of new images; it resolves with that text.
-  async generate({ prompt, images, model, effort, task, onProgress, onImage, onDiagnostic, signal }) {
+  async generate({ prompt, images, model, effort, task, variants = 1, onProgress, onImage, onDiagnostic, signal }) {
     const describe = task === 'describe';
     await this.connect();
     const status = await this.status();
@@ -380,10 +380,12 @@ export class Codex extends EventEmitter {
         finish(new Error('Cancelled.'));
       };
       const disconnected = error => finish(error);
+      // Variants come one after another in this turn, so each image past the first adds a few minutes.
+      const minutes = 20 + 3 * (Math.min(32, Math.max(1, Number(variants) || 1)) - 1);
       const timeout = setTimeout(() => {
         if (turnId) this.request('turn/interrupt', { threadId: thread.id, turnId }).catch(() => {});
-        finish(new Error('Generation timed out after 20 minutes.'));
-      }, 20 * 60 * 1000);
+        finish(new Error(`Generation timed out after ${minutes} minutes.`));
+      }, minutes * 60 * 1000);
       const receive = ({ method, params = {} }) => {
         if (params.threadId !== thread.id) return;
         if (method === 'item/agentMessage/delta') {

@@ -75,24 +75,23 @@ test('the largest run, 32 variants, stays in one column, its slots past the star
   assert.deepEqual(positions(outputs(deliver(graph, run.id, 32), run.id)), column);
 });
 
-test('a re-run takes the next column at the prompt’s level, past an expanded slideshow or only a folded one’s card', () => {
+test('a re-run goes under the prompt’s earlier results in the column beside it, past an expanded slideshow or only a folded one’s card', () => {
   let graph = deliver(board([prompt()], { runs: [variants(4)] }), 'run', 4);
   assert.equal(graph.groups.length, 1); assert.equal(graph.groups[0].collapsed, false);
-  const again = variants(4, { id: 'again', createdAt: '2026-11-16T10:05:00.000Z' });
-  // The expanded frame ends 24px right of its cards; this run's own frame keeps 24px more.
-  assert.deepEqual(shown(graph, [again])[0].position, { x: 772, y: 0 });
-  // Folded, the slideshow is one image card; the images hidden in it take no room.
+  const again = variants(4, { id: 'again', createdAt: '2026-11-16T10:05:00.000Z' }), first = outputs(graph, 'run');
+  // Under the expanded frame, in the same column: never further along the row.
+  const under = shown(graph, [again])[0].position;
+  assert.equal(under.x, first[0].position.x); assert.ok(under.y > Math.max(...first.map(node => node.position.y)));
+  // Folded, the slideshow is one image card; the images hidden in it take no room, so the run comes up closer.
   graph = { ...graph, groups: graph.groups.map(group => ({ ...group, collapsed: true })) };
-  assert.deepEqual(shown(graph, [again])[0].position, { x: 724, y: 0 });
+  const folded = shown(graph, [again])[0].position;
+  assert.equal(folded.x, first[0].position.x); assert.ok(folded.y < under.y);
   graph = deliver({ ...graph, runs: [...graph.runs, again] }, 'again', 4);
-  assert.ok(outputs(graph, 'again').every(node => node.position.x === 724));
-  // Single results take the next column too.
-  const single = deliver(board([prompt()], { runs: [job()] }), 'run', 1);
-  assert.deepEqual(placed(single, job({ id: 'next' })), { x: 724, y: 0 });
-  // Four columns level with the prompt, then under the first.
-  let columns = board([prompt()]);
-  for (let index = 0; index < 5; index++) columns = deliver({ ...columns, runs: [...columns.runs, job({ id: `run-${index}`, createdAt: `2026-11-16T10:0${index}:00.000Z` })] }, `run-${index}`, 1);
-  assert.deepEqual(columns.nodes.filter(node => node.type === 'image').map(node => node.position), [{ x: 390, y: 0 }, { x: 724, y: 0 }, { x: 1058, y: 0 }, { x: 1392, y: 0 }, { x: 390, y: 358 }]);
+  assert.ok(outputs(graph, 'again').every(node => node.position.x === first[0].position.x));
+  // Single results stack the same way: each run under the previous one, beside the prompt.
+  let column = board([prompt()]);
+  for (let index = 0; index < 5; index++) column = deliver({ ...column, runs: [...column.runs, job({ id: `run-${index}`, createdAt: `2026-11-16T10:0${index}:00.000Z` })] }, `run-${index}`, 1);
+  assert.deepEqual(column.nodes.filter(node => node.type === 'image').map(node => node.position), [0, 1, 2, 3, 4].map(index => ({ x: 390, y: index * 358 })));
 });
 
 test('a re-run on one of several stacked prompts stays in its row instead of going under the next prompt’s results', () => {
@@ -198,7 +197,8 @@ test('a moved prompt takes a waiting local run’s results along; a deleted one 
   const earlier = { id: 'old', nodeId: 'p', status: 'completed', outputIds: ['old-output-0'], createdAt: '2026-11-16T09:00:00.000Z' };
   const graph = board([image('old-output-0', 1390, 200, { runId: 'old' })], { runs: [earlier, job()] });
   const next = placeRunOutput(graph, { runId: 'run', nodeId: 'p', run: job(), output: { index: 0 }, asset, dimensions: { width: 100, height: 100 } });
-  assert.deepEqual(next.nodes.find(node => node.id === 'run-output-0').position, { x: 1724, y: 200 });
+  // …and the new result goes under them, as any later run of a prompt does.
+  assert.deepEqual(next.nodes.find(node => node.id === 'run-output-0').position, { x: 1390, y: 558 });
 });
 
 test('runs started together on neighbouring prompts keep their own columns, whichever result arrives first', () => {
@@ -227,4 +227,60 @@ test('results do not depend on the order of nodes, groups or runs', () => {
   assert.equal(Object.keys(expected).length, 6);
   assert.deepEqual(result(board([...nodes].reverse(), { groups: [...groups].reverse(), runs: [...runs].reverse() })), expected);
   for (const position of Object.values(expected)) assert.ok(position.y >= 0 && position.x >= 390);
+});
+
+test('a run started on screen lands beside its prompt, else at the nearest free spot on screen, else over others on screen', () => {
+  const onScreen = (position, view) => position.x >= view.x && position.y >= view.y && position.x + 310 <= view.x + view.width && position.y <= view.y + view.height - 310;
+  // Free beside the prompt.
+  const wide = { x: -100, y: -100, width: 1500, height: 1000 };
+  assert.deepEqual(placed(board([prompt()]), job({ view: wide })), { x: 390, y: 0 });
+  // Taken beside: the nearest free spot, still on screen, clear of the card that took it.
+  const taken = board([prompt(), image('other', 390, 0)]), spot = placed(taken, job({ view: wide }));
+  assert.ok(onScreen(spot, wide)); assert.ok(!overlap({ ...spot, width: 100, height: 100 }, box(taken.nodes[1])));
+  assert.ok(Math.hypot(spot.x - 390, spot.y) < 700);
+  // Beside the prompt is off the right edge: the result comes back on screen instead.
+  const narrow = { x: -400, y: -100, width: 760, height: 900 };
+  assert.ok(onScreen(placed(board([prompt()]), job({ view: narrow })), narrow));
+  // Nothing free on screen: it covers as little of the old cards as it can, never sitting exactly on one, and stays on screen.
+  const full = { x: 300, y: -40, width: 400, height: 400 }, crowded = board([prompt(), image('a', 390, 0), sticky('b', 300, -40)]);
+  const squeezed = placed(crowded, job({ view: full })), shared = (a, b) => Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  assert.notDeepEqual(squeezed, { x: 390, y: 0 }); assert.ok(shared({ ...squeezed, width: 310, height: 310 }, box(crowded.nodes[1])) < 310 * 310 / 2);
+  assert.ok(!overlap({ ...squeezed, width: 310, height: 310 }, box(crowded.nodes[0]))); assert.ok(squeezed.x < full.x + full.width && squeezed.y < full.y + full.height);
+  // A screen too small for anything free: the result may cover earlier results, but never the prompt it came from.
+  const tight = { x: 0, y: -20, width: 720, height: 420 }, cramped = board([prompt(), image('a', 390, 0)]), over = placed(cramped, job({ view: tight }));
+  assert.ok(!overlap({ ...over, width: 310, height: 310 }, box(cramped.nodes[0]))); assert.ok(over.x >= tight.x && over.x + 310 <= tight.x + tight.width);
+  // Two models on a full screen: the second keeps the slot it showed, clear of the first one's result that lands meanwhile.
+  const now = (id, at) => variants(1, { id, view: tight, createdAt: at, startedAt: at });
+  let pair = board([prompt(), image('a', 390, 0, { createdAt: '2026-11-16T09:00:00.000Z' })], { runs: [now('nano', '2026-11-16T10:00:00.000Z'), now('gpt', '2026-11-16T10:00:01.000Z')] });
+  const waiting = shown(pair).find(node => node.data.runId === 'gpt').position;
+  pair = deliver(pair, 'nano', 1); pair = deliver(pair, 'gpt', 1);
+  assert.deepEqual(outputs(pair, 'gpt')[0].position, waiting); assert.notDeepEqual(outputs(pair, 'gpt')[0].position, outputs(pair, 'nano')[0].position);
+  // Its placeholder showed the same spot, and runs from agents or older pages (no view) keep the column rule.
+  assert.deepEqual(shown(board([prompt(), image('other', 390, 0)], { runs: [job({ view: wide })] }))[0].position, spot);
+  assert.deepEqual(placed(board([prompt()]), job({ view: { x: 0, y: 0, width: 10, height: 10 } })), { x: 390, y: 0 });
+});
+
+test('a screen-started run never lands left of or above its prompt, and a big run stays one column until it folds', () => {
+  // Free room only to the left of the prompt: the result goes right of it or under it instead, over others if it must.
+  const view = { x: -900, y: -100, width: 1700, height: 1200 }, busy = board([prompt(), image('r', 390, 0), image('r2', 390, 358), sticky('s', 724, 0)]);
+  const spot = placed(busy, job({ view }));
+  assert.ok(spot.x >= 0 && spot.y >= 0); assert.ok(spot.x >= 310 + 24 || spot.y >= 80);
+  // Sixteen variants with old cards under the first one: every image follows straight under the one before.
+  let graph = board([prompt(), image('old', 390, 400), image('older', 390, 1200)], { runs: [variants(16, { view: { x: -100, y: -100, width: 1400, height: 900 } })] });
+  graph = deliver(graph, 'run', 16);
+  const column = outputs(graph, 'run').map(node => node.position);
+  assert.ok(column.every(position => position.x === column[0].x));
+  for (let index = 1; index < column.length; index++) assert.equal(column[index].y - column[index - 1].y, column[1].y - column[0].y);
+});
+
+test('two big runs started together on a full screen never land on top of each other', () => {
+  const view = { x: -40, y: -80, width: 820, height: 620 }, at = (id, time) => variants(8, { id, view, createdAt: time, startedAt: time });
+  let graph = board([prompt(), image('old', 390, 0, { createdAt: '2026-11-16T09:00:00.000Z' })], { runs: [at('nano', '2026-11-16T10:00:00.000Z'), at('gpt', '2026-11-16T10:00:01.000Z')] });
+  const first = id => shown(graph).find(node => node.data.runId === id && node.data.slot === 0).position;
+  const [nano, gpt] = [first('nano'), first('gpt')];
+  assert.ok(!overlap({ ...nano, width: 310, height: 310 }, { ...gpt, width: 310, height: 310 }));
+  // Neither goes left of the prompt or above it.
+  for (const spot of [nano, gpt]) assert.ok(spot.x >= 0 && spot.y >= 0);
+  graph = deliver(graph, 'nano', 8); graph = deliver(graph, 'gpt', 8);
+  assert.deepEqual(outputs(graph, 'gpt')[0].position, gpt); assert.deepEqual(outputs(graph, 'nano')[0].position, nano);
 });

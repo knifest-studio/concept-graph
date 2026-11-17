@@ -17,7 +17,7 @@ const roleOptions = () => <><option value="edit">{t('Can edit')}</option><option
 // sent: the owner shares the link, and an invited person sees the board after signing in with that address.
 export function ShareDialog({ boardId, name, sharing: initial, services, onChange, onClose }) {
   const [sharing, setSharing] = useState(initial), [email, setEmail] = useState(''), [role, setRole] = useState('edit');
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [copied, setCopied] = useState('');
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [copied, setCopied] = useState(''), [granted, setGranted] = useState({});
   const path = `/api/cloud/boards/${encodeURIComponent(boardId)}/sharing`, first = useRef(null), latest = useRef(onChange); latest.current = onChange;
   const show = value => { setSharing(value); latest.current(value); };
   useEffect(() => {
@@ -29,7 +29,7 @@ export function ShareDialog({ boardId, name, sharing: initial, services, onChang
   }, []);
   const change = async (update, done) => {
     setBusy(true); setError('');
-    try { show((await services.api(path, json('PATCH', update))).sharing); track('share_changed', { target: update.member ? 'member' : update.access !== undefined ? 'access' : 'link-role' }); done?.(); }
+    try { show((await services.api(path, json('PATCH', update))).sharing); track('share_changed', { target: update.dismiss ? 'request-dismissed' : update.member ? 'member' : update.access !== undefined ? 'access' : 'link-role' }); done?.(); }
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
@@ -52,6 +52,14 @@ export function ShareDialog({ boardId, name, sharing: initial, services, onChang
         <small>{t('No email is sent. Copy the link and send it; they see the board after signing in with this address.')}</small>
       </form> : <p className="share-note">{owner && <>{rich('Owned by {name}.', { name: <b>{owner.name || t('someone else')}</b> })} </>}{sharing.role === 'view' ? t('You can view this board.') : t('You can edit this board.')} {owner ? t('Only its owner can change who has access.') : t('It was made before sharing and has no owner, so nobody can change who has access.')}</p>}
       {error && <p className="cloud-error share-error" role="alert">{error}</p>}
+      {manage && sharing.requests?.length > 0 && <>
+        {/* People the board is closed to who asked to come in: letting them in invites them with the chosen role. */}
+        <h3>{t('Asking for access')}</h3>
+        <ul className="share-people share-asking-list">{sharing.requests.map(request => <li key={request.email}><span><b>{request.name || request.email}</b>{request.name && <small>{request.email}</small>}</span>
+          <span><select aria-label={t('Role for {email}', { email: request.email })} value={granted[request.email] || 'view'} disabled={busy} onChange={event => setGranted(current => ({ ...current, [request.email]: event.target.value }))}>{roleOptions()}</select>
+            <button type="button" className="primary-button share-allow" disabled={busy} onClick={() => change({ member: { email: request.email, role: granted[request.email] || 'view' } })}>{t('Let in')}</button>
+            <button type="button" className="share-remove" aria-label={t('Decline the request from {email}', { email: request.email })} disabled={busy} onClick={() => change({ dismiss: request.email })}>{t('Decline')}</button></span></li>)}</ul>
+      </>}
       <h3>{t('People with access')}</h3>
       <ul className="share-people">
         {owner && <li><span><b>{owner.name || t('Owner')}</b>{manage && <small>{t('{email} · you', { email: owner.email })}</small>}</span><span className="share-role">{t('Owner')}</span></li>}
