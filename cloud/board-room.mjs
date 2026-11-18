@@ -673,6 +673,7 @@ export class BoardRoom extends YServer {
   async referencesProblem(request, gpt, name) {
     if (request.video) {
       for (const [index, image] of request.images.entries()) {
+        if (image.kind === 'video') continue; // Uploads/results already validated MP4; never buffer reference videos here.
         const [info] = await this.inspectReferences([image]);
         if (!info || !info.size || !['png', 'jpg', 'webp'].includes(info.format)) return 'Video inputs must be stored PNG, JPEG or WebP images.';
         if (info.bytes > 30 * 1024 * 1024) return 'Video input images can be at most 30 MB.';
@@ -972,7 +973,7 @@ export class BoardRoom extends YServer {
       catch (cause) { if (signal.aborted || cause instanceof NanoError) throw cause; throw new NanoError('upstream', `Could not store the generated video: ${String(cause.message).slice(0, 200)}`); }
       if (job.cancelled || terminalRun(this.document.getMap('runs').get(run.id)?.status)) return;
       const a = request.generation.applied, start = request.images.find(image => image.role === 'start') || request.images.find(image => image.role === 'end');
-      if (this.placeOutput(job, 0, asset, undefined, undefined, { name: request.target.data.text.trim().slice(0, 120) || videoModels[a.videoModel].name, ...a, endpoint: request.generation.endpoint, usd, bytes, ...(start ? { poster: start.asset, aspect: start.aspect } : {}) })) placed = 1;
+      if (this.placeOutput(job, 0, asset, undefined, undefined, { name: request.target.data.text.trim().slice(0, 120) || videoModels[a.videoModel].name, ...a, duration: request.generation.outputSeconds, endpoint: request.generation.endpoint, usd, bytes, ...(start ? { poster: start.asset, aspect: start.aspect } : {}) })) placed = 1;
     } catch (cause) {
       outcome = { status: 'failed', error: job.queueTimedOut ? roomBusy : job.timedOut ? 'Video generation took longer than 14 minutes. Try again.' : cause instanceof NanoError ? cause.message : 'Video generation failed. Try again.' };
       if (!(cause instanceof NanoError) && !signal.aborted) console.error('Video generation failed:', cause);

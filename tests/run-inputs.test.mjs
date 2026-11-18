@@ -50,5 +50,5 @@ test('run inputs are optional, capped and strictly shaped; the details read only
   }
   assert.equal(runInputList({}), undefined); assert.equal(runInputList(undefined), undefined); assert.equal(runInputList({ inputs: 'x' }), undefined);
   assert.deepEqual(runInputList({ inputs: [good, { asset: 'bad' }, null, { ...good, nodeId: 'side' }] }), [good, { ...good, nodeId: 'side' }]);
-  assert.equal(runInputList({ inputs: Array(40).fill(good) }).length, maxRunInputs);
+  assert.equal(runInputList({ inputs: Array(maxRunInputs + 8).fill(good) }).length, maxRunInputs);
 });

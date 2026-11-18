@@ -14,11 +14,12 @@ function InputPicture({ asset, alt, assetUrl, Icon }) {
 export function RunInputs({ inputs, canOpen, open, assetUrl, Icon }) {
   const images = inputs.filter(input => !input.template), templates = [...new Set(inputs.filter(input => input.template).map(input => input.template))];
   return <>
-    {(images.length > 0 || !templates.length) && <span className="detail-label">{t('Reference images')}</span>}
+    {(images.length > 0 || !templates.length) && <span className="detail-label">{t(images.some(input => input.kind === 'video') ? 'Inputs' : 'Reference images')}</span>}
     {images.length > 0 ? <div className="run-inputs">{images.map((input, index) => {
-      const name = input.label || t('Input image {number}', { number: index + 1 });
+      const name = input.label || t(input.kind === 'video' ? 'Input video {number}' : 'Input image {number}', { number: index + 1 });
       // The number its connection showed and the prompt used (“image 2”); older runs did not record one.
-      const picture = <><InputPicture asset={input.asset} alt={name} assetUrl={assetUrl} Icon={Icon}/>{input.number && <span className="run-input-number" aria-hidden="true">{input.number}</span>}{input.mask && <span className="run-input-badge">{t('Mask')}</span>}</>;
+      const picture = <>{input.kind === 'video' ? <span className="run-input-missing"><Icon name="film" size={20}/>{input.duration && t('{seconds} s', { seconds: input.duration })}</span> : <InputPicture asset={input.asset} alt={name} assetUrl={assetUrl} Icon={Icon}/>} {input.number && <span className="run-input-number" aria-hidden="true">{input.number}</span>}{input.mask && <span className="run-input-badge">{t('Mask')}</span>}</>;
+      if (input.kind === 'video') return <a className="run-input" key={`${index}:${input.asset}`} href={assetUrl(input.asset)} target="_blank" rel="noreferrer" aria-label={t('Open {name}', { name })}>{picture}</a>;
       return input.nodeId && canOpen(input.nodeId)
         ? <button type="button" className="run-input" key={`${index}:${input.asset}`} aria-label={t('Open {name}', { name })} data-tooltip={name} onClick={() => open(input.nodeId)}>{picture}</button>
         : <span className="run-input" key={`${index}:${input.asset}`} title={name}>{picture}</span>;

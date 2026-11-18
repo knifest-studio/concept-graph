@@ -1,4 +1,4 @@
-import { isVideo, videoTask, validateVideo, roleVideoInputs, videoModels } from './src/video-generation.mjs';
+import { isVideo, videoTask, validateVideo, roleVideoInputs, videoModels, rolesForVideoInput } from './src/video-generation.mjs';
 import { maxVideoBytes } from './src/video-assets.mjs';
 import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
 import { boardPages, defaultPageId, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
@@ -232,6 +232,10 @@ export function validateGraph(value) {
       if (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120) throw new Error('Invalid video name.');
       if (node.data.bytes !== undefined && (!Number.isSafeInteger(node.data.bytes) || node.data.bytes < 12 || node.data.bytes > maxVideoBytes)) throw new Error('Invalid video size.');
       if (node.data.usd !== undefined && (!Number.isFinite(node.data.usd) || node.data.usd < 0 || node.data.usd > 1000)) throw new Error('Invalid video cost.');
+      if (node.data.uploaded !== undefined && typeof node.data.uploaded !== 'boolean') throw new Error('Invalid video upload flag.');
+      if (node.data.fileName !== undefined && (typeof node.data.fileName !== 'string' || node.data.fileName.length > 1000)) throw new Error('Invalid video filename.');
+      for (const key of ['width', 'height']) if (node.data[key] !== undefined && (!Number.isInteger(node.data[key]) || node.data[key] < 1 || node.data[key] > 32768)) throw new Error('Invalid video dimensions.');
+      if (node.data.fps !== undefined && (!Number.isFinite(node.data.fps) || node.data.fps <= 0 || node.data.fps > 1000)) throw new Error('Invalid video frame rate.');
       validateVideo(node.data, true);
     }
     if (node.type === 'model' && !/^[\da-f-]{36}\.glb$/.test(node.data.asset || '')) throw new Error('Invalid model asset.');
@@ -383,6 +387,7 @@ export function nameImageConnections(nodes, edges, added) {
   const connected = [...edges];
   for (const edge of added) {
     const source = nodes.find(node => node.id === edge.source), target = nodes.find(node => node.id === edge.target);
+    if (source?.type === 'video' && isVideo(target) && !target.data.videoRoles?.[source.id]) nodes = nodes.map(node => node === target ? { ...node, data: { ...node.data, videoRoles: { ...node.data.videoRoles, [source.id]: 'reference' } } } : node);
     if (source?.type === 'image' && target?.type === 'text') {
       if (isVideo(target) && !target.data.videoRoles?.[source.id]) {
         // A new image takes the first free frame, start then end, and later ones are references. The role is stored, so
@@ -406,6 +411,14 @@ export function nameImageConnections(nodes, edges, added) {
 // name a download gets (plus the original name of an uploaded file).
 const uploadedName = node => !node.data.runId && /\.[a-z\d]{2,5}$/i.test(node.data.label?.trim() || '') && node.data.label.trim() !== node.data.asset ? node.data.label.trim().slice(0, 200) : undefined;
 export const imageReference = node => ({ asset: node.data.asset, label: imageName(node), nodeId: node.id, ...(node.data.mask ? { mask: node.data.mask } : {}), ...(uploadedName(node) ? { uploaded: uploadedName(node) } : {}) });
+export function videoSource(node) {
+  if (node.type !== 'video') return { ...imageReference(node), ...(node.data.aspect ? { aspect: node.data.aspect } : {}) };
+  return { nodeId: node.id, asset: node.data.asset, kind: 'video', label: node.data.name, ...Object.fromEntries(['duration', 'width', 'height', 'fps', 'bytes', 'poster', 'aspect'].filter(key => node.data[key] !== undefined).map(key => [key, node.data[key]])) };
+}
+export function videoConnectionInputs(nodes, edges, nodeId) {
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  return connectedSources(edges, nodeId).map(id => byId.get(id)).filter(input => ['image', 'video'].includes(input?.type)).map((node, index) => { const { mask, ...input } = videoSource(node); return { ...input, number: index + 1 }; });
+}
 // A prompt numbers its connected images 1, 2, 3… in the order they were connected, and the board shows these numbers on
 // the connections while the prompt is selected, so a request can say “image 2” or “the second image”. Connections that
 // remember when they were made (`order`) follow that; older ones keep their stored order and come first.
@@ -452,9 +465,8 @@ export function runInputs(graph, nodeId) {
     if (stale) throw new Error(`The mask on “${stale.label}” no longer matches the image. Paint it again.`);
   }
   if (isVideo(target)) {
-    images = images.filter(image => image.nodeId);
     const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && !isDescribe(node));
-    return { target, ordered, images: roleVideoInputs(target, images), context };
+    return { target, ordered, images: roleVideoInputs(target, videoConnectionInputs(graph.nodes, graph.edges, nodeId)), context };
   }
   if (isUpscale(target) || isModel3d(target)) {
     const model3d = isModel3d(target), limit = model3d ? maxModel3dImages : maxUpscaleImages;
@@ -478,19 +490,22 @@ export function runInputs(graph, nodeId) {
 
 // A cloud run keeps a short list of the images it was given (a local run keeps a full snapshot instead), so its results
 // can show them later: each image node with its ID, so the details can open it while it exists, its file and its name,
-// and whether its mask went along; a custom node's references name that custom node. Runs send at most 10 images; the
+// and whether its mask went along; a custom node's references name that custom node. Video runs can include up to 50 media files; the
 // cap only bounds what a run stored in the shared document can hold.
-export const maxRunInputs = 32;
-const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template', 'number', 'role']);
+export const maxRunInputs = 50;
+const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template', 'number', 'role', 'kind', 'duration']);
 const validRunInput = input => !!input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).every(key => runInputKeys.has(key))
-  && typeof input.asset === 'string' && assetPattern.test(input.asset)
+  && typeof input.asset === 'string' && (input.kind === 'video' ? /^[\da-f-]{36}\.mp4$/.test(input.asset) : assetPattern.test(input.asset))
   && (input.nodeId === undefined || (typeof input.nodeId === 'string' && input.nodeId.length > 0 && input.nodeId.length <= 120))
   && (input.label === undefined || (typeof input.label === 'string' && input.label.length <= 120))
-  && (input.role === undefined || ['start', 'end', 'middle', 'reference'].includes(input.role))
+  && (input.kind === undefined || input.kind === 'video')
+  && (input.duration === undefined || (input.kind === 'video' && Number.isFinite(input.duration) && input.duration > 0 && input.duration <= 86400))
+  && (input.role === undefined || rolesForVideoInput(input).includes(input.role))
   && (input.mask === undefined || input.mask === true)
   && (input.number === undefined || (Number.isInteger(input.number) && input.number >= 1 && input.number <= 999))
   && (input.template === undefined || (typeof input.template === 'string' && !!input.template.trim() && input.template.length <= 80));
 export function runInputRecord(graph, nodeId) {
+  if (isVideo(graph.nodes.find(node => node.id === nodeId))) return runInputs(graph, nodeId).images.map(input => Object.fromEntries(['nodeId', 'asset', 'label', 'number', 'role', 'kind', 'duration'].filter(key => input[key] !== undefined).map(key => [key, input[key]]))).slice(0, maxRunInputs);
   const { target, ordered, mainImage } = runInputs(graph, nodeId), picturesOnly = isUpscale(target) || isModel3d(target), masks = !picturesOnly && !isDescribe(target) && !isVideo(target);
   // Mirrors runInputs: connected image nodes, with the numbers the prompt used, and, except for an upscale or 3D model,
   // the references of custom nodes.

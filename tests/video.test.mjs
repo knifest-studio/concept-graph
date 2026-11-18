@@ -232,12 +232,16 @@ test('video cards render clamps and role errors, and light/collapsed results nev
   const data = { asset: mp4, name: 'Flight', duration: 5, videoModel: 'omni', videoResolution: '720p', usd: .4095, endpoint: 'google/gemini-omni-flash/v1.2/text-to-video' };
   const state = { detail: 'full', focusId: null, videoInputs: new Map(), activeNodes: new Set(), latestRun: new Map(), videoReady: true, readOnly: false };
   const render = (Component, data, change = {}) => renderToStaticMarkup(React.createElement(ReactFlowProvider,null,React.createElement(CanvasContext.Provider, {value:{store:createCanvasStore({...state,...change})}},React.createElement(Component,{id:'v',data,assetUrl:asset=>'/assets/'+asset,Icon:()=>null}))));
-  const full = render(VideoNode,data); assert.match(full,/<video/);assert.match(full,/controls=""/);assert.match(full,/muted=""/);assert.doesNotMatch(full,/autoplay/);assert.match(full,/Download MP4/);
+  const full = render(VideoNode,data); assert.match(full,/<video/);assert.match(full,/controls=""/);assert.match(full,/muted=""/);assert.doesNotMatch(full,/autoplay/);assert.match(full,/Download MP4/); assert.match(full,/source connectable/);
   for (const change of [{detail:'light'},{detail:'tiny'}]) assert.doesNotMatch(render(VideoNode,data,change),/<video/);
   assert.doesNotMatch(render(VideoNode,{...data,collapsed:true}),/<video/);
   const g = graph('omni',['start','end'],{duration:20}), target = g.nodes.find(n=>n.id==='v'), inputs = runInputs(g,'v').images;
   const prompt = render(VideoPrompt,target.data,{videoInputs:new Map([['v',inputs]])}); assert.match(prompt,/Duration 20 → 10 s for this model/); assert.match(prompt,/10 s · ≈\$0.82/); assert.match(prompt,/Generate a 10 s video with Gemini Omni Flash 1.2 · about \$0.82/);assert.match(prompt,/Role of image #2/);
   const mixed = graph('omni',['start','reference']), blocked = render(VideoPrompt,mixed.nodes.find(n=>n.id==='v').data,{videoInputs:new Map([['v',runInputs(mixed,'v').images]])}); assert.match(blocked,/cannot combine frames/);assert.match(blocked,/class="run-button nano"[^>]*disabled=""/);
+  const clip = clipInput('clip', 8, { poster: png }), editing = render(VideoPrompt, { text: 'Edit #1', task: 'video', videoModel: 'seedance', duration: 20, videoRoles: { clip: 'edit' } }, { videoInputs: new Map([['v', [clip]]]) });
+  assert.match(editing, /Reference video/); assert.match(editing, /Edit this video/); assert.match(editing, /Extend this video/); assert.doesNotMatch(editing, /Start frame/);
+  assert.match(editing, /Includes 8 s of input video/); assert.match(editing, /8 s · ≈\$4.54/); assert.match(editing, /From video/); assert.match(editing, /Editing follows/); assert.doesNotMatch(editing, /auto s|<video|src="[^"]*\.mp4/);
+  const uploaded = render(VideoNode, clipNode().data); assert.match(uploaded, /Flight.mp4/); assert.match(uploaded, /1280 × 720/); assert.doesNotMatch(uploaded, /≈\$0.00|MiniMax H3/);
   setLanguage('uk');const uk=render(VideoPrompt,target.data,{videoInputs:new Map([['v',inputs]])});assert.match(uk,/Згенерувати відео на 10 с/);assert.match(uk,/Початковий кадр/);assert.doesNotMatch(uk,/Generate a 10/);
 });
 
@@ -252,4 +256,153 @@ test('video queue reconnects once and stays within six fal requests', async () =
     return Response.json({ video: { url: 'https://media.example/bounded.mp4' } });
   } });
   assert.equal(result.url, 'https://media.example/bounded.mp4'); assert.equal(streams, 2); assert.equal(calls.length, 6);
+});
+
+const clipInput = (nodeId = 'clip', duration = 8, extra = {}) => ({ nodeId, asset: mp4, kind: 'video', duration, width: 1280, height: 720, bytes: 1024, number: 1, ...extra });
+const resolveClips = (model, inputs = [clipInput()], roles = {}, settings = {}) => resolveVideo({ data: { task: 'video', videoModel: model, videoRoles: roles, ...settings } }, inputs);
+const clipNode = (id = 'clip', duration = 8) => ({ id, type: 'video', position: { x: 0, y: 0 }, data: { asset: mp4, name: 'Flight', duration, width: 1280, height: 720, uploaded: true, fileName: 'Flight.mp4', bytes: 1024 } });
+
+test('video inputs route all models to reference mode with documented fields and independent mention indices', () => {
+  for (const [model, field, mention] of [['minimax', 'reference_video_urls', 'Video 1'], ['omni', 'reference_video_urls', '<VIDEO_REF_0>'], ['kling', 'video_urls', '@Video1'], ['seedance', 'video_urls', '@Video1']]) {
+    const inputs = [{ nodeId: 'picture', asset: png, number: 1 }, clipInput('clip', 8, { number: 2 }), clipInput('clip2', 3, { number: 3 })];
+    const resolved = resolveClips(model, inputs), payload = videoInput(resolved, '#2 follows #1 and #3, not #20', ['image', 'video', 'video2']);
+    assert.equal(resolved.blocked, false, model); assert.equal(resolved.mode, 'reference');
+    assert.equal(resolved.endpoint, `${model === 'minimax' ? 'minimax/h3-max' : videoModels[model].path}/reference-to-video`);
+    assert.deepEqual(payload[field], ['video', 'video2']); assert.deepEqual(payload[model === 'minimax' ? 'reference_image_urls' : 'image_urls'], ['image']);
+    assert.match(payload.prompt, new RegExp(mention.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); assert.match(payload.prompt, /#20$/);
+    assert.equal(payload[field === 'video_urls' ? 'reference_video_urls' : 'video_urls'], undefined);
+    assert.equal(payload.image_url, undefined); assert.equal(payload.start_image_url, undefined);
+  }
+});
+
+test('per-model clip limits block before spending, including known dimensions/FPS and combined files', () => {
+  for (const [model, min, max, total, count] of [['minimax', 2, 15, 15, 12], ['omni', .01, 15, Infinity, 3], ['kling', 3, 30, 30, 5], ['seedance', 1.8, 30.2, 30.2, 10]]) {
+    assert.equal(resolveClips(model, [clipInput('a', min)]).blocked, false, model);
+    assert.equal(resolveClips(model, [clipInput('a', max)]).blocked, false, model);
+    assert.equal(resolveClips(model, [clipInput('a', max + .01)]).blocked, true, model);
+    if (min > .01) assert.equal(resolveClips(model, [clipInput('a', min - .01)]).blocked, true, model);
+    if (total < Infinity) assert.ok(resolveClips(model, [clipInput('a', total / 2 + .01), clipInput('b', total / 2)]).issues.some(i => i.reason.includes('combined')));
+    assert.ok(resolveClips(model, Array.from({ length: count + 1 }, (_, i) => clipInput('c' + i, min))).issues.some(i => i.reason.includes('Too many video')));
+    for (const duration of [undefined, 0, NaN]) assert.equal(resolveClips(model, [clipInput('a', duration, { duration })]).blocked, true);
+    assert.equal(resolveClips(model, [clipInput('a', min, { bytes: maxVideoBytes + 1 })]).blocked, true);
+    assert.equal(resolveClips(model, [clipInput()], { clip: 'start' }).blocked, true);
+    for (const role of ['edit', 'extend']) assert.equal(resolveClips(model, [clipInput()], { clip: role }).blocked, model !== 'seedance');
+  }
+  for (const extra of [{ width: 299 }, { height: 6001 }, { width: 400, height: 1200 }, { fps: 23 }, { fps: 61 }]) assert.equal(resolveClips('seedance', [clipInput('a', 8, extra)]).blocked, true);
+  assert.equal(resolveClips('seedance', [clipInput('a', 8, { fps: 60 })]).blocked, false);
+  assert.equal(resolveClips('seedance', [clipInput('a', 8, { fps: undefined })]).blocked, false, 'unknown FPS is checked by fal, not invented by the browser');
+  const refs = Array.from({ length: 12 }, (_, i) => ({ nodeId: 'i' + i, asset: png }));
+  assert.equal(resolveClips('minimax', [...refs, clipInput()]).blocked, true);
+  const frames = [{ nodeId: 'image', asset: png }, clipInput()];
+  for (const model of Object.keys(videoModels)) assert.equal(resolveClips(model, frames, { image: 'start' }).blocked, ['omni', 'seedance'].includes(model));
+});
+
+test('video prices include input seconds, Kling minimum billing and explicit token estimates', () => {
+  assert.equal(resolveClips('kling').usd, 1.222); assert.equal(resolveClips('kling').billedSeconds, 13);
+  assert.equal(resolveClips('kling', [clipInput('clip', 3)], {}, { duration: 10 }).usd, 1.88);
+  assert.equal(resolveClips('kling', undefined, {}, { videoResolution: '1080p' }).usd, 1.833);
+  assert.equal(resolveClips('seedance').usd, 3.6894); assert.equal(resolveClips('seedance').rate, .2838);
+  assert.equal(resolveClips('minimax').usd, .9632); // 5 s output + table's 32256 input tokens minus shared 4096 allowance
+  assert.ok(resolveClips('minimax', [clipInput('clip', 8, { fps: 30 })]).usd > .9632);
+  assert.equal(resolveClips('omni').usd, .4218); // includes disclosed 1024 tokens/s assumption at $1.50/M
+  for (const model of Object.keys(videoModels)) assert.equal(resolveClips(model).inputSeconds, 8);
+});
+
+test('Seedance edit/extend retains stored settings, sends Auto and orders the chosen target first', () => {
+  for (const role of ['edit', 'extend']) {
+    const resolved = resolveClips('seedance', [clipInput('reference', 3), clipInput('target', 8, { number: 2 })], { target: role }, { duration: 5, videoAspectRatio: '1:1' });
+    const input = videoInput(resolved, '#1 with #2', ['reference-url', 'target-url']);
+    assert.equal(resolved.blocked, false); assert.equal(resolved.requested.duration, 5); assert.equal(resolved.requested.videoAspectRatio, '1:1');
+    assert.equal(input.task, role === 'edit' ? 'editing' : 'extension'); assert.equal(input.aspect_ratio, 'auto');
+    assert.equal(input.duration, role === 'edit' ? 'auto' : '5'); assert.deepEqual(input.video_urls, ['target-url', 'reference-url']);
+    assert.equal(input.prompt, '@Video2 with @Video1'); assert.equal(resolved.outputSeconds, role === 'edit' ? 8 : 5);
+    assert.equal(resolved.usd, role === 'edit' ? 5.3922 : 4.5408);
+  }
+  assert.equal(resolveClips('seedance', [clipInput('a', 3), clipInput('b', 8)], { a: 'edit', b: 'extend' }).blocked, true);
+  assert.deepEqual(resolveClips('seedance', undefined, { clip: 'edit' }).unsupported, {}, 'only explicitly stored settings report clamps');
+});
+
+test('connections number images and videos together; clip Reference defaults never consume frame roles', async () => {
+  const { connectionNumbers } = await import('../src/edge-numbers.mjs');
+  let g = graph('kling', []); g.nodes.unshift(clipNode(), image('a'), image('b'));
+  for (const source of ['clip', 'a', 'b']) { const edge = { id: 'e' + source, source, target: 'v' }; g.nodes = nameImageConnections(g.nodes, g.edges, [edge]); g.edges.push(edge); }
+  const node = g.nodes.find(n => n.id === 'v'); assert.deepEqual(node.data.videoRoles, { clip: 'reference', a: 'start', b: 'end' });
+  const inputs = runInputs(g, 'v').images; assert.deepEqual(inputs.map(i => [i.nodeId, i.number, i.role]), [['clip', 1, 'reference'], ['a', 2, 'start'], ['b', 3, 'end']]);
+  assert.equal(inputs[0].duration, 8); assert.equal(inputs[0].width, 1280);
+  assert.deepEqual(runInputRecord(g, 'v')[0], { nodeId: 'clip', asset: mp4, label: 'Flight', number: 1, role: 'reference', kind: 'video', duration: 8 });
+  validateGraph({ ...g, runs: [{ id: 'run', nodeId: 'v', status: 'completed', inputs: runInputRecord(g, 'v') }] });
+  assert.deepEqual([...connectionNumbers(g.edges, ['v'], id => g.nodes.some(n => n.id === id && ['image', 'video'].includes(n.type))).values()], ['1', '2', '3']);
+  const duplicated = duplicateNodes(g, ['v', 'clip'], { ids: new Map([['v', 'v2'], ['clip', 'clip2']]) });
+  assert.equal(duplicated.nodes.find(n => n.id === 'v2').data.videoRoles.clip2, 'reference');
+  assert.equal(duplicated.nodes.find(n => n.id === 'v2').data.videoRoles.clip, undefined);
+  const fractional = structuredClone(g); fractional.nodes.find(n => n.id === 'clip').data.duration = 8.125; validateGraph(fractional);
+});
+
+test('MCP accepts existing video sources only for Video prompts and keeps image/video schemas separate', () => {
+  const g = graph('minimax', []); g.nodes.push(clipNode());
+  const tool = toolByName.get('add_video_node'), args = { prompt: 'Move #1', model: 'seedance', videoInputs: [{ nodeId: 'clip', role: 'edit' }] };
+  checkArgs({ boardId: '11111111-1111-1111-1111-111111111111', ...args }, tool.inputSchema);
+  const result = runBoardTool(tool, { graph: g, args, prepared: { fal: true }, templates: [] });
+  assert.equal(result.result.generation.task, 'editing'); assert.equal(result.result.generation.inputSeconds, 8);
+  assert.equal(result.graph.nodes.find(n => n.id === result.result.nodeId).data.videoRoles.clip, 'edit');
+  assert.deepEqual(tool.inputSchema.properties.imageInputs.items.properties.role.enum, ['start', 'end', 'middle', 'reference']);
+  const connect = toolByName.get('connect_nodes'), connected = runBoardTool(connect, { graph: g, args: { source: 'clip', target: 'v' } });
+  assert.equal(connected.graph.nodes.find(n => n.id === 'v').data.videoRoles.clip, 'reference');
+  const normal = structuredClone(g); normal.nodes.find(n => n.id === 'v').data = { text: 'Image prompt' };
+  assert.throws(() => runBoardTool(connect, { graph: normal, args: { source: 'clip', target: 'v' } }), /Video prompt/);
+});
+
+test('MP4 browser validation reads only its header and stores fractional metadata with an optional small poster', async () => {
+  const { videoFile: isClip, checkVideoFile, videoMetadata } = await import('../src/video-upload.mjs');
+  const file = new File([videoBytes], 'flight.MP4', { type: 'video/mp4' });
+  file.arrayBuffer = () => { throw new Error('must not buffer the whole video'); };
+  assert.equal(isClip(file), true); await checkVideoFile(file);
+  await assert.rejects(checkVideoFile(new File(['invalid'], 'bad.mp4')), /MP4/);
+  await assert.rejects(checkVideoFile({ name: 'large.mp4', size: maxVideoBytes + 1 }), /128 MB/);
+  await assert.rejects(checkVideoFile(new File([videoBytes], 'other.mov')), /MP4/);
+  const poster = new Blob(['poster'], { type: 'image/png' }), calls = [];
+  const video = { duration: 8.125, videoWidth: 1920, videoHeight: 1080, set src(value) { queueMicrotask(() => this.onloadeddata()); }, removeAttribute: key => calls.push(key), load: () => calls.push('load') };
+  const canvas = { getContext: () => ({ drawImage: () => calls.push('draw') }), toBlob: resolve => resolve(poster) };
+  const options = { document: { createElement: tag => tag === 'video' ? video : canvas }, makeURL: () => 'blob:test', revokeURL: url => calls.push(url) };
+  const meta = await videoMetadata(file, options); assert.equal(meta.duration, 8.125); assert.equal(meta.width, 1920); assert.equal(meta.height, 1080); assert.equal(meta.poster, poster); assert.equal(canvas.width, 1024); assert.equal(canvas.height, 576); assert.deepEqual(calls, ['draw', 'src', 'load', 'blob:test']);
+  canvas.getContext = () => null; assert.equal((await videoMetadata(file, options)).poster, undefined);
+  video.duration = Infinity; await assert.rejects(videoMetadata(file, options), /metadata/); assert.equal(calls.at(-1), 'blob:test');
+});
+
+test('cloud MP4 uploads enforce board edit access and stream validated bytes; signed fal URLs serve ranges', async t => {
+  const nodeModule = await import('node:module');
+  if (!nodeModule.registerHooks) { t.skip('requires Node module hooks'); return; }
+  const hooks = nodeModule.registerHooks({ resolve(specifier, context, next) {
+    if (specifier !== 'cloudflare:workers') return next(specifier, context);
+    return { url: 'data:text/javascript,' + encodeURIComponent('export const env={}; export class DurableObject { constructor(ctx,env) {this.ctx=ctx;this.env=env;} } export class WorkerEntrypoint { constructor(ctx,env) {this.ctx=ctx;this.env=env;} }'), shortCircuit: true };
+  } });
+  let worker;
+  try { ({ default: worker } = await import('../cloud/worker.mjs')); } finally { hooks.deregister(); }
+  fixedLengthRuntime(t);
+  const { signSession, sessionIdentity } = await import('../cloud/auth.mjs');
+  const boardId = '11111111-1111-1111-1111-111111111111', files = new Map(), calls = [];
+  let role = 'edit', hasBoard = true;
+  const env = { SESSION_SECRET: 'video-upload-test', Directory: { idFromName: name => name, get: () => ({ boardFor: async () => hasBoard ? { id: boardId, role } : null }) }, FILES: {
+    async put(key, stream, metadata) { calls.push('put'); assert.ok(stream.getReader, 'known-length upload stays a stream'); const pieces = []; for await (const part of stream) pieces.push(part); const bytes = Buffer.concat(pieces); files.set(key, { bytes, size: bytes.length, ...metadata }); },
+    async get(key, options) { calls.push('get'); const file = files.get(key); if (!file) return null; const partial = options?.range?.get('Range'); return partial ? { ...file, range: { offset: 4, length: 8 }, body: file.bytes.subarray(4, 12) } : { ...file, body: file.bytes }; }
+  } };
+  const cookie = await signSession(sessionIdentity({ name: 'Artist', email: 'artist@example.com' }), env.SESSION_SECRET);
+  // Use the actual session cookie name, so this tests routing rather than bypassing authentication.
+  const { sessionCookie } = await import('../cloud/auth.mjs');
+  const auth = sessionCookie(cookie, new URL('http://localhost:8787')).split(';')[0];
+  const upload = (body = videoBytes, extra = {}) => worker.fetch(new Request(`http://localhost:8787/api/assets?boardId=${boardId}`, { method: 'POST', body, headers: { Cookie: auth, 'Content-Type': 'video/mp4', 'Content-Length': String(body.length), ...extra } }), env, {});
+  assert.equal((await worker.fetch(new Request(`http://localhost:8787/api/assets?boardId=${boardId}`, { method: 'POST', headers: { 'Content-Type': 'video/mp4' }, body: videoBytes }), env, {})).status, 401);
+  role = 'view'; assert.equal((await upload()).status, 403);
+  role = 'edit'; hasBoard = false; assert.equal((await upload()).status, 404); hasBoard = true;
+  assert.equal((await upload(videoBytes, { Origin: 'https://other.example' })).status, 403);
+  assert.equal((await upload(Buffer.from('not an mp4 file'))).status, 400);
+  assert.equal((await upload(videoBytes, { 'Content-Length': String(maxVideoBytes + 1) })).status, 400);
+  calls.length = 0;
+  const response = await upload(); assert.equal(response.status, 200); const { asset, bytes } = await response.json();
+  assert.match(asset, /\.mp4$/); assert.equal(bytes, videoBytes.length); assert.deepEqual(calls, ['put']); assert.equal(files.get('assets/' + asset).httpMetadata.contentType, 'video/mp4');
+  const token = await signVideoInput(asset, env.SESSION_SECRET), url = `http://localhost:8787/api/video-inputs/${asset}?token=${token}`;
+  const whole = await worker.fetch(new Request(url), env, {}); assert.equal(whole.status, 200); assert.equal(whole.headers.get('Content-Type'), 'video/mp4'); assert.equal(whole.headers.get('Content-Length'), '20'); assert.equal((await whole.arrayBuffer()).byteLength, 20);
+  const range = await worker.fetch(new Request(url, { headers: { Range: 'bytes=4-11' } }), env, {}); assert.equal(range.status, 206); assert.equal(range.headers.get('Content-Range'), 'bytes 4-11/20'); assert.equal(range.headers.get('Content-Length'), '8'); assert.equal((await range.arrayBuffer()).byteLength, 8);
+  const head = await worker.fetch(new Request(url, { method: 'HEAD' }), env, {}); assert.equal(head.status, 200); assert.equal(await head.text(), '');
+  assert.equal((await worker.fetch(new Request(url.replace(asset, png)), env, {})).status, 403);
 });

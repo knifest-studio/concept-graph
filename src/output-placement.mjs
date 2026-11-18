@@ -140,7 +140,11 @@ function placeBlock(anchor, slots, lists, promptId, prompts = [], under = false,
     const [obstacles, reserved = []] = lists, boxes = lists.flat().filter(near);
     if (own.x >= limits.minX && own.x <= limits.maxX && own.y >= limits.minY && own.y <= limits.maxY && !boxes.some(box => hits(own, box))) return { x: anchor.x, y: anchor.y };
     const spot = nearestFreePosition(own, card, boxes, limits) || leastCovered();
-    return spot ? { x: spot.x - block.x, y: spot.y - block.y } : { x: clamp(start.x, limits.minX, limits.maxX) - block.x, y: clamp(start.y, limits.minY, limits.maxY) - block.y };
+    if (spot) return { x: spot.x - block.x, y: spot.y - block.y };
+    // Pulling the result onto the screen must not lay it over a prompt (its own included, whose Generate and fields would
+    // be hidden): then it stays beside the prompt, partly off screen, where the person can scroll to it.
+    const pulled = { x: clamp(start.x, limits.minX, limits.maxX), y: clamp(start.y, limits.minY, limits.maxY) };
+    return lists.flat().some(box => box.walls?.length && hits({ ...pulled, width: card.width, height: card.height }, unpadded(box))) ? { x: anchor.x, y: anchor.y } : { x: pulled.x - block.x, y: pulled.y - block.y };
     // No free spot on screen: the spot to the prompt's right or below it that covers the least of the earlier cards and
     // keeps the most of itself on screen, so the result sits in the emptiest part of the view instead of exactly on an old
     // one. Prompts, other runs' waiting slots and the results that have since filled them are never covered; those count at

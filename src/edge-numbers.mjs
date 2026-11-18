@@ -25,7 +25,7 @@ export function connectionNumbers(edges, promptIds, isImage, lineOf = edge => ed
   const into = new Map();
   for (const edge of edges) if (wanted.has(edge.target)) { if (!into.has(edge.target)) into.set(edge.target, []); into.get(edge.target).push(edge); }
   for (const [prompt, list] of into) {
-    const numbers = imageNumbers(list, prompt, isImage), lines = new Map();
+    const numbers = imageNumbers(list, prompt, id => isImage(id, prompt)), lines = new Map();
     if (!numbers.size) continue;
     for (const edge of list.sort(byConnection)) {
       const number = numbers.get(edge.source), line = number && lineOf(edge);
