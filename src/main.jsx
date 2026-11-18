@@ -1,4 +1,4 @@
-import { videoFile, videoMetadata } from './video-upload.mjs';
+import { videoFile, videoMetadata, videoPoster } from './video-upload.mjs';
 import { VideoPrompt, VideoNode as VideoCard } from './VideoNode.jsx';
 import { videoTask, isVideo, videoModels, videoRoles, clipRoles, videoSpeeds, videoSpeedOf } from './video-generation.mjs';
 import { videoState } from './generator.mjs';
@@ -2155,6 +2155,32 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
       return { ...item, data: playbackRate === 1 ? data : { ...data, playbackRate } };
     })); markDirty();
   };
+  // Generated videos without a start image had no poster, so zoomed-out cards and input rows showed an empty box.
+  // One editor's browser draws each missing first frame once and stores it on the board for everyone (no undo step).
+  const posterWork = useRef({ running: false, tried: new Set() });
+  const fillVideoPosters = async () => {
+    const work = posterWork.current;
+    if (work.running) return;
+    work.running = true;
+    const blocked = () => !alive.current || readOnlyRef.current || mcpLocked.current || switchingRef.current;
+    try {
+      while (!blocked()) {
+        const node = nodeRef.current.find(item => item.type === 'video' && item.data.asset && !item.data.poster && !work.tried.has(item.data.asset));
+        if (!node) return;
+        work.tried.add(node.data.asset);
+        try {
+          const blob = await videoPoster(assetUrl(node.data.asset));
+          if (!blob || blocked()) continue;
+          const poster = await uploadEdit(blob);
+          if (blocked()) continue;
+          putNodes(current => current.map(item => item.id === node.id && item.type === 'video' && item.data.asset === node.data.asset && !item.data.poster ? { ...item, data: { ...item.data, poster } } : item));
+          markDirty();
+        } catch (cause) { console.warn('Could not draw a video poster:', cause); }
+      }
+    } finally { work.running = false; }
+  };
+  const posterGaps = cloud && loaded && !readOnly ? nodes.filter(node => node.type === 'video' && node.data?.asset && !node.data.poster).length : 0;
+  useEffect(() => { if (posterGaps && !switching) fillVideoPosters(); }, [posterGaps, switching, boardId]);
   const learnVideoMetadata = (nodeId, element) => {
     if (readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
     const node = nodeRef.current.find(item => item.id === nodeId), { duration, videoWidth: width, videoHeight: height } = element;

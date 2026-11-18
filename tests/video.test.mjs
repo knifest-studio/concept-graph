@@ -373,6 +373,12 @@ test('MP4 browser validation reads only its header and stores fractional metadat
   const meta = await videoMetadata(file, options); assert.equal(meta.duration, 8.125); assert.equal(meta.width, 1920); assert.equal(meta.height, 1080); assert.equal(meta.poster, poster); assert.equal(canvas.width, 1024); assert.equal(canvas.height, 576); assert.deepEqual(calls, ['draw', 'src', 'load', 'blob:test']);
   canvas.getContext = () => null; assert.equal((await videoMetadata(file, options)).poster, undefined);
   video.duration = Infinity; await assert.rejects(videoMetadata(file, options), /metadata/); assert.equal(calls.at(-1), 'blob:test');
+  // Generated videos without a start image get their first frame, smaller, from the stored asset URL.
+  const { videoPoster } = await import('../src/video-upload.mjs'); canvas.getContext = () => ({ drawImage: () => calls.push('draw') }); calls.length = 0;
+  let source; Object.defineProperty(video, 'src', { configurable: true, set(value) { source = value; queueMicrotask(() => this.onloadeddata()); } });
+  assert.equal(await videoPoster('/assets/clip.mp4', { document: options.document }), poster); assert.equal(source, '/assets/clip.mp4'); assert.equal(canvas.width, 768); assert.equal(canvas.height, 432); assert.deepEqual(calls, ['draw', 'src', 'load']);
+  canvas.getContext = () => null; assert.equal(await videoPoster('/assets/clip.mp4', { document: options.document }), undefined);
+  Object.defineProperty(video, 'src', { configurable: true, set() { queueMicrotask(() => this.onerror()); } }); await assert.rejects(videoPoster('/assets/bad.mp4', { document: options.document }), /poster/);
 });
 
 test('cloud MP4 uploads enforce board edit access and stream validated bytes; signed fal URLs serve ranges', async t => {
