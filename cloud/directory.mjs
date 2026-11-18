@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { nextTemplateColor } from '../graph.mjs';
-import { accessModes, boardRole, shareRoles } from './access.mjs';
+import { accessModes, boardRole, canEdit, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
@@ -31,8 +31,10 @@ export class Directory extends DurableObject {
     // One row per person and board: an invitation (role) and the last visit (openedAt), so a board opened from its link stays in their list.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS board_people (board TEXT NOT NULL, email TEXT NOT NULL, role TEXT, name TEXT, openedAt TEXT, PRIMARY KEY (board, email))');
     ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS board_people_email ON board_people (email)');
-    // People a board is closed to who asked its owner to let them in, until the owner invites them, dismisses the request or opens the board to everyone with the link.
+    // People who asked the owner for more: to come in (role NULL) when the board is closed to them, or to edit ('edit') when
+    // they may only view it. A request waits until the owner chooses their role, dismisses it, or opens the link so far it is granted.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS board_requests (board TEXT NOT NULL, email TEXT NOT NULL, name TEXT, requestedAt TEXT NOT NULL, PRIMARY KEY (board, email))');
+    if (!ctx.storage.sql.exec('PRAGMA table_info(board_requests)').toArray().some(column => column.name === 'role')) ctx.storage.sql.exec('ALTER TABLE board_requests ADD COLUMN role TEXT');
     // The site owner, whose address is a Worker secret and never in the repository, owns the boards that have none.
     const siteOwner = email(env?.SITE_OWNER_EMAIL);
     if (siteOwner) ctx.storage.sql.exec('UPDATE boards SET owner = ? WHERE owner IS NULL', siteOwner);
@@ -252,21 +254,32 @@ export class Directory extends DurableObject {
     return { board: { ...board, ownerName: board.role === 'owner' ? user.name : board.ownerName }, sharing: this.sharing(id, user.email) };
   }
 
-  // Someone the board is closed to asks its owner to let them in. The request waits in the owner's Share dialog until they
-  // invite the person, dismiss it or open the board to everyone with the link; asking again keeps the first request.
+  // Someone the board is closed to asks its owner to let them in, and a viewer asks to edit. The request waits in the owner's
+  // Share dialog until they choose the person's role, dismiss it or open the link that far; asking again keeps the first request.
   requestBoardAccess(id, user) {
     const address = email(user?.email);
     if (!address) return { error: 'Sign in to ask for access.', status: 401 };
     const board = this.boardFor(id, address);
     if (!board) return { error: 'Board not found.', status: 404 };
-    if (board.role) return { allowed: true };
-    const known = this.requested(id, address);
+    if (canEdit(board.role)) return { allowed: true };
+    const role = board.role === 'view' ? 'edit' : null, known = this.request(id, address);
     if (!known && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM board_requests WHERE board = ?', id).toArray()[0].count >= maxBoardRequests) return { error: 'This board has too many open access requests. Ask its owner directly.', status: 429 };
     const name = typeof user.name === 'string' ? user.name.trim().slice(0, 80) || null : null;
-    this.ctx.storage.sql.exec('INSERT INTO board_requests (board, email, name, requestedAt) VALUES (?, ?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET name = excluded.name', id, address, name, new Date().toISOString());
-    return { requested: true, created: !known, name, email: address };
+    this.ctx.storage.sql.exec('INSERT INTO board_requests (board, email, name, requestedAt, role) VALUES (?, ?, ?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET name = excluded.name, role = excluded.role, requestedAt = CASE WHEN role IS excluded.role THEN requestedAt ELSE excluded.requestedAt END',
+      id, address, name, new Date().toISOString(), role);
+    return { requested: true, created: !known || known.role !== role, name, email: address, ...(role ? { role } : {}) };
   }
-  requested(id, person) { return !!person && this.ctx.storage.sql.exec('SELECT 1 FROM board_requests WHERE board = ? AND email = ?', id, person).toArray().length > 0; }
+  request(id, person) { return person ? this.ctx.storage.sql.exec('SELECT role FROM board_requests WHERE board = ? AND email = ?', id, person).toArray()[0] : undefined; }
+  requested(id, person) { return !!this.request(id, person); }
+  // Requests the board now grants by itself, once the owner opened its link or everyone setting far enough, are answered.
+  answerRequests(id) {
+    const board = this.ctx.storage.sql.exec('SELECT owner, access, linkRole FROM boards WHERE id = ?', id).toArray()[0];
+    const open = this.ctx.storage.sql.exec('SELECT r.email, r.role AS wanted, p.role AS invited FROM board_requests r LEFT JOIN board_people p ON p.board = r.board AND p.email = r.email WHERE r.board = ?', id).toArray();
+    for (const item of open) {
+      const role = boardRole(board, item.email, item.invited);
+      if (item.wanted === 'edit' ? canEdit(role) : role) this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ? AND email = ?', id, item.email);
+    }
+  }
 
   // Who has access, as this person may see it: the owner sees invited people's emails; others see the names of those who opened the board.
   sharing(id, person) {
@@ -277,11 +290,12 @@ export class Directory extends DurableObject {
     return { role, canManage: owner, owner: board.owner ? { name: board.ownerName, ...(owner ? { email: board.owner } : {}) } : null, access: board.access, linkRole: board.linkRole,
       members: owner ? people.map(item => ({ email: item.email, role: item.role, name: item.name })) : people.filter(item => item.name).map(item => ({ name: item.name, role: item.role })),
       pending: owner ? 0 : people.filter(item => !item.name).length,
-      ...(owner ? { requests: this.ctx.storage.sql.exec('SELECT email, name, requestedAt FROM board_requests WHERE board = ? ORDER BY requestedAt', id).toArray().map(item => ({ email: item.email, name: item.name, requestedAt: item.requestedAt })) } : {}) };
+      ...(owner ? { requests: this.ctx.storage.sql.exec('SELECT email, name, requestedAt, role FROM board_requests WHERE board = ? ORDER BY requestedAt', id).toArray().map(item => ({ email: item.email, name: item.name, requestedAt: item.requestedAt, ...(item.role ? { role: item.role } : {}) })) }
+        : role === 'view' && this.request(id, person)?.role === 'edit' ? { editRequested: true } : {}) };
   }
 
   // Owner only. `member` invites someone or changes their role; a null role removes the invitation (a visit from the link stays).
-  // Inviting someone answers their access request, `dismiss` declines one, and opening the board to the link answers them all.
+  // Choosing someone's role answers their request, `dismiss` declines one, and opening the link answers those it now grants.
   changeSharing(id, person, { access, linkRole, member, dismiss } = {}) {
     const board = this.ctx.storage.sql.exec('SELECT owner FROM boards WHERE id = ? AND deletedAt IS NULL', id).toArray()[0];
     if (!board) return { error: 'Board not found.', status: 404 };
@@ -299,10 +313,10 @@ export class Directory extends DurableObject {
     }
     if (dismiss !== undefined && !email(dismiss)) return { error: 'Enter a valid email address.', status: 400 };
     if (access !== undefined || linkRole !== undefined) this.ctx.storage.sql.exec('UPDATE boards SET access = COALESCE(?, access), linkRole = COALESCE(?, linkRole) WHERE id = ?', access ?? null, linkRole ?? null, id);
-    if (access && access !== 'private') this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ?', id);
     if (invite?.role || dismiss !== undefined) this.ctx.storage.sql.exec('DELETE FROM board_requests WHERE board = ? AND email = ?', id, invite?.role ? invite.email : email(dismiss));
     if (invite?.role) this.ctx.storage.sql.exec('INSERT INTO board_people (board, email, role) VALUES (?, ?, ?) ON CONFLICT (board, email) DO UPDATE SET role = excluded.role', id, invite.email, invite.role);
     else if (invite) this.ctx.storage.sql.exec('UPDATE board_people SET role = NULL WHERE board = ? AND email = ?', id, invite.email);
+    if (access !== undefined || linkRole !== undefined) this.answerRequests(id);
     return { sharing: this.sharing(id, person) };
   }
 

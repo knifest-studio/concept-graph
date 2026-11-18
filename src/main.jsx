@@ -928,6 +928,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // A viewer of a shared board sees it live and can select, copy and look around but change nothing; the room ignores their edits too.
   const readOnly = cloud && cloudSession.role === 'view', readOnlyRef = useRef(readOnly), canRename = !cloud || cloudSession.role === 'owner'; readOnlyRef.current = readOnly;
   useEffect(() => { if (readOnly) setImageEdit(null); }, [readOnly]);
+  const [askingEdit, setAskingEdit] = useState(false);
   modalOpen.current = !!modelView || !!help || !!imageEdit || !!viewId || !!boardForm || !!pageDelete || !!templateForm || !!templateDetails || copyTemplates || !!diagnosticsId || agentConnect || preferencesOpen || switching || !!transfer || !!login || installCodex || showSignIn || pairing;
   useEffect(() => {
     const receive = event => { if (event.key === discoveryKey) { const value = readDiscovery(); discoveryRef.current = value; setDiscovery(value); if (value.used || value.invitationSeen) setTemplateInvitation(false); if (value.used) setTemplateTip(null); } };
@@ -1016,6 +1017,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // other events already record it, since every row costs D1 writes.
   const inform = useCallback((message, notice) => { if (cloud && notice) track('notice', { target: notice }, 'app'); setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 6500); }, []);
   const notify = useCallback(message => { if (cloud) track('notify', { message: String(message) }, 'error'); inform(message); }, [inform]);
+  const askToEdit = async () => { setAskingEdit(true); try { await cloudSession.requestEdit(); } catch (error) { notify(error.message); } finally { setAskingEdit(false); } };
   const refreshTemplates = useCallback(async () => {
     // An unchanged library keeps its identity, so a change elsewhere on the board does not re-render every prompt.
     const show = list => setTemplates(current => JSON.stringify(current) === JSON.stringify(list) ? current : list);
@@ -3091,7 +3093,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
         <Background color="var(--grid)" gap={24} size={1}/><ConnectionNumbers/><SectionTitles sections={view.sections}/><SelectionBounds nodes={view.nodes}/><DeckAnimation page={activePage} groups={scoped.groups} nodes={view.nodes} edges={scoped.edges} links={view.edges} copies={view.copies} src={assetUrl}/>{cloudSession?.cursors(peer => resolvePage(pages, peer.page) === activePage)}<StrokePreview ref={strokePreview}/><SectionPreview ref={sectionPreview}/>
       </ReactFlow>
       {loaded && !scoped.nodes.length && !scoped.sections.length && tool === 'select' && <div className="empty-board"><div className="empty-glyph"><Icon name="branch" size={36}/></div><span className="eyebrow">{t('ONE IDEA. MANY DIRECTIONS.')}</span>{readOnly ? <><h2>{t('This page is empty')}</h2><p>{t('You can view this board but not change it.')}</p></> : <><h2>{t('What are you imagining?')}</h2><p>{t('Describe an image, then click Generate.')}</p><button className="primary-button" onClick={() => addText()}><Icon name="plus" size={16}/> {t('Add text prompt')}</button></>}</div>}
-      {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {t('You can look around, but you can’t edit or generate on this board. Ask its owner for edit access.')}</span></div>}
+      {readOnly && <div className="view-only-banner" role="status"><Icon name="eye" size={15}/><span><strong>{t('View only.')}</strong> {cloudSession.editRequested ? t('You asked its owner for edit access. Editing turns on here as soon as they allow it.') : t('You can look around, but you can’t edit or generate on this board.')}</span>
+        {!cloudSession.editRequested && <button type="button" className="view-only-ask" disabled={askingEdit} onClick={askToEdit}>{askingEdit ? t('Sending…') : t('Ask to edit')}</button>}</div>}
       {tool === 'stamp' && <StampCursor emoji={stamps[stamp]} area={canvasElement} start={mouse.current}/>}
       {(() => {
         const own = firstPrompt.current && scoped.nodes.find(node => node.id === firstPrompt.current), step = loaded && tab === 'canvas' && !modalOpen.current && !switching && firstPromptStep({ dismissed: firstHintDismissed, readOnly, emptyBoard: !scoped.nodes.length && !scoped.sections.length, done: guide.state.done, startedRuns: guide.state.ownRuns.length, ownPrompt: own });
