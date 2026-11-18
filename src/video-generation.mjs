@@ -18,6 +18,9 @@ export const isVideo = node => node?.type === 'text' && node.data?.task === vide
 export const videoRoles = Object.freeze(['start', 'end', 'middle', 'reference']);
 export const clipRoles = Object.freeze(['reference', 'edit', 'extend']);
 export const rolesForVideoInput = input => input.kind === 'video' ? clipRoles : videoRoles;
+// Speeds a video card plays at on the board. The MP4 is unchanged, so Download and Open keep the original speed.
+export const videoSpeeds = Object.freeze([1, 2, 3]);
+export const videoSpeedOf = data => videoSpeeds.includes(data?.playbackRate) ? data.playbackRate : 1;
 export const videoAspects = Object.freeze(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']);
 export const videoResolutions = Object.freeze(['360p', '480p', '720p', '768P', '1080p', '2K', '4k']);
 export const videoModels = Object.freeze({

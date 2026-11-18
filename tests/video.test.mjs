@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as Y from 'yjs';
-import { resolveVideo, videoInput, videoModels, rewriteVideoMentions, videoDefaults } from '../src/video-generation.mjs';
+import { resolveVideo, videoInput, videoModels, rewriteVideoMentions, videoDefaults, videoSpeedOf } from '../src/video-generation.mjs';
+import { readVideoAutoplay, videoAutoplayKey } from '../src/video-autoplay.mjs';
 import { videoStatus, videoRequest, falVideo, videoFile, storeVideoMp4, videoPartBytes } from '../cloud/video.mjs';
 import { validateMp4Header, maxVideoBytes } from '../src/video-assets.mjs';
 import { signVideoInput, verifyVideoInput, verifySession } from '../cloud/auth.mjs';
@@ -244,6 +245,8 @@ test('video cards render clamps and role errors, and light/collapsed results nev
   const walk = render(VideoPrompt, { text: 'faster', task: 'video', videoModel: 'minimax' }, { videoInputs: new Map([['v', [clipInput('walk', 5.2, { width: 752, height: 800 })]]]) });
   assert.match(walk, /<option value="auto" selected="">Auto<\/option>/); assert.match(walk, /Follows the inputs/); assert.doesNotMatch(walk, /Shape .* for this model/);
   const omniWalk = render(VideoPrompt, { text: 'faster', task: 'video', videoModel: 'omni' }, { videoInputs: new Map([['v', [clipInput('walk', 5.2, { width: 752, height: 800 })]]]) }); assert.match(omniWalk, /9:16 from the inputs/);
+  const fast = render(VideoNode, { ...data, playbackRate: 3 }); assert.match(fast, /aria-label="Playback speed"/); assert.match(fast, /aria-pressed="true"[^>]*>3×/); assert.match(fast, /aria-pressed="false"[^>]*>1×/);
+  assert.match(render(VideoNode, data, { readOnly: true }), /disabled=""[^>]*>2×/); assert.doesNotMatch(render(VideoNode, data, { detail: 'light' }), /Playback speed/);
   const uploaded = render(VideoNode, clipNode().data); assert.match(uploaded, /Flight.mp4/); assert.match(uploaded, /1280 × 720/); assert.doesNotMatch(uploaded, /≈\$0.00|MiniMax H3/);
   setLanguage('uk');const uk=render(VideoPrompt,target.data,{videoInputs:new Map([['v',inputs]])});assert.match(uk,/Згенерувати відео на 10 с/);assert.match(uk,/Початковий кадр/);assert.doesNotMatch(uk,/Generate a 10/);
 });
@@ -429,4 +432,14 @@ test('Auto format keeps the shape of the inputs instead of forcing 16:9', () => 
   assert.equal(videoInput(resolveClips('minimax', [portrait], {}, { videoAspectRatio: '1:1' }), 'x', ['https://x/walk.mp4']).aspect_ratio, '1:1');
   const text = resolveVideo({ data: { task: 'video', videoModel: 'minimax', videoAspectRatio: 'auto' } }, []);
   assert.equal(text.applied.videoAspectRatio, '16:9'); assert.deepEqual(text.unsupported, {}); assert.equal(videoInput(text, 'x', []).aspect_ratio, '16:9');
+});
+
+test('video cards keep a valid speed and autoplay by default per viewer', () => {
+  assert.equal(videoSpeedOf({ playbackRate: 3 }), 3); assert.equal(videoSpeedOf({ playbackRate: 5 }), 1); assert.equal(videoSpeedOf({}), 1);
+  const board = speed => ({ nodes: [{ ...clipNode(), data: { ...clipNode().data, playbackRate: speed } }], edges: [] });
+  validateGraph(board(2)); assert.throws(() => validateGraph(board(1.5)), /Invalid video speed/);
+  const saved = value => ({ getItem: key => key === videoAutoplayKey ? value : null });
+  assert.equal(readVideoAutoplay(saved(null)), true); assert.equal(readVideoAutoplay(saved(null), true), false);
+  assert.equal(readVideoAutoplay(saved('off')), false); assert.equal(readVideoAutoplay(saved('on'), true), true);
+  assert.equal(readVideoAutoplay({ getItem() { throw new Error('blocked'); } }), true);
 });

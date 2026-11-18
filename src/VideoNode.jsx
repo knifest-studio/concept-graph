@@ -1,11 +1,12 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
 import { shallowEqual, nodeStarting } from './canvas-store.mjs';
 import { useCanvasImage } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
 import { lodHandleProps } from './canvas.mjs';
-import { resolveVideo, videoModels, rolesForVideoInput } from './video-generation.mjs';
+import { resolveVideo, videoModels, rolesForVideoInput, videoSpeeds, videoSpeedOf } from './video-generation.mjs';
+import { useVideoAutoplay } from './video-autoplay.mjs';
 import { formatDuration, runElapsed } from '../timing.mjs';
 import { t } from './i18n.mjs';
 import './video-node.css';
@@ -115,11 +116,20 @@ function VideoPoster({ data, assetUrl }) {
 }
 export function VideoNode({ id, data, assetUrl }) {
   const canvas = useCanvas(), detail = useDetail(id), video = useRef(null), [error, setError] = useState('');
-  const light = detail !== 'full' || data.collapsed;
+  const light = detail !== 'full' || data.collapsed, readOnly = useCanvasValue(state => state.readOnly), autoplay = useVideoAutoplay(), speed = videoSpeedOf(data);
+  // The canvas mounts only cards on screen, so a mounted full card is a visible one: start it, and stop it when autoplay is turned off.
+  useEffect(() => {
+    const element = video.current;
+    if (!element || !autoplay) return;
+    element.play().catch(() => {});
+    return () => element.pause();
+  }, [autoplay, light]);
+  useEffect(() => { const element = video.current; if (element) element.defaultPlaybackRate = element.playbackRate = speed; }, [speed, light]);
   return <NodeContextMenu id={id} type="video" actions={canvas}><article className={`node-card video-node${light ? ' lod-node' : ''}${data.collapsed ? ' collapsed-node' : ''}`}>
     {light ? <><i {...lodHandleProps('target')}/><i {...lodHandleProps('source')}/></> : <><Handle type="target" position={Position.Left} isConnectable={false}/><Handle type="source" position={Position.Right} aria-label={t('Connect video as reference')}/></>}
     <header className="node-drag">{data.name}</header>
-    <div className="video-player nodrag nopan" onDoubleClick={event => event.stopPropagation()}>{light ? <VideoPoster data={data} assetUrl={assetUrl}/> : <video ref={video} src={assetUrl(data.asset)} poster={data.poster ? assetUrl(data.poster) : undefined} controls loop muted autoPlay={false} playsInline preload="none" onLoadedMetadata={event => canvas.learnVideoMetadata?.(id, event.currentTarget)} onError={() => setError(t('Could not play this video. Download the MP4 to inspect it.'))}/>}</div>
+    <div className="video-player nodrag nopan" onDoubleClick={event => event.stopPropagation()}>{light ? <VideoPoster data={data} assetUrl={assetUrl}/> : <video ref={video} src={assetUrl(data.asset)} poster={data.poster ? assetUrl(data.poster) : undefined} controls loop muted autoPlay={false} playsInline preload="none" onLoadedMetadata={event => canvas.learnVideoMetadata?.(id, event.currentTarget)} onError={() => setError(t('Could not play this video. Download the MP4 to inspect it.'))}/>}
+      {!light && <div className="video-speed" role="group" aria-label={t('Playback speed')} data-tooltip={t('Plays faster on the board. Download MP4 and Open keep the original speed.')}>{videoSpeeds.map(value => <button key={value} type="button" aria-pressed={speed === value} disabled={readOnly} onClick={() => canvas.setVideoSpeed(id, value)}>{value}×</button>)}</div>}</div>
     {data.collapsed && detail === 'full' && <button type="button" className="collapsed-node-expand nodrag" aria-label={t('Expand node')} onClick={() => canvas.toggleNodeCollapsed(id)}>{t('Open')}</button>}
     {!light && <><div className="video-actions nodrag nopan"><a href={assetUrl(data.asset)} download={data.fileName || `${data.name}.mp4`}>{t('Download MP4')}</a><a href={assetUrl(data.asset)} target="_blank" rel="noreferrer">{t('Open')}</a><button type="button" onClick={() => video.current?.requestFullscreen?.().catch(() => setError(t('Fullscreen is unavailable. Use Open.')))}>{t('Fullscreen')}</button></div>
       <small className="video-info" title={data.endpoint}>{t('Info')}: {data.uploaded ? data.fileName || data.name : videoModels[data.videoModel]?.name || t('Video')} · {t('{seconds} s', { seconds: data.duration })} · {data.uploaded ? `${data.width} × ${data.height}` : <>{data.videoResolution} · ≈${money(data.usd || 0)}<br/>{data.endpoint}</>}</small>{error && <div className="node-error" role="alert">{error}</div>}</>}
