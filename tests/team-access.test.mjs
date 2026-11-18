@@ -186,3 +186,46 @@ runtimeTest('only the owner sees spending: each person by month and by what they
   const body = (await shown.json()).spending;
   assert.equal(body.month, '2026-10'); assert.equal(body.dailyImages, 300); assert.equal(body.people[0].name, 'Newcomer');
 });
+
+runtimeTest('site admins see who is online and where, boards and generations per person; money only for the owner', async t => {
+  const { sql, directory, request } = setup(t);
+  const board = directory.createBoard('Moodboard', { email: 'new@studio.example', name: 'Newcomer' });
+  directory.createBoard('Second', { email: 'new@studio.example', name: 'Newcomer' });
+  sql.exec("INSERT INTO board_people (board, email, role) VALUES (?, 'admin@studio.example', 'edit')", board.id);
+  directory.settleNano(directory.reserveNano('new@studio.example', { dailyImages: 300, monthlyUsd: 300, estimateUsd: 0.05, kind: 'nano' }).reservation, { images: 1, usd: 0.04 });
+  directory.agentSeen('new@studio.example', Date.now() - 60000);
+
+  // Polls mark presence: the boards list (online, no board) and a board's generator status (online on that board).
+  assert.equal((await request('/api/cloud/boards', { email: 'admin@studio.example' })).status, 200);
+  assert.equal((await request(`/api/nano?board=${board.id}`, { email: 'new@studio.example' })).status, 200);
+  // The boards list open in another tab does not hide the board this person still has open.
+  await request('/api/cloud/boards', { email: 'new@studio.example' });
+  const panel = directory.adminPeople('owner@studio.example', [{ email: 'new@studio.example', name: 'Newcomer', joinedAt: '2026-11-01T09:00:00.000Z', lastLoginAt: '2026-11-05T09:00:00.000Z' }, { email: 'quiet@studio.example', name: 'Quiet' }]);
+  const person = address => panel.people.find(item => item.email === address);
+  assert.equal(panel.role, 'owner'); assert.equal(panel.boards, 2);
+  assert.deepEqual(person('new@studio.example').online, { board: { id: board.id, name: 'Moodboard' } });
+  assert.deepEqual(person('admin@studio.example').online, { board: null });
+  assert.equal(person('quiet@studio.example').online, null); assert.equal(person('quiet@studio.example').lastSeen, null);
+  assert.deepEqual([person('new@studio.example').ownBoards, person('new@studio.example').sharedBoards, person('admin@studio.example').sharedBoards], [2, 0, 1]);
+  assert.deepEqual([person('new@studio.example').todayMade, person('new@studio.example').monthMade, person('new@studio.example').monthUsd], [1, 1, 0.04]);
+  assert.ok(person('new@studio.example').agentSeen); assert.equal(person('new@studio.example').joinedAt, '2026-11-01T09:00:00.000Z');
+  // The owner is listed even before they do anything; online people come first.
+  assert.equal(person('owner@studio.example').role, 'owner');
+  assert.deepEqual(panel.people.slice(0, 2).map(item => Boolean(item.online)), [true, true]);
+  // Three minutes without a poll: no longer online, but the last visit is kept, also after a restart (memory is lost).
+  const later = directory.adminPeople('owner@studio.example', [], Date.now() + 180000);
+  assert.equal(later.people.find(item => item.email === 'new@studio.example').online, null);
+  const { Directory: Restarted } = { Directory: directory.constructor }, restarted = new Restarted(directory.ctx, directory.env);
+  assert.ok(restarted.adminPeople('owner@studio.example').people.find(item => item.email === 'new@studio.example').lastSeen);
+
+  // Admins see it without money; everyone else is refused, and the page itself is the app.
+  await request('/api/cloud/team', { method: 'PATCH', email: 'owner@studio.example', data: { admin: { email: 'admin@studio.example', admin: true } } });
+  const shown = await request('/api/cloud/admin', { email: 'admin@studio.example' });
+  assert.equal(shown.status, 200);
+  const body = (await shown.json()).admin;
+  assert.equal(body.role, 'admin'); assert.equal(body.signIns, true);
+  assert.equal(body.people.find(item => item.email === 'new@studio.example').name, 'Newcomer');
+  assert.ok(body.people.every(item => !('monthUsd' in item)));
+  assert.equal((await request('/api/cloud/admin', { email: 'new@studio.example' })).status, 403);
+  assert.equal(await (await request('/admin', { email: 'new@studio.example' })).text(), 'static');
+});

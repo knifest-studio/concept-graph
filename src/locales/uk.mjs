@@ -1115,6 +1115,28 @@ export default {
   'MCP CONNECTION': 'ПІДКЛЮЧЕННЯ MCP',
   'Connect MCP': 'Підключити MCP',
 
+  // Admin panel (site admins)
+  'Admin panel': 'Адмін-панель',
+  'Only site admins can open the admin panel.': 'Адмін-панель доступна лише адміністраторам сайту.',
+  'Online now': 'Онлайн зараз',
+  'Here in the last 24 hours': 'Заходили за останні 24 год',
+  'Generations today': 'Генерацій сьогодні',
+  'Find a person': 'Знайти людину',
+  'Online means the site is open in a visible tab right now (checked every 30–60 seconds). Visits are recorded from the day this panel was added, so earlier ones show as —.': 'Онлайн — сайт відкритий у видимій вкладці просто зараз (перевіряється кожні 30–60 секунд). Відвідування записуються від дня, коли з’явилася ця панель, тож давніші показано як —.',
+  'The sign-in list cannot be read right now, so names and sign-in dates may be missing.': 'Список входів зараз недоступний, тому імен і дат входу може бракувати.',
+  'Status': 'Статус',
+  'Own boards': 'Свої дошки',
+  'Invited to': 'Запрошення',
+  'Spent in the month': 'Витрати за місяць',
+  'First sign-in': 'Перший вхід',
+  'Last sign-in': 'Останній вхід',
+  'Online': 'Онлайн',
+  'on board': 'на дошці',
+  'on the boards list': 'у списку дошок',
+  '{count} today': '{count} сьогодні',
+  '{count} this month': '{count} цього місяця',
+  'Nobody matches.': 'Нікого не знайдено.',
+
   // Spending (site owner only)
   'Spending': 'Витрати',
   'Month': 'Місяць',
