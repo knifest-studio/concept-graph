@@ -90,7 +90,7 @@ export function preserveFreshOutputGroups(snapshotGroups, currentGroups, nodes, 
 }
 
 export function edgeDropCreatesPrompt(state, onPane) {
-  return onPane && !state.isValid && !state.toNode && state.fromHandle?.type === 'source' && ['text', 'image'].includes(state.fromNode?.type);
+  return onPane && !state.isValid && !state.toNode && state.fromHandle?.type === 'source' && ['text', 'image', 'video'].includes(state.fromNode?.type);
 }
 
 // A slide whose image left the group is dropped; the slideshow then shows its first image.

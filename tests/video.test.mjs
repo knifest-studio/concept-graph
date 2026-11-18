@@ -384,7 +384,7 @@ test('cloud MP4 uploads enforce board edit access and stream validated bytes; si
   let role = 'edit', hasBoard = true;
   const env = { SESSION_SECRET: 'video-upload-test', Directory: { idFromName: name => name, get: () => ({ boardFor: async () => hasBoard ? { id: boardId, role } : null }) }, FILES: {
     async put(key, stream, metadata) { calls.push('put'); assert.ok(stream.getReader, 'known-length upload stays a stream'); const pieces = []; for await (const part of stream) pieces.push(part); const bytes = Buffer.concat(pieces); files.set(key, { bytes, size: bytes.length, ...metadata }); },
-    async get(key, options) { calls.push('get'); const file = files.get(key); if (!file) return null; const partial = options?.range?.get('Range'); return partial ? { ...file, range: { offset: 4, length: 8 }, body: file.bytes.subarray(4, 12) } : { ...file, body: file.bytes }; }
+    async get(key, options) { calls.push('get'); const file = files.get(key); if (!file) return null; const partial = options?.range?.get('Range'); return partial ? { ...file, range: { offset: 4, length: 8, suffix: undefined }, body: file.bytes.subarray(4, 12) } : { ...file, body: file.bytes }; }
   } };
   const cookie = await signSession(sessionIdentity({ name: 'Artist', email: 'artist@example.com' }), env.SESSION_SECRET);
   // Use the actual session cookie name, so this tests routing rather than bypassing authentication.
@@ -405,4 +405,10 @@ test('cloud MP4 uploads enforce board edit access and stream validated bytes; si
   const range = await worker.fetch(new Request(url, { headers: { Range: 'bytes=4-11' } }), env, {}); assert.equal(range.status, 206); assert.equal(range.headers.get('Content-Range'), 'bytes 4-11/20'); assert.equal(range.headers.get('Content-Length'), '8'); assert.equal((await range.arrayBuffer()).byteLength, 8);
   const head = await worker.fetch(new Request(url, { method: 'HEAD' }), env, {}); assert.equal(head.status, 200); assert.equal(await head.text(), '');
   assert.equal((await worker.fetch(new Request(url.replace(asset, png)), env, {})).status, 403);
+});
+
+test('a video dragged from its output into empty space starts a node, like images and prompts', async () => {
+  const { edgeDropCreatesPrompt } = await import('../src/canvas.mjs');
+  const drop = type => edgeDropCreatesPrompt({ isValid: false, fromNode: { id: 'v', type }, fromHandle: { type: 'source' } }, true);
+  assert.equal(drop('video'), true); assert.equal(drop('image'), true); assert.equal(drop('model'), false);
 });
