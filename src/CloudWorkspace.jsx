@@ -160,6 +160,7 @@ function BoardsHome({ user, siteRole, accessRequests, setAccessRequests, boards,
 }
 
 const AnalyticsAdmin = React.lazy(() => import('./AnalyticsAdmin.jsx'));
+const AdminPanel = React.lazy(() => import('./AdminPanel.jsx'));
 
 // Who shared Codex with whom on a board, kept in this browser so a reload does not end it.
 const sharingMemory = boardId => {
@@ -217,7 +218,8 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     let request = 0, timer = 0;
     const refresh = async () => {
       const id = ++request;
-      try { const value = await services.api('/api/nano'); if (id === request) setNano(current => JSON.stringify(current) === JSON.stringify(value) ? current : value); }
+      // The board's id tells the admin panel which board this person has open.
+      try { const value = await services.api(`/api/nano?board=${encodeURIComponent(boardId)}`); if (id === request) setNano(current => JSON.stringify(current) === JSON.stringify(value) ? current : value); }
       catch {}
     };
     nanoSoon.current = () => { clearTimeout(timer); timer = setTimeout(refresh, 800); };
@@ -225,7 +227,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     const interval = setInterval(() => { if (!document.hidden) refresh(); }, 60000);
     window.addEventListener('focus', refresh);
     return () => { request = -1; clearTimeout(timer); clearInterval(interval); window.removeEventListener('focus', refresh); nanoSoon.current = () => {}; };
-  }, [services]);
+  }, [services, boardId]);
   useEffect(() => {
     const doc = new Y.Doc(), origin = {};
     const provider = new YProvider(location.host, boardId, doc, { party: 'board-room', disableBc: true, protocol: location.protocol === 'https:' ? 'wss' : 'ws' });
@@ -517,9 +519,9 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
   const [helperCode, setHelperCode] = useState(() => sessionStorage.getItem('concept-graph-helper-token') || '');
   const [pairing, setPairing] = useState(false), [paired, setPaired] = useState(false), [pairBusy, setPairBusy] = useState(false), [pairError, setPairError] = useState(''), [helperStatus, setHelperStatus] = useState({});
   const [pairCancel, setPairCancel] = useState(0), [siteRole, setSiteRole] = useState(null), [accessRequests, setAccessRequests] = useState(0);
-  useEffect(() => { if (user) analyticsView(boardId ? 'board' : location.pathname === '/admin/analytics' ? 'admin' : 'boards', boardId || ''); // Watching a recording must not record the admin page again.
+  useEffect(() => { if (user) analyticsView(boardId ? 'board' : location.pathname.startsWith('/admin') ? 'admin' : 'boards', boardId || ''); // Watching a recording must not record the admin page again.
     if (location.pathname !== '/admin/analytics') return startAnalytics(user?.email || null); }, [user?.email]);
-  useEffect(() => { if (user && !boardId) analyticsView(location.pathname === '/admin/analytics' ? 'admin' : 'boards'); }, [user, boardId]);
+  useEffect(() => { if (user && !boardId) analyticsView(location.pathname.startsWith('/admin') ? 'admin' : 'boards'); }, [user, boardId]);
   const [showAllBuilds, setShowAllBuilds] = useState(false), [pairAlternative, setPairAlternative] = useState(null);
   const [theme, setTheme] = useThemePreference();
   const pendingRun = useRef(null);
@@ -610,6 +612,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
       <label htmlFor="cloud-email">{t('Email')}</label><input id="cloud-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/>
       <button className="primary-button" disabled={busy || !name.trim() || !email.trim()}>{busy ? t('Signing in…') : t('Sign in locally')}</button>
     </form>}</section></main>;
+  if (location.pathname === '/admin') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AdminPanel services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can open the admin panel.')}</main>;
   if (location.pathname === '/admin/analytics') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AnalyticsAdmin services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can view analytics.')}</main>;
   const current = boardId && opened?.id === boardId ? opened : null;
   return <>

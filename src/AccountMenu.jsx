@@ -31,6 +31,7 @@ export function AccountMenu({ user, siteRole, requests = 0, services, onTeam, on
       style={{ background: color, color: contrastColor(color) }} onClick={() => setOpen(value => !value)}>{initials}{siteRole && requests > 0 && <span className="account-requests-dot" aria-hidden="true"/>}</button>
     {open && <div ref={panel} className="account-panel" role="menu" aria-label={t('Account')}>
       <div className="account-who"><span className="account-avatar" aria-hidden="true" style={{ background: color, color: contrastColor(color) }}>{initials}</span><span><b>{user.name}</b>{user.email && <small>{user.email}</small>}</span></div>
+      {siteRole && <a role="menuitem" aria-label={t('Admin panel')} href="/admin">{t('Admin panel')}</a>}
       {siteRole && <button type="button" role="menuitem" aria-label={t('Team access')} onClick={() => choose(onTeam)}>{t('Team access')}{requests > 0 && <span className="account-requests">{plural(requests, '{count} request', '{count} requests')}</span>}</button>}
       {siteRole === 'owner' && services && <button type="button" role="menuitem" aria-label={t('Spending')} onClick={() => choose(() => setSpendingOpen(true))}>{t('Spending')}</button>}
       {siteRole && <a role="menuitem" aria-label={t('Product analytics')} href="/admin/analytics">{t('Product analytics')}</a>}

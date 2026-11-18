@@ -5,6 +5,8 @@ import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
 const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, maxVideoEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
+// Someone counts as online while their visible tab polled within this time (polls come every 30–60 seconds).
+const onlineWindow = 150000, seenWrite = 5 * 60000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, requestCount, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role, ...(role === 'owner' && requestCount ? { requests: requestCount } : {}) });
@@ -61,6 +63,10 @@ export class Directory extends DurableObject {
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     // When each person's AI agent (MCP) last called a tool, so they can see it is connected and working (cloud/agents.mjs).
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_activity (email TEXT PRIMARY KEY, lastSeen INTEGER NOT NULL)');
+    // When each person last had the site open in a visible tab, for the admin panel. Who is online right now, and on which
+    // board, is kept in memory only (`seenNow`): an open tab asks again within a minute, so it refills after a restart.
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS people_seen (email TEXT PRIMARY KEY, lastSeen INTEGER NOT NULL)');
+    this.seenNow = new Map(); this.seenSaved = new Map();
     // Only the owner keeps 3D on deploy; record the seed so a later revocation survives room restarts.
     if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'model3dImported'").toArray().length) {
       const now = new Date().toISOString();
@@ -97,6 +103,58 @@ export class Directory extends DurableObject {
     const address = email(person);
     if (address && Number.isSafeInteger(at)) this.ctx.storage.sql.exec('INSERT INTO agent_activity (email, lastSeen) VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET lastSeen = MAX(lastSeen, excluded.lastSeen)', address, at);
   }
+  // A visible tab polls the boards list every 30 seconds or, on a board, the generators' status every 60 (src/CloudWorkspace.jsx);
+  // each poll says this person is here. The stored time is written at most every 5 minutes per person.
+  seen(person, board = null, now = Date.now()) {
+    const address = email(person);
+    if (!address) return;
+    // A board tab still polling wins over a boards list open in another tab.
+    const open = typeof board === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(board) ? board : null, before = this.seenNow.get(address);
+    this.seenNow.set(address, open || !before?.board || now - before.boardAt > onlineWindow ? { at: now, board: open, boardAt: open ? now : 0 } : { ...before, at: now });
+    if (now - (this.seenSaved.get(address) || 0) < seenWrite) return;
+    this.seenSaved.set(address, now);
+    this.ctx.storage.sql.exec('INSERT INTO people_seen (email, lastSeen) VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET lastSeen = MAX(lastSeen, excluded.lastSeen)', address, now);
+  }
+
+  // The admin panel's people: everyone who signed in (`accounts`, from D1, read by the worker) and everyone in the site's own
+  // records, with who is online now and where, when each was last here, their boards, team-key generations and AI agent.
+  // Money only for the owner. Online people first, then by when they were last here.
+  adminPeople(person, accounts = [], now = Date.now()) {
+    const role = this.siteRole(person);
+    if (!role) return null;
+    const sql = (query, ...values) => this.ctx.storage.sql.exec(query, ...values).toArray();
+    const today = new Date(now).toISOString().slice(0, 10), live = now - nanoReservationTtl, people = new Map();
+    const entry = address => {
+      if (!people.has(address)) people.set(address, { email: address, name: null, joinedAt: null, lastLoginAt: null, role: null, online: null, lastSeen: null, ownBoards: 0, ownImages: 0, sharedBoards: 0, todayMade: 0, monthMade: 0, ...(role === 'owner' ? { monthUsd: 0 } : {}), agentSeen: null });
+      return people.get(address);
+    };
+    for (const account of Array.isArray(accounts) ? accounts : []) {
+      const address = email(account?.email);
+      if (address) Object.assign(entry(address), { name: account.name || null, joinedAt: account.joinedAt || null, lastLoginAt: account.lastLoginAt || null });
+    }
+    for (const address of [email(this.env?.SITE_OWNER_EMAIL), ...sql('SELECT email FROM site_admins').map(row => row.email)]) if (address) entry(address);
+    for (const row of sql('SELECT email, lastSeen FROM people_seen')) entry(row.email).lastSeen = row.lastSeen;
+    const boardNames = new Map(sql('SELECT id, name FROM boards WHERE deletedAt IS NULL').map(row => [row.id, row.name]));
+    for (const [address, { at, board }] of this.seenNow) {
+      const item = entry(address);
+      item.lastSeen = Math.max(item.lastSeen || 0, at);
+      if (now - at <= onlineWindow) item.online = { board: board && boardNames.has(board) ? { id: board, name: boardNames.get(board) } : null };
+    }
+    for (const row of sql('SELECT owner, COUNT(*) AS boards, COALESCE(SUM(imageCount), 0) AS images FROM boards WHERE deletedAt IS NULL AND owner IS NOT NULL GROUP BY owner')) Object.assign(entry(row.owner), { ownBoards: row.boards, ownImages: row.images });
+    for (const row of sql(`SELECT p.email, COUNT(*) AS boards FROM board_people p JOIN boards b ON b.id = p.board WHERE b.deletedAt IS NULL AND p.role IS NOT NULL AND (b.owner IS NULL OR b.owner != p.email) GROUP BY p.email`)) entry(row.email).sharedBoards = row.boards;
+    for (const row of sql(`SELECT email, SUM(CASE WHEN day = ? THEN 1 ELSE 0 END) AS todayMade, COUNT(*) AS monthMade, COALESCE(SUM(usd), 0) AS monthUsd FROM nano_usage
+      WHERE month = ? AND (images > 0 OR usd > 0) AND (open = 0 OR createdAt > ?) GROUP BY email`, today, today.slice(0, 7), live)) Object.assign(entry(row.email), { todayMade: row.todayMade, monthMade: row.monthMade }, role === 'owner' ? { monthUsd: row.monthUsd } : {});
+    for (const row of sql('SELECT email, lastSeen FROM agent_activity')) entry(row.email).agentSeen = row.lastSeen;
+    for (const item of people.values()) {
+      item.role = this.siteRole(item.email);
+      // Someone who never signed their name here keeps the one their boards know.
+      item.name ||= sql('SELECT name FROM board_people WHERE email = ? AND name IS NOT NULL ORDER BY openedAt DESC LIMIT 1', item.email)[0]?.name || null;
+    }
+    const order = item => [item.online ? 1 : 0, item.lastSeen || 0, Date.parse(item.lastLoginAt || '') || 0];
+    const list = [...people.values()].sort((a, b) => { const x = order(a), y = order(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2] || a.email.localeCompare(b.email); });
+    return { role, now, onlineWindow, boards: boardNames.size, people: list };
+  }
+
   agentLastSeen(person) { return this.ctx.storage.sql.exec('SELECT lastSeen FROM agent_activity WHERE email = ?', email(person) || '').toArray()[0]?.lastSeen ?? null; }
   nanoEntries() { return this.ctx.storage.sql.exec('SELECT entry, addedBy, addedAt FROM nano_access ORDER BY entry').toArray().map(row => ({ ...row })); }
   nanoAllowed(person) { return nanoAllowed(person, this.nanoEntries().map(row => row.entry).join(',')); }

@@ -96,6 +96,23 @@ async function teamRoute(request, env, user, url) {
   return result.error ? error(result.error, result.status) : shown(result.access);
 }
 
+// Presence for the admin panel never fails the request that carries it.
+const noteSeen = (store, person, board) => Promise.resolve().then(() => store.seen(person, board)).catch(cause => console.error('Could not record who is online:', cause));
+
+// Site admins' panel: who signed in, who is online now and on which board, their boards, team-key generations and AI agent;
+// the site owner also sees each person's spending this month. The names and sign-in dates come from D1, which may be
+// over its daily allowance: then the panel still shows everyone the site's own records know.
+async function adminRoute(request, env, user) {
+  if (request.method !== 'GET') return error('Method not allowed.', 405);
+  const store = directory(env);
+  if (!await store.siteRole(user.email)) return error('Only site admins can open the admin panel.', 403);
+  let accounts = [], signIns = true;
+  try { accounts = ((await env.DB.prepare('SELECT email, name, created_at AS joinedAt, last_login_at AS lastLoginAt FROM users ORDER BY last_login_at DESC LIMIT 1000').all()).results || []).map(({ email, name, joinedAt, lastLoginAt }) => ({ email, name, joinedAt, lastLoginAt })); }
+  catch (cause) { signIns = false; console.error('Could not read who has signed in:', cause); }
+  const panel = await store.adminPeople(user.email, accounts);
+  return panel ? json({ admin: { ...panel, signIns } }) : error('Only site admins can open the admin panel.', 403);
+}
+
 // Only the site owner sees who spent what on the team's keys, by month, with the names people signed in with.
 async function spendingRoute(request, env, user, url) {
   if (request.method !== 'GET') return error('Method not allowed.', 405);
@@ -183,7 +200,7 @@ async function route(request, env) {
   }
   // Board links load the app, which signs the person in and then opens the board.
   // The analytics page is the app: it signs the person in and shows data only to site admins; /api/analytics checks again.
-  if (/^\/b\/[^/]+\/?$/.test(path) || path === '/admin/analytics') return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
+  if (/^\/b\/[^/]+\/?$/.test(path) || path === '/admin/analytics' || path === '/admin') return ['GET', 'HEAD'].includes(method) ? env.ASSETS.fetch(new Request(new URL('/', url), { method, headers: request.headers })) : error('Method not allowed.', 405);
   if (path === '/oauth/authorize') return authorize(request, env);
   if (path === '/api/auth/google') return method === 'GET' ? googleSignIn(request, env) : error('Method not allowed.', 405);
   if (path === '/api/auth/google/callback') return method === 'GET' ? googleCallback(request, env) : error('Method not allowed.', 405);
@@ -230,11 +247,14 @@ async function route(request, env) {
   if (path === '/api/agents' || path.startsWith('/api/agents/')) return agentsRoute(request, env, user, url);
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/cloud/spending') return spendingRoute(request, env, user, url);
+  if (path === '/api/cloud/admin') return adminRoute(request, env, user);
   if (path === '/api/nano') {
     if (method !== 'GET') return error('Method not allowed.', 405);
-    const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store), video: await videoStatus(user, env, store) };
+    // A board's tab polls this every minute while visible, which tells the admin panel who is on which board.
+    const store = directory(env), here = noteSeen(store, user.email, url.searchParams.get('board')), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store), video: await videoStatus(user, env, store) };
     // Someone without access learns whom to ask, and whether they already asked.
     if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed) || (status.video.configured && !status.video.allowed)) Object.assign(status, await store.accessHelp(user.email));
+    await here;
     return json(status);
   }
   if (path === '/api/nano/request') {
@@ -278,7 +298,8 @@ async function route(request, env) {
     return result.error ? error(result.error, result.status) : json(result);
   }
   if (path === '/api/cloud/boards') {
-    if (method === 'GET') return json({ boards: await directory(env).boardsFor(user.email) });
+    // The boards list polls this every 30 seconds while visible: that person is online, not on a board.
+    if (method === 'GET') { const store = directory(env), [boards] = await Promise.all([store.boardsFor(user.email), noteSeen(store, user.email, null)]); return json({ boards }); }
     if (method === 'POST') {
       const board = await directory(env).createBoard(name((await body(request)).name, 80), user);
       return json({ board: await directory(env).boardFor(board.id, user.email) }, 201);
