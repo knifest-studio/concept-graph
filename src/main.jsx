@@ -1,6 +1,6 @@
 import { videoFile, videoMetadata } from './video-upload.mjs';
 import { VideoPrompt, VideoNode as VideoCard } from './VideoNode.jsx';
-import { videoTask, isVideo, videoModels, videoRoles, clipRoles } from './video-generation.mjs';
+import { videoTask, isVideo, videoModels, videoRoles, clipRoles, videoSpeeds, videoSpeedOf } from './video-generation.mjs';
 import { videoState } from './generator.mjs';
 import { connectedSources, videoConnectionInputs } from '../graph.mjs';
 import { track, analyticsView, analyticsReady, analyticsViewport, analyticsVia } from './analytics.mjs';
@@ -2146,6 +2146,15 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     if (!cloud || mcpLocked.current || readOnlyRef.current || !isVideo(node) || Object.entries(change).every(([key, value]) => node.data[key] === value)) return;
     checkpoint(); putNodes(current => current.map(item => item.id === nodeId ? { ...item, data: { ...item.data, ...change } } : item)); markDirty();
   };
+  const setVideoSpeed = (nodeId, playbackRate) => {
+    const node = nodeRef.current.find(item => item.id === nodeId);
+    if (!cloud || mcpLocked.current || readOnlyRef.current || node?.type !== 'video' || !videoSpeeds.includes(playbackRate) || videoSpeedOf(node.data) === playbackRate) return;
+    checkpoint(); putNodes(current => current.map(item => {
+      if (item.id !== nodeId) return item;
+      const { playbackRate: _old, ...data } = item.data;
+      return { ...item, data: playbackRate === 1 ? data : { ...data, playbackRate } };
+    })); markDirty();
+  };
   const learnVideoMetadata = (nodeId, element) => {
     if (readOnlyRef.current || mcpLocked.current || switchingRef.current) return;
     const node = nodeRef.current.find(item => item.id === nodeId), { duration, videoWidth: width, videoHeight: height } = element;
@@ -3057,7 +3066,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), videoImage: imageId => addVideo([imageId]), setVideo, setVideoRole, disconnectVideo, learnVideoMetadata, setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, requestAccess, setGenerationSettings, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), videoImage: imageId => addVideo([imageId]), setVideo, setVideoSpeed, setVideoRole, disconnectVideo, learnVideoMetadata, setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, requestAccess, setGenerationSettings, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode, focusNode, copyNodeLink,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },
@@ -3120,7 +3129,7 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
           onSetup={openHelper} onDownloads={openHelperDownloads} onFix={fixReadiness} onDisconnect={cloudSession ? () => cloudSession.unpair(false) : null} loginBusy={loginBusy}
           onCheck={desktopMode && status.connected && !status.signedIn ? startLogin : checkCodex} desktopMode={desktopMode}
           sharing={cloudSession?.generationSharing} siteStatus={cloudSession?.nano} onAgentConnect={(desktopMode || cloud) ? () => setAgentConnect(true) : null}/>
-        <Preferences analytics={cloud} theme={theme} setTheme={setTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/>
+        <Preferences analytics={cloud} videos={cloud} theme={theme} setTheme={setTheme} sounds={effects.sounds} toggleSounds={effects.toggleSounds} waiting={waiting} beforeSwitch={() => cloud ? syncCloud() : saveNow()} onOpenChange={setPreferencesOpen}/>
         <HelpMenu item={help} onOpen={openHelp} onClose={() => setHelp(null)} returnFocus={helpReturnFocus} readOnly={readOnly} steps={gettingStartedSteps}/>{cloudSession?.account}
       </div>
     </header>

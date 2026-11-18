@@ -6,9 +6,10 @@ import { ShortcutSettings } from './ShortcutSettings.jsx';
 import { keepDialogFocus, restoreDialogFocus } from './dialog-focus.mjs';
 import { useDictationPreference } from './usePromptDictation.jsx';
 import { t } from './i18n.mjs';
+import { setVideoAutoplay, useVideoAutoplay } from './video-autoplay.mjs';
 
-function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose, analytics }) {
-  const usage = useSyncExternalStore(subscribeAnalytics, analyticsEnabled);
+function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, beforeSwitch, onClose, analytics, videos }) {
+  const usage = useSyncExternalStore(subscribeAnalytics, analyticsEnabled), autoplay = useVideoAutoplay();
   const first = useRef(null), [dictation, setDictation] = useDictationPreference();
   useEffect(() => { first.current?.focus(); }, []);
   return createPortal(<div className="board-modal" data-analytics-area="dialog:Preferences" role="dialog" aria-modal="true" aria-labelledby="preferences-title"
@@ -26,6 +27,7 @@ function PreferencesDialog({ theme, setTheme, sounds, toggleSounds, waiting, bef
       </select></label>
       <label className="preference-row"><span>{t('Videos while generating')}</span><input type="checkbox" checked={waiting.enabled} disabled={waiting.reducedMotion} onChange={waiting.toggle} aria-describedby={waiting.reducedMotion ? 'preferences-motion' : undefined}/></label>
       {waiting.reducedMotion && <p id="preferences-motion" className="preference-hint">{t('Your system’s reduced-motion setting turns videos off.')}</p>}
+      {videos && <label className="preference-row"><span>{t('Play videos on cards automatically')}</span><input type="checkbox" checked={autoplay} onChange={event => setVideoAutoplay(event.target.checked)}/></label>}
       {analytics && <label className="preference-row preference-analytics"><span>{t('Share usage data and session recordings to improve Concept Graph')}</span><input type="checkbox" checked={usage} onChange={event => setAnalyticsEnabled(event.target.checked)}/></label>}
       {analytics && <p className="preference-hint"><a href="/privacy" target="_blank" rel="noreferrer">{t('Privacy Policy')}</a></p>}
       <ShortcutSettings/>

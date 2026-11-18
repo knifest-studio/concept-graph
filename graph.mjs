@@ -1,4 +1,4 @@
-import { isVideo, videoTask, validateVideo, roleVideoInputs, videoModels, rolesForVideoInput } from './src/video-generation.mjs';
+import { isVideo, videoTask, validateVideo, roleVideoInputs, videoModels, rolesForVideoInput, videoSpeeds } from './src/video-generation.mjs';
 import { maxVideoBytes } from './src/video-assets.mjs';
 import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
 import { boardPages, defaultPageId, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
@@ -236,6 +236,7 @@ export function validateGraph(value) {
       if (node.data.fileName !== undefined && (typeof node.data.fileName !== 'string' || node.data.fileName.length > 1000)) throw new Error('Invalid video filename.');
       for (const key of ['width', 'height']) if (node.data[key] !== undefined && (!Number.isInteger(node.data[key]) || node.data[key] < 1 || node.data[key] > 32768)) throw new Error('Invalid video dimensions.');
       if (node.data.fps !== undefined && (!Number.isFinite(node.data.fps) || node.data.fps <= 0 || node.data.fps > 1000)) throw new Error('Invalid video frame rate.');
+      if (node.data.playbackRate !== undefined && !videoSpeeds.includes(node.data.playbackRate)) throw new Error('Invalid video speed.');
       validateVideo(node.data, true);
     }
     if (node.type === 'model' && !/^[\da-f-]{36}\.glb$/.test(node.data.asset || '')) throw new Error('Invalid model asset.');

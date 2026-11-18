@@ -18,6 +18,9 @@ export const isVideo = node => node?.type === 'text' && node.data?.task === vide
 export const videoRoles = Object.freeze(['start', 'end', 'middle', 'reference']);
 export const clipRoles = Object.freeze(['reference', 'edit', 'extend']);
 export const rolesForVideoInput = input => input.kind === 'video' ? clipRoles : videoRoles;
+// Speeds a video card plays at on the board. The MP4 is unchanged, so Download and Open keep the original speed.
+export const videoSpeeds = Object.freeze([1, 2, 3]);
+export const videoSpeedOf = data => videoSpeeds.includes(data?.playbackRate) ? data.playbackRate : 1;
 export const videoAspects = Object.freeze(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']);
 export const videoResolutions = Object.freeze(['360p', '480p', '720p', '768P', '1080p', '2K', '4k']);
 export const videoModels = Object.freeze({
@@ -26,14 +29,14 @@ export const videoModels = Object.freeze({
   kling: { name: 'Kling 4.0', path: 'kling/v4', min: 3, max: 30, rates: { '720p': .157, '1080p': .235 } },
   seedance: { name: 'Seedance 2.5', path: 'bytedance/seedance-2.5', min: 4, max: 30, rates: { '480p': .2205, '720p': .473, '1080p': 1.164 } },
 });
-export const videoDefaults = Object.freeze({ videoModel: 'minimax', duration: 5, videoResolution: '720p', videoAspectRatio: '16:9', videoAudio: true });
+export const videoDefaults = Object.freeze({ videoModel: 'minimax', duration: 5, videoResolution: '720p', videoAspectRatio: 'auto', videoAudio: true });
 export const videoModelOf = node => Object.hasOwn(videoModels, node?.data?.videoModel) ? node.data.videoModel : 'minimax';
 export const videoSettingsKeys = Object.keys(videoDefaults);
 export function validateVideo(data, output = false) {
   if (data.videoModel !== undefined && !Object.hasOwn(videoModels, data.videoModel)) throw new Error('Invalid video model.');
   if (data.duration !== undefined && (output ? (!Number.isFinite(data.duration) || data.duration <= 0 || data.duration > 86400) : (!Number.isInteger(data.duration) || data.duration < 1 || data.duration > 120))) throw new Error('Invalid video duration.');
   if (data.videoResolution !== undefined && !videoResolutions.includes(data.videoResolution) && !['480P', '1080P'].includes(data.videoResolution)) throw new Error('Invalid video resolution.');
-  if (data.videoAspectRatio !== undefined && !videoAspects.includes(data.videoAspectRatio) && !(output && data.videoAspectRatio === 'auto')) throw new Error('Invalid video aspect ratio.');
+  if (data.videoAspectRatio !== undefined && !videoAspects.includes(data.videoAspectRatio) && data.videoAspectRatio !== 'auto') throw new Error('Invalid video aspect ratio.');
   if (data.videoAudio !== undefined && typeof data.videoAudio !== 'boolean') throw new Error('Invalid video audio setting.');
   if (data.videoRoles !== undefined && (!data.videoRoles || typeof data.videoRoles !== 'object' || Array.isArray(data.videoRoles) || Object.entries(data.videoRoles).some(([id, role]) => !id || id.length > 120 || ![...videoRoles, ...clipRoles].includes(role)) || Object.keys(data.videoRoles).length > 1000)) throw new Error('Invalid video input roles.');
 }
@@ -91,9 +94,13 @@ export function resolveVideo(node, images = []) {
   const followsImage = pictures.some(input => input.role !== 'reference') && (model === 'minimax' || (model === 'kling' && mode === 'image') || model === 'seedance');
   const autoLength = model === 'seedance' && task === 'editing', followsVideo = model === 'seedance' && task !== 'reference';
   const aspects = model === 'omni' ? ['16:9', '9:16'] : videoAspects;
-  const applied = { videoModel: model, duration: autoLength ? 'auto' : duration, videoResolution: resolution, videoAspectRatio: followsImage || followsVideo ? 'auto' : aspects.includes(requested.videoAspectRatio) ? requested.videoAspectRatio : '16:9', ...(model === 'seedance' ? { videoAudio: requested.videoAudio } : model === 'omni' ? { videoAudio: true } : {}) };
+  // Auto keeps the inputs' shape: a forced 16:9 made MiniMax re-frame a portrait reference clip and invent a new background.
+  // Height/width of the first input with a known shape; text-only runs stay 16:9, Omni only knows 16:9 and 9:16.
+  const shape = inputs.map(input => input.width > 0 && input.height > 0 ? input.height / input.width : input.aspect).find(value => value > 0);
+  const autoShape = mode === 'text' ? '16:9' : model === 'omni' ? shape > 1 ? '9:16' : '16:9' : 'auto';
+  const applied = { videoModel: model, duration: autoLength ? 'auto' : duration, videoResolution: resolution, videoAspectRatio: followsImage || followsVideo ? 'auto' : requested.videoAspectRatio === 'auto' ? autoShape : aspects.includes(requested.videoAspectRatio) ? requested.videoAspectRatio : '16:9', ...(model === 'seedance' ? { videoAudio: requested.videoAudio } : model === 'omni' ? { videoAudio: true } : {}) };
   const unsupported = {};
-  for (const key of videoSettingsKeys) if (node.data[key] !== undefined && requested[key] !== applied[key] && !(key === 'videoResolution' && model === 'minimax' && requested[key] === '720p' && applied[key] === '768P')) unsupported[key] = followsVideo && ['duration', 'videoAspectRatio'].includes(key) ? task === 'editing' ? videoReasons.autoEdit : videoReasons.autoExtend : key === 'videoAspectRatio' && followsImage ? videoReasons.shape : key === 'videoAudio' ? videoReasons.audio : videoReasons.limited;
+  for (const key of videoSettingsKeys) if (node.data[key] !== undefined && requested[key] !== applied[key] && !(key === 'videoAspectRatio' && requested[key] === 'auto') && !(key === 'videoResolution' && model === 'minimax' && requested[key] === '720p' && applied[key] === '768P')) unsupported[key] = followsVideo && ['duration', 'videoAspectRatio'].includes(key) ? task === 'editing' ? videoReasons.autoEdit : videoReasons.autoExtend : key === 'videoAspectRatio' && followsImage ? videoReasons.shape : key === 'videoAudio' ? videoReasons.audio : videoReasons.limited;
   const issues = [], issue = (reason, list = inputs) => issues.push({ reason, nodeIds: list.map(image => image.nodeId) });
   for (const input of inputs) if (!rolesForVideoInput(input).includes(input.role)) issue(videoReasons.kind, [input]);
   if (edits.length && model !== 'seedance') issue(videoReasons.editing, edits);
@@ -120,7 +127,7 @@ export function resolveVideo(node, images = []) {
   if (inputSeconds > limits.total + 1e-6) issue(videoReasons.videoTotal, videos);
   const outputSeconds = autoLength && Number.isFinite(edits[0]?.duration) ? edits[0].duration : duration;
   const frameTokens = pictures.length - references.length, side = resolutionPixels(resolution), aspect = followsImage ? (starts[0] || ends[0])?.aspect : undefined;
-  const ratio = aspect ? 1 / aspect : applied.videoAspectRatio === 'auto' ? 16 / 9 : (() => { const [w, h] = applied.videoAspectRatio.split(':').map(Number); return w / h; })();
+  const ratio = aspect ? 1 / aspect : applied.videoAspectRatio === 'auto' ? shape ? 1 / shape : 16 / 9 : (() => { const [w, h] = applied.videoAspectRatio.split(':').map(Number); return w / h; })();
   const tokens = references.reduce((sum, image) => sum + 1024 * Math.max(image.aspect || 1, 1 / (image.aspect || 1)), 0) + frameTokens * (side === 1080 ? 768 : side) ** 2 * Math.max(ratio, 1 / ratio) / 1024;
   const videoTokens = model === 'minimax' ? videos.reduce((sum, clip) => sum + (clip.duration > 0 ? minimaxClipTokens(clip, outputSeconds, resolution) : 0), 0) : 0;
   const surcharge = model === 'minimax' && mode === 'reference' ? Math.max(0, tokens + videoTokens - 4096) * .02 / 1000 : 0;
@@ -146,7 +153,8 @@ export function videoInput(resolved, prompt, urls) {
   if (resolved.blocked) throw new Error(resolved.issues[0].reason);
   const { applied: a, inputs, model, mode } = resolved, url = role => urls[inputs.findIndex(input => input.kind !== 'video' && input.role === role)];
   const input = { prompt: rewriteVideoMentions(prompt, resolved), duration: model === 'seedance' ? String(a.duration) : a.duration, resolution: a.videoResolution };
-  if (!resolved.followsImage || model === 'seedance') input.aspect_ratio = a.videoAspectRatio;
+  // MiniMax calls its follow-the-references shape 'adaptive'; Kling and Seedance accept 'auto'.
+  if (!resolved.followsImage || model === 'seedance') input.aspect_ratio = a.videoAspectRatio === 'auto' && model === 'minimax' ? 'adaptive' : a.videoAspectRatio;
   if (model === 'seedance') { input.generate_audio = a.videoAudio; input.codec = 'H264'; if (resolved.videos.length) input.task = resolved.task; }
   if (model === 'minimax' && mode === 'reference') input.prompt_expansion_mode = 'balanced';
   if (url('start')) input[model === 'kling' ? 'start_image_url' : 'image_url'] = url('start');
