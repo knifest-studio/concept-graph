@@ -278,7 +278,7 @@ async function route(request, env) {
       if (origin && origin !== url.origin) return error('Invalid origin.', 403);
       const result = await store.requestBoardAccess(id, user);
       if (result.error) return error(result.error, result.status);
-      if (result.created) await announceRequest(env, id, { name: result.name, email: result.email });
+      if (result.created) await announceRequest(env, id, { name: result.name, email: result.email, ...(result.role ? { role: result.role } : {}) });
       return json(result.allowed ? { allowed: true } : { requested: true });
     }
     if (boardMatch[2]) {

@@ -53,11 +53,12 @@ export function ShareDialog({ boardId, name, sharing: initial, services, onChang
       </form> : <p className="share-note">{owner && <>{rich('Owned by {name}.', { name: <b>{owner.name || t('someone else')}</b> })} </>}{sharing.role === 'view' ? t('You can view this board.') : t('You can edit this board.')} {owner ? t('Only its owner can change who has access.') : t('It was made before sharing and has no owner, so nobody can change who has access.')}</p>}
       {error && <p className="cloud-error share-error" role="alert">{error}</p>}
       {manage && sharing.requests?.length > 0 && <>
-        {/* People the board is closed to who asked to come in: letting them in invites them with the chosen role. */}
+        {/* People the board is closed to who asked to come in (letting them in invites them with the chosen role), and viewers who asked to edit. */}
         <h3>{t('Asking for access')}</h3>
-        <ul className="share-people share-asking-list">{sharing.requests.map(request => <li key={request.email}><span><b>{request.name || request.email}</b>{request.name && <small>{request.email}</small>}</span>
-          <span><select aria-label={t('Role for {email}', { email: request.email })} value={granted[request.email] || 'view'} disabled={busy} onChange={event => setGranted(current => ({ ...current, [request.email]: event.target.value }))}>{roleOptions()}</select>
-            <button type="button" className="primary-button share-allow" disabled={busy} onClick={() => change({ member: { email: request.email, role: granted[request.email] || 'view' } })}>{t('Let in')}</button>
+        <ul className="share-people share-asking-list">{sharing.requests.map(request => <li key={request.email}><span><b>{request.name || request.email}</b>{request.role === 'edit' ? <small>{request.name ? t('{email} · asks to edit', { email: request.email }) : t('Asks to edit')}</small> : request.name && <small>{request.email}</small>}</span>
+          <span>{request.role === 'edit' ? <button type="button" className="primary-button share-allow" disabled={busy} onClick={() => change({ member: { email: request.email, role: 'edit' } })}>{t('Allow editing')}</button>
+            : <><select aria-label={t('Role for {email}', { email: request.email })} value={granted[request.email] || 'view'} disabled={busy} onChange={event => setGranted(current => ({ ...current, [request.email]: event.target.value }))}>{roleOptions()}</select>
+            <button type="button" className="primary-button share-allow" disabled={busy} onClick={() => change({ member: { email: request.email, role: granted[request.email] || 'view' } })}>{t('Let in')}</button></>}
             <button type="button" className="share-remove" aria-label={t('Decline the request from {email}', { email: request.email })} disabled={busy} onClick={() => change({ dismiss: request.email })}>{t('Decline')}</button></span></li>)}</ul>
       </>}
       <h3>{t('People with access')}</h3>

@@ -127,9 +127,9 @@ export class BoardRoom extends YServer {
     }
   }
 
-  // Worker RPC when someone the board is closed to asks for access: the owner, if they are here, is told at once.
-  accessRequested({ name, email } = {}) {
-    for (const connection of this.getConnections()) if (connection.state?.role === 'owner') this.sendCustomMessage(connection, JSON.stringify({ type: 'access-request', name: name || null, email }));
+  // Worker RPC when someone the board is closed to asks for access, or a viewer asks to edit: the owner, if they are here, is told at once.
+  accessRequested({ name, email, role } = {}) {
+    for (const connection of this.getConnections()) if (connection.state?.role === 'owner') this.sendCustomMessage(connection, JSON.stringify({ type: 'access-request', name: name || null, email, ...(role === 'edit' ? { role } : {}) }));
   }
 
   // Images placed before sizes were recorded (and uploads from older tabs) learn their pixel size from the start of their

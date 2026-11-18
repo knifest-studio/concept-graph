@@ -384,7 +384,8 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       if (value?.type === 'access') latest.current.onAccess(value.role);
       if (value?.type === 'access-request') {
         latest.current.refreshSharing();
-        next.inform?.(t('{name} asks for access to this board. Open Share to let them in.', { name: typeof value.name === 'string' && value.name ? value.name : typeof value.email === 'string' ? value.email : t('Someone') }), 'access_requested');
+        const name = typeof value.name === 'string' && value.name ? value.name : typeof value.email === 'string' ? value.email : t('Someone');
+        next.inform?.(value.role === 'edit' ? t('{name} asks to edit this board. Open Share to allow it.', { name }) : t('{name} asks for access to this board. Open Share to let them in.', { name }), 'access_requested');
       }
       if (typeof value?.type === 'string' && value.type.startsWith('attention')) callMessage(value);
       if (['agent-generate', 'agent-cancel'].includes(value?.type) && typeof value.requestId === 'string') agentRequest(value);
@@ -424,7 +425,13 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   };
   // Asking for the team's key only puts this person in front of the admins (Team access); the status then says so.
   const requestAccess = async () => { const result = await services.api('/api/nano/request', json('POST', {})); nanoSoon.current(); return result; };
-  Object.assign(session, { paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), requestAccess, role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
+  // A viewer asks the owner to let them edit. Share shows the owner the request; once allowed, the room's new role reopens the board for editing.
+  const requestEdit = async () => {
+    const result = await services.api(`/api/cloud/boards/${encodeURIComponent(boardId)}/access-request`, { method: 'POST' });
+    track('board_edit_requested');
+    if (result.allowed) onAccess(undefined); else onSharing({ ...sharing, editRequested: true });
+  };
+  Object.assign(session, { editRequested: !!sharing?.editRequested, requestEdit, paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), requestAccess, role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
   session.cursors = visible => <Cursors cursors={session.cursorStore} pings={session.pingStore} visible={visible}/>;
   session.toolbar = <>
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
