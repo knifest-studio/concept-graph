@@ -3,6 +3,7 @@ import { t } from './i18n.mjs';
 import { Avatar, VoiceMark } from './BoardPresence.jsx';
 import { popoverPosition } from './popover-position.mjs';
 import { track } from './analytics.mjs';
+import { voiceMediaDelay } from './voice-mesh.mjs';
 
 function Microphone({ muted }) {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>{muted && <path d="m2 2 20 20"/>}</svg>;
@@ -53,7 +54,9 @@ function RemoteAudio({ stream, onBlocked }) {
   useEffect(() => {
     const element = audio.current; element.srcObject = stream;
     Promise.resolve(element.play()).catch(onBlocked);
-    return () => { element.pause(); element.srcObject = null; };
+    // Whether the page is still playing this teammate a few seconds in, beside the mesh's packet counts (voice_media).
+    const check = setTimeout(() => track('voice_playback', { paused: element.paused, readyState: element.readyState }, 'app', 'voice'), voiceMediaDelay);
+    return () => { clearTimeout(check); element.pause(); element.srcObject = null; };
   }, [stream]);
   return <audio ref={audio} autoPlay playsInline/>;
 }

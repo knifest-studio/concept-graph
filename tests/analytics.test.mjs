@@ -101,4 +101,6 @@ test('voice diagnostics keep candidate kinds, a relay flag and a state, and drop
   assert.deepEqual(details({ local: 'host,srflx', remote: 'relay', path: 'srflx-relay', turn: true, status: 'failed/failed/stable', errorKind: 'ice_failed', count: 2, duration: 30000 }),
     { local: 'host,srflx', remote: 'relay', path: 'srflx-relay', turn: true, status: 'failed/failed/stable', errorKind: 'ice_failed', count: 2, duration: 30000 });
   assert.deepEqual(details({ local: '192.168.1.5', remote: 'host,203.0.113.7', path: 'host-host-host', turn: 'yes' }), {});
+  assert.deepEqual(details({ sent: 400, received: 390, lost: -1, energyIn: .8, energyOut: 1.5, trackMuted: false, muted: true, paused: false, readyState: 4 }),
+    { sent: 400, received: 390, lost: 0, energyIn: .8, energyOut: 1.5, trackMuted: false, muted: true, paused: false, readyState: 4 });
 });
