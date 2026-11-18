@@ -212,7 +212,7 @@ async function route(request, env) {
     const headers = { 'Content-Type': assetTypes[asset.split('.').pop()], 'Content-Length': String(object.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
     if (asset.endsWith('.mp4')) {
       headers['Accept-Ranges'] = 'bytes';
-      if (ranged && object.range) { const range = object.range, offset = 'suffix' in range ? object.size - range.suffix : range.offset ?? 0, length = range.length ?? object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; headers['Content-Length'] = String(length); }
+      if (ranged && object.range) { const range = object.range, offset = Number.isFinite(range.suffix) ? object.size - range.suffix : Number.isFinite(range.offset) ? range.offset : 0, length = Number.isFinite(range.length) ? range.length : object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; headers['Content-Length'] = String(length); }
     }
     return new Response(method === 'HEAD' ? null : object.body, { status: ranged && object.range ? 206 : 200, headers });
   }
@@ -418,7 +418,7 @@ async function route(request, env) {
     // https://developers.cloudflare.com/r2/api/workers/workers-api-reference/#ranged-reads
     if (asset.endsWith('.mp4')) {
       headers['Accept-Ranges'] = 'bytes';
-      if (ranged && object.range) { const range = object.range, offset = 'suffix' in range ? object.size - range.suffix : range.offset ?? 0, length = range.length ?? object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; return new Response(method === 'HEAD' ? null : object.body, { status: 206, headers: { ...headers, 'Content-Length': String(length) } }); }
+      if (ranged && object.range) { const range = object.range, offset = Number.isFinite(range.suffix) ? object.size - range.suffix : Number.isFinite(range.offset) ? range.offset : 0, length = Number.isFinite(range.length) ? range.length : object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; return new Response(method === 'HEAD' ? null : object.body, { status: 206, headers: { ...headers, 'Content-Length': String(length) } }); }
     }
     return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }

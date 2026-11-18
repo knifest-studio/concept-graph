@@ -2774,7 +2774,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     const from = state.fromNode && slideSource(state.fromNode.id), fromNode = from === state.fromNode?.id ? state.fromNode : nodeRef.current.find(node => node.id === from);
     if (!edgeDropCreatesPrompt({ ...state, fromNode }, onPane)) return;
     const position = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
-    const node = addText({ x: position.x, y: position.y - 40 }, '', null, {}, 'drag-from-output');
+    // A video dragged into empty space starts a Video node that takes it as a reference; other outputs start a prompt.
+    const node = addText({ x: position.x, y: position.y - 40 }, '', null, fromNode.type === 'video' ? { task: videoTask, videoModel: 'minimax' } : {}, 'drag-from-output');
     const edge = { id: id(), source: fromNode.id, target: node.id }; effects.createEdges([edge.id], [edge.target]);
     putNodes(current => nameImageConnections(current, edgeRef.current, [edge]));
     putEdges(current => [...current, edge]); if (cloud) track('connections_made', { count: 1 }); setFocusId(node.id); markDirty();
