@@ -5,7 +5,7 @@ import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
 import { assetPattern, imageFormat, imageTypes, assetTypes, readBody } from './assets.mjs';
 import { privacyHtml } from './privacy.mjs';
-import { nanoStatus } from './nano-banana.mjs';
+import { nanoSettings, nanoStatus } from './nano-banana.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
 import { model3dStatus, storeModelGlb } from './model3d.mjs';
 import { upscaleSettings } from './upscale.mjs';
@@ -93,6 +93,15 @@ async function teamRoute(request, env, user, url) {
   if (origin && origin !== url.origin) return error('Invalid origin.', 403);
   const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, video: input.video, admin: input.admin, request: input.request });
   return result.error ? error(result.error, result.status) : shown(result.access);
+}
+
+// Only the site owner sees who spent what on the team's keys, by month, with the names people signed in with.
+async function spendingRoute(request, env, user, url) {
+  if (request.method !== 'GET') return error('Method not allowed.', 405);
+  const spending = await directory(env).spending(user.email, url.searchParams.get('month'));
+  if (!spending) return error('Only the site owner can see spending.', 403);
+  const names = new Map((await signedIn(env) || []).map(person => [person.email, person.name])), { dailyImages, monthlyUsd } = nanoSettings(env);
+  return json({ spending: { ...spending, dailyImages, monthlyUsd, people: spending.people.map(person => ({ ...person, name: names.get(person.email) || null })) } });
 }
 
 // Generation runs in the board's room, which holds the board; the Worker only checks who may spend the site's key.
@@ -218,6 +227,7 @@ async function route(request, env) {
   }
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
+  if (path === '/api/cloud/spending') return spendingRoute(request, env, user, url);
   if (path === '/api/nano') {
     if (method !== 'GET') return error('Method not allowed.', 405);
     const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store), video: await videoStatus(user, env, store) };
