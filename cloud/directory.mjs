@@ -260,17 +260,20 @@ export class Directory extends DurableObject {
     const chosen = /^\d{4}-(0[1-9]|1[0-2])$/.test(month || '') && month <= current ? month : current;
     const months = this.ctx.storage.sql.exec('SELECT DISTINCT month FROM nano_usage ORDER BY month DESC').toArray().map(row => row.month);
     const rows = this.ctx.storage.sql.exec(`SELECT email, kind, SUM(CASE WHEN images > 0 OR usd > 0 THEN 1 ELSE 0 END) AS made, COALESCE(SUM(usd), 0) AS usd,
+      SUM(CASE WHEN open = 0 OR createdAt > ? THEN images ELSE 0 END) AS outputs,
       SUM(CASE WHEN day = ? AND (open = 0 OR createdAt > ?) THEN images ELSE 0 END) AS todayImages, SUM(CASE WHEN day = ? THEN usd ELSE 0 END) AS todayUsd
-      FROM nano_usage WHERE month = ? GROUP BY email, kind`, today, live, today, chosen).toArray();
+      FROM nano_usage WHERE month = ? GROUP BY email, kind`, live, today, live, today, chosen).toArray();
+    // When the site started recording what each call made: calls before it are one lump per person.
+    const split = this.ctx.storage.sql.exec('SELECT MIN(createdAt) AS at FROM nano_usage WHERE kind IS NOT NULL').toArray()[0]?.at;
     const people = new Map();
     for (const row of rows) {
       const entry = people.get(row.email) || { email: row.email, made: 0, usd: 0, todayImages: 0, todayUsd: 0, kinds: [] };
       entry.made += row.made; entry.usd += row.usd; entry.todayImages += row.todayImages; entry.todayUsd += row.todayUsd;
-      if (row.made || row.usd) entry.kinds.push({ kind: row.kind || 'earlier', made: row.made, usd: row.usd });
+      if (row.made || row.usd) entry.kinds.push({ kind: row.kind || 'earlier', made: row.made, outputs: row.outputs, usd: row.usd });
       people.set(row.email, entry);
     }
     const list = [...people.values()].filter(entry => entry.made || entry.usd).map(entry => ({ ...entry, kinds: entry.kinds.sort((a, b) => b.usd - a.usd) })).sort((a, b) => b.usd - a.usd || b.made - a.made);
-    return { month: chosen, months: [...new Set([current, ...months])].sort().reverse(), today, people: list,
+    return { month: chosen, months: [...new Set([current, ...months])].sort().reverse(), today, splitSince: split ? new Date(split).toISOString().slice(0, 10) : null, people: list,
       team: { usd: list.reduce((sum, entry) => sum + entry.usd, 0), todayUsd: list.reduce((sum, entry) => sum + entry.todayUsd, 0), made: list.reduce((sum, entry) => sum + entry.made, 0) } };
   }
 

@@ -1123,7 +1123,8 @@ export default {
   'of {limit} a month': 'з {limit} на місяць',
   'today': 'сьогодні',
   'Team budget used': 'Використано бюджету команди',
-  'today {images} of {limit} images, {spent}': 'сьогодні {images} з {limit} зображень, {spent}',
+  'Today: {images} of {limit} images, {spent}': 'Сьогодні: {images} з {limit} зображень, {spent}',
+  '{percent} of the team': '{percent} витрат команди',
   'Made before the site recorded what each generation was.': 'Зроблено до того, як сайт почав записувати тип кожної генерації.',
   'No spending in this month.': 'У цьому місяці витрат немає.',
   'Nano Banana: {count} image': ['Nano Banana: {count} зображення','Nano Banana: {count} зображення','Nano Banana: {count} зображень','Nano Banana: {count} зображення'],
@@ -1132,7 +1133,8 @@ export default {
   '{count} upscale': ['{count} апскейл','{count} апскейли','{count} апскейлів','{count} апскейлу'],
   '{count} 3D model': ['{count} 3D-модель','{count} 3D-моделі','{count} 3D-моделей','{count} 3D-моделі'],
   '{count} video': ['{count} відео','{count} відео','{count} відео','{count} відео'],
-  '{count} earlier, not split': ['{count} раніше, без розбивки','{count} раніше, без розбивки','{count} раніше, без розбивки','{count} раніше, без розбивки'],
+  '{count} generation before {date}': ['{count} генерація до {date}','{count} генерації до {date}','{count} генерацій до {date}','{count} генерації до {date}'],
+  '{count} generation, not split by type': ['{count} генерація без розбивки за типом','{count} генерації без розбивки за типом','{count} генерацій без розбивки за типом','{count} генерації без розбивки за типом'],
 
   // Team access
   'Team access': 'Доступ команди',
