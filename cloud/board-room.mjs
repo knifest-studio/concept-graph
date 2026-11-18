@@ -622,9 +622,11 @@ export class BoardRoom extends YServer {
     this.calls.set(id, { at: now, caller: connection.id, waiting: new Set(targets.map(item => item.state?.email)) });
     const spot = coordinate(value.spot?.x) && coordinate(value.spot?.y) ? { x: value.spot.x, y: value.spot.y } : null;
     const page = typeof value.page === 'string' && value.page.length <= 120 ? value.page : null;
-    const message = JSON.stringify({ type: 'attention', id, from: { name, clientId: own }, everyone, page, spot });
+    // A voice invite is the same call, asking people to join the board's voice chat rather than come to the caller's spot.
+    const voice = value.voice === true ? { voice: true } : {};
+    const message = JSON.stringify({ type: 'attention', id, from: { name, clientId: own }, everyone, ...voice, page, spot });
     for (const target of targets) this.sendCustomMessage(target, message);
-    reply({ type: 'attention-sent', id, everyone, people: new Set(targets.map(item => item.state?.email)).size });
+    reply({ type: 'attention-sent', id, everyone, ...voice, people: new Set(targets.map(item => item.state?.email)).size });
   }
 
   // Each person called answers once, from any of their tabs; the caller hears who is coming and who is busy.
