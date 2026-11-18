@@ -454,7 +454,7 @@ runtimeTest('UI and MCP enforce separate 3D access and whoami reports it indepen
   assert.equal((await denied.json()).error, message); assert.equal((await lead.tool('start_run', { boardId, nodeId })).error, message);
   assert.equal(rooms.get(boardId).document.getMap('runs').size, 0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 0);
   directory.changeTeamAccess('owner@studio.example', { model3d: { email: 'lead@studio.example', allowed: true }, nano: { entry: '@studio.example', allowed: false } });
-  const allowed = await lead.tool('whoami'); assert.equal(allowed.nanoBanana.allowed, false); assert.equal(allowed.model3d.allowed, true); assert.equal(allowed.model3d.dailyImages, 100);
+  const allowed = await lead.tool('whoami'); assert.equal(allowed.nanoBanana.allowed, false); assert.equal(allowed.model3d.allowed, true); assert.equal(allowed.model3d.dailyImages, 300);
   const { cubeGlb } = await import('./fixtures/cube-glb.mjs'); let submissions = 0;
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     if (init.method === 'POST') { submissions++; return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' }); }
