@@ -187,7 +187,7 @@ runtimeTest('only the owner sees spending: each person by month and by what they
   assert.equal(body.month, '2026-10'); assert.equal(body.dailyImages, 300); assert.equal(body.people[0].name, 'Newcomer');
 });
 
-runtimeTest('site admins see who is online and where, boards and generations per person; money only for the owner', async t => {
+runtimeTest('only the site owner sees who is online and where, boards, generations and spending per person', async t => {
   const { sql, directory, request } = setup(t);
   const board = directory.createBoard('Moodboard', { email: 'new@studio.example', name: 'Newcomer' });
   directory.createBoard('Second', { email: 'new@studio.example', name: 'Newcomer' });
@@ -202,7 +202,7 @@ runtimeTest('site admins see who is online and where, boards and generations per
   await request('/api/cloud/boards', { email: 'new@studio.example' });
   const panel = directory.adminPeople('owner@studio.example', [{ email: 'new@studio.example', name: 'Newcomer', joinedAt: '2026-11-01T09:00:00.000Z', lastLoginAt: '2026-11-05T09:00:00.000Z' }, { email: 'quiet@studio.example', name: 'Quiet' }]);
   const person = address => panel.people.find(item => item.email === address);
-  assert.equal(panel.role, 'owner'); assert.equal(panel.boards, 2);
+  assert.equal(panel.boards, 2);
   assert.deepEqual(person('new@studio.example').online, { board: { id: board.id, name: 'Moodboard' } });
   assert.deepEqual(person('admin@studio.example').online, { board: null });
   assert.equal(person('quiet@studio.example').online, null); assert.equal(person('quiet@studio.example').lastSeen, null);
@@ -218,14 +218,15 @@ runtimeTest('site admins see who is online and where, boards and generations per
   const { Directory: Restarted } = { Directory: directory.constructor }, restarted = new Restarted(directory.ctx, directory.env);
   assert.ok(restarted.adminPeople('owner@studio.example').people.find(item => item.email === 'new@studio.example').lastSeen);
 
-  // Admins see it without money; everyone else is refused, and the page itself is the app.
+  // Site admins and everyone else are refused; the page itself is the app.
   await request('/api/cloud/team', { method: 'PATCH', email: 'owner@studio.example', data: { admin: { email: 'admin@studio.example', admin: true } } });
-  const shown = await request('/api/cloud/admin', { email: 'admin@studio.example' });
+  assert.equal(directory.adminPeople('admin@studio.example'), null);
+  assert.equal((await request('/api/cloud/admin', { email: 'admin@studio.example' })).status, 403);
+  assert.equal((await request('/api/cloud/admin', { email: 'new@studio.example' })).status, 403);
+  const shown = await request('/api/cloud/admin', { email: 'owner@studio.example' });
   assert.equal(shown.status, 200);
   const body = (await shown.json()).admin;
-  assert.equal(body.role, 'admin'); assert.equal(body.signIns, true);
+  assert.equal(body.signIns, true);
   assert.equal(body.people.find(item => item.email === 'new@studio.example').name, 'Newcomer');
-  assert.ok(body.people.every(item => !('monthUsd' in item)));
-  assert.equal((await request('/api/cloud/admin', { email: 'new@studio.example' })).status, 403);
   assert.equal(await (await request('/admin', { email: 'new@studio.example' })).text(), 'static');
 });

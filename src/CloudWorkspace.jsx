@@ -612,7 +612,7 @@ export default function CloudWorkspace({ Editor, HelperSetup, services }) {
       <label htmlFor="cloud-email">{t('Email')}</label><input id="cloud-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/>
       <button className="primary-button" disabled={busy || !name.trim() || !email.trim()}>{busy ? t('Signing in…') : t('Sign in locally')}</button>
     </form>}</section></main>;
-  if (location.pathname === '/admin') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AdminPanel services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can open the admin panel.')}</main>;
+  if (location.pathname === '/admin') return siteRole === 'owner' ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AdminPanel services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only the site owner can open the admin panel.')}</main>;
   if (location.pathname === '/admin/analytics') return siteRole ? <React.Suspense fallback={<div className="startup">{t('Loading…')}</div>}><AnalyticsAdmin services={services}/></React.Suspense> : <main className="cloud-startup">{t('Only site admins can view analytics.')}</main>;
   const current = boardId && opened?.id === boardId ? opened : null;
   return <>

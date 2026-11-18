@@ -1115,9 +1115,9 @@ export default {
   'MCP CONNECTION': 'ПІДКЛЮЧЕННЯ MCP',
   'Connect MCP': 'Підключити MCP',
 
-  // Admin panel (site admins)
+  // Admin panel (site owner only)
   'Admin panel': 'Адмін-панель',
-  'Only site admins can open the admin panel.': 'Адмін-панель доступна лише адміністраторам сайту.',
+  'Only the site owner can open the admin panel.': 'Адмін-панель доступна лише власнику сайту.',
   'Online now': 'Онлайн зараз',
   'Here in the last 24 hours': 'Заходили за останні 24 год',
   'Generations today': 'Генерацій сьогодні',
