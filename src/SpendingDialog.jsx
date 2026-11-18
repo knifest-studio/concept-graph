@@ -4,18 +4,25 @@ import { language, plural, t } from './i18n.mjs';
 
 // Cents always show, so small amounts such as $0.04 do not read as nothing.
 const money = value => `$${(Math.round(value * 100) / 100).toFixed(2)}`;
-// What a paid call made, in the order the server records (cloud/directory.mjs spendKinds); `earlier` is usage from before
-// the site recorded what each call made.
-const kindLabels = {
-  nano: count => plural(count, 'Nano Banana: {count} image', 'Nano Banana: {count} images'),
-  gpt: count => plural(count, 'GPT Image: {count} image', 'GPT Image: {count} images'),
-  describe: count => plural(count, '{count} description', '{count} descriptions'),
-  upscale: count => plural(count, '{count} upscale', '{count} upscales'),
-  model3d: count => plural(count, '{count} 3D model', '{count} 3D models'),
-  video: count => plural(count, '{count} video', '{count} videos'),
-  earlier: count => plural(count, '{count} earlier, not split', '{count} earlier, not split'),
+const locale = () => language() === 'uk' ? 'uk-UA' : 'en-US';
+const monthName = month => new Date(`${month}-01T12:00:00Z`).toLocaleDateString(locale(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const dayName = day => new Date(`${day}T12:00:00Z`).toLocaleDateString(locale(), { day: 'numeric', month: 'long', timeZone: 'UTC' });
+// What a person's calls of one kind made this month (cloud/directory.mjs spendKinds), counted in what came out: images,
+// videos, models. Descriptions make no image, so they count calls, as does `earlier`: calls from before the site
+// recorded what each one was, which mix every kind.
+const kindLabel = (item, splitSince) => {
+  const count = item.outputs;
+  if (item.kind === 'nano') return plural(count, 'Nano Banana: {count} image', 'Nano Banana: {count} images');
+  if (item.kind === 'gpt') return plural(count, 'GPT Image: {count} image', 'GPT Image: {count} images');
+  if (item.kind === 'describe') return plural(item.made, '{count} description', '{count} descriptions');
+  if (item.kind === 'upscale') return plural(count, '{count} upscale', '{count} upscales');
+  if (item.kind === 'model3d') return plural(count, '{count} 3D model', '{count} 3D models');
+  if (item.kind === 'video') return plural(count, '{count} video', '{count} videos');
+  if (item.kind === 'earlier') return splitSince ? plural(item.made, '{count} generation before {date}', '{count} generations before {date}', { date: dayName(splitSince) })
+    : plural(item.made, '{count} generation, not split by type', '{count} generations, not split by type');
+  return item.kind;
 };
-const monthName = month => new Date(`${month}-01T12:00:00Z`).toLocaleDateString(language() === 'uk' ? 'uk-UA' : 'en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const percent = share => `${share > 0 && share < 0.01 ? '<1' : Math.round(share * 100)}%`;
 
 // Only the site owner sees this: each person's share of the team's spending on the shared API keys, month by month (UTC).
 export function SpendingDialog({ services, onClose }) {
@@ -28,7 +35,7 @@ export function SpendingDialog({ services, onClose }) {
     services.api(`/api/cloud/spending${month ? `?month=${encodeURIComponent(month)}` : ''}`).then(result => { if (active) setData(result.spending); }).catch(failure => { if (active) setError(failure.message); });
     return () => { active = false; };
   }, [month]);
-  const current = data && data.month === data.today.slice(0, 7), top = data?.people[0]?.usd || 0;
+  const current = data && data.month === data.today.slice(0, 7);
   return <div className="board-modal" data-analytics-area="dialog:Spending" role="dialog" aria-modal="true" aria-labelledby="spending-title" onKeyDown={event => { keepDialogFocus(event); event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
     <div className="share-card team-card spending-card">
       <div className="spending-head">
@@ -46,17 +53,18 @@ export function SpendingDialog({ services, onClose }) {
         </div>
         <h3>{t('People')}</h3>
         <ul className="share-people spending-people">
-          {data.people.map(person => <li key={person.email}>
-            <div className="spending-person">
-              {(() => {
-                const details = [person.name && person.email, current && (person.todayImages > 0 || person.todayUsd > 0) && t('today {images} of {limit} images, {spent}', { images: person.todayImages, limit: data.dailyImages, spent: money(person.todayUsd) })].filter(Boolean).join(' · ');
-                return <span><b>{person.name || person.email}</b>{details && <small>{details}</small>}</span>;
-              })()}
-              <b className="spending-amount">{money(person.usd)}</b>
-            </div>
-            <div className="spending-share" aria-hidden="true"><i style={{ width: `${top ? person.usd / top * 100 : 0}%` }}/></div>
-            <div className="spending-kinds">{person.kinds.map(item => <span key={item.kind} title={item.kind === 'earlier' ? t('Made before the site recorded what each generation was.') : undefined}>{kindLabels[item.kind]?.(item.made) || item.kind}<em>{money(item.usd)}</em></span>)}</div>
-          </li>)}
+          {data.people.map(person => {
+            const share = data.team.usd ? person.usd / data.team.usd : 0;
+            return <li key={person.email}>
+              <div className="spending-person">
+                <span><b>{person.name || person.email}</b>{person.name && <small>{person.email}</small>}</span>
+                <span className="spending-amount"><b>{money(person.usd)}</b><small>{t('{percent} of the team', { percent: percent(share) })}</small></span>
+              </div>
+              <div className="spending-share" aria-hidden="true"><i style={{ width: `${share * 100}%` }}/></div>
+              <div className="spending-kinds">{person.kinds.map(item => <span key={item.kind} title={item.kind === 'earlier' ? t('Made before the site recorded what each generation was.') : undefined}>{kindLabel(item, data.splitSince)}<em>{money(item.usd)}</em></span>)}</div>
+              {current && (person.todayImages > 0 || person.todayUsd > 0) && <small className="spending-today">{t('Today: {images} of {limit} images, {spent}', { images: person.todayImages, limit: data.dailyImages, spent: money(person.todayUsd) })}</small>}
+            </li>;
+          })}
           {!data.people.length && <li className="share-muted">{t('No spending in this month.')}</li>}
         </ul>
       </>}

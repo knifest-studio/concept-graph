@@ -169,6 +169,9 @@ runtimeTest('only the owner sees spending: each person by month and by what they
   assert.deepEqual(seen.people.map(person => [person.email, Math.round(person.usd * 100) / 100, person.made, person.todayImages]), [['admin@studio.example', 2.56, 3, 1], ['new@studio.example', 0.21, 2, 1]]);
   assert.deepEqual(seen.people[0].kinds.map(item => [item.kind, item.made]), [['video', 1], ['earlier', 1], ['describe', 1]]);
   assert.deepEqual(seen.people[1].kinds.map(item => [item.kind, item.made]), [['gpt', 1], ['earlier', 1]]);
+  // Chips count what came out (the refunded GPT call made nothing); the lump of earlier calls is dated from the first recorded kind.
+  assert.deepEqual(seen.people[0].kinds.map(item => [item.kind, item.outputs]), [['video', 1], ['earlier', 0], ['describe', 0]]);
+  assert.equal(seen.people[1].kinds[0].outputs, 1); assert.equal(seen.splitSince, '2026-11-18');
   assert.equal(Math.round(seen.team.usd * 100) / 100, Math.round(directory.nanoUsage('new@studio.example', now).teamSpentUsd * 100) / 100);
   assert.deepEqual(directory.spending('owner@studio.example', '2026-10', now).people.map(person => person.usd), [1.5]);
   assert.equal(directory.spending('owner@studio.example', '2027-01', now).month, '2026-11');
