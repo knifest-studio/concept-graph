@@ -532,3 +532,33 @@ runtimeTest('Video blocks incompatible inputs and over-budget requests before qu
   assert.match((await lead.tool('start_run', { boardId, nodeId: costly.nodeId })).error, /budget/i);
   assert.equal(rooms.get(boardId).document.getMap('runs').size,0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday,0);
 });
+
+runtimeTest('video references reach fal without image decoding, charge input seconds and retain edit history', async t => {
+  const { directory, rooms, files, request, settle } = setup(t, { SITE_OWNER_EMAIL: 'owner@studio.example', FAL_KEY: 'test-fal' });
+  const lead = await connect(request, 'lead@studio.example'), { board } = await lead.tool('create_board', { name: 'Video references' }), boardId = board.id;
+  directory.changeTeamAccess('owner@studio.example', { video: { email: 'lead@studio.example', allowed: true } });
+  const bytes = new Uint8Array([0,0,0,20,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109]), asset = '44444444-4444-4444-4444-444444444444.mp4';
+  files.set('assets/' + asset, { body: bytes, size: bytes.length, arrayBuffer: () => { throw Error('reference MP4 must never be decoded as an image'); } });
+  const shown = await lead.tool('get_board', { boardId });
+  const clip = { id: 'clip', type: 'video', position: { x: 0, y: 0 }, data: { asset, name: 'Uploaded', duration: 8.125, width: 1280, height: 720, uploaded: true } };
+  assert.equal((await lead.tool('apply_graph', { boardId, revision: shown.revision, nodes: [clip], edges: [], groups: [] })).applied, true);
+  const added = await lead.tool('add_video_node', { boardId, prompt: 'Edit #1', model: 'seedance', settings: { duration: 20, aspectRatio: '1:1' }, videoInputs: [{ nodeId: 'clip', role: 'edit' }] });
+  assert.equal(added.generation.applied.duration, 'auto'); assert.equal(added.generation.inputSeconds, 8.125);
+  let submits = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (init.method === 'POST') {
+      submits++; assert.match(url, /seedance-2.5\/reference-to-video/);
+      const payload = JSON.parse(init.body); assert.equal(payload.task, 'editing'); assert.equal(payload.duration, 'auto'); assert.equal(payload.aspect_ratio, 'auto'); assert.equal(payload.prompt, 'Edit @Video1'); assert.equal(payload.image_urls, undefined); assert.match(payload.video_urls[0], /video-inputs.*\.mp4\?token=/);
+      return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' });
+    }
+    if (url.endsWith('/stream')) return new Response('data: {"status":"COMPLETED"}\n\n');
+    if (url.endsWith('/result')) return Response.json({ video: { url: 'https://media.example/out.mp4' } });
+    const response = new Response(bytes); response.arrayBuffer = () => { throw Error('must stream output'); }; return response;
+  });
+  const run = await lead.tool('start_run', { boardId, nodeId: added.nodeId }); assert.ok(run.runId); await settle();
+  const record = await lead.tool('get_run', { boardId, runId: run.runId }); assert.equal(record.status, 'completed'); assert.equal(submits, 1); assert.equal(record.inputs[0].kind, 'video'); assert.equal(record.inputs[0].duration, 8.125); assert.equal(record.inputs[0].role, 'edit');
+  assert.equal(record.usd, added.generation.usd); assert.equal(directory.nanoUsage('lead@studio.example').teamSpentUsd, record.usd);
+  const output = (await lead.tool('get_board', { boardId })).nodes.find(n => n.type === 'video' && n.id !== 'clip'); assert.equal(output.data.duration, 8.125); assert.equal(output.data.videoAspectRatio, 'auto');
+  const bad = await lead.tool('add_video_node', { boardId, prompt: 'Edit #1', model: 'kling', videoInputs: [{ nodeId: 'clip', role: 'edit' }] });
+  assert.match((await lead.tool('start_run', { boardId, nodeId: bad.nodeId })).error, /Only Seedance/); assert.equal(submits, 1);
+});

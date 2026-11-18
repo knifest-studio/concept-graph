@@ -1,6 +1,6 @@
 // The six newest updates, newest first. Keep IDs stable: seeing this list acknowledges only these entries.
 export const whatsNewEntries = [
-  { id: 'video-node', title: 'One Video node, four models', benefit: 'Choose MiniMax, Omni, Kling or Seedance. Assign Start, End, Middle or Reference to each image; settings stay stored when switching models, with visible limits and an approximate cost before generating.' },
+  { id: 'video-node', title: 'One Video node, four models', benefit: 'Choose MiniMax, Omni, Kling or Seedance. Connect images and MP4 videos with stored roles; Seedance can edit or extend a video. See limits and an approximate cost, including input video, before generating.' },
   { id: 'cloud-update-notice', title: 'Know when the app updates', benefit: 'A small notice lets you reload for the latest version when you are ready.' },
   { id: 'resize-all-references', title: 'Resize all and generate', benefit: 'If references are too large to reduce automatically, resize them together and continue generating with one click. You can undo the resize.' },
   { id: 'quieter-generation-chip', title: 'Ready with the team key', benefit: 'The top bar shows Ready to generate when your chosen generator can use the team key. Click it any time to connect Codex or an AI agent.' },

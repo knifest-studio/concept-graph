@@ -1,4 +1,4 @@
-import { videoStatus } from './video.mjs';
+import { videoStatus, storeVideoMp4 } from './video.mjs';
 import { verifyVideoInput } from './auth.mjs';
 import { getServerByName, routePartykitRequest } from 'partyserver';
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
@@ -194,11 +194,18 @@ async function route(request, env) {
   }
   if (path.startsWith('/api/video-inputs/')) {
     const asset = path.slice('/api/video-inputs/'.length);
-    if (!/^[\da-f-]{36}\.(png|jpg|webp)$/.test(asset) || !await verifyVideoInput(url.searchParams.get('token'), asset, env.SESSION_SECRET)) return error('Image link expired or invalid.', 403);
+    if (!/^[\da-f-]{36}\.(png|jpg|webp|mp4)$/.test(asset) || !await verifyVideoInput(url.searchParams.get('token'), asset, env.SESSION_SECRET)) return error('Image link expired or invalid.', 403);
     if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
-    const object = await env.FILES.get(`assets/${asset}`);
+    // Only a request that asks for a byte range gets one (206); a plain fetch, as fal makes, gets the whole file (200).
+    const ranged = asset.endsWith('.mp4') && request.headers.has('Range');
+    const object = await env.FILES.get(`assets/${asset}`, ranged ? { range: request.headers } : undefined);
     if (!object) return error('Asset not found.', 404);
-    return new Response(method === 'HEAD' ? null : object.body, { headers: { 'Content-Type': assetTypes[asset.split('.').pop()], 'Content-Length': String(object.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    const headers = { 'Content-Type': assetTypes[asset.split('.').pop()], 'Content-Length': String(object.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+    if (asset.endsWith('.mp4')) {
+      headers['Accept-Ranges'] = 'bytes';
+      if (ranged && object.range) { const range = object.range, offset = 'suffix' in range ? object.size - range.suffix : range.offset ?? 0, length = range.length ?? object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; headers['Content-Length'] = String(length); }
+    }
+    return new Response(method === 'HEAD' ? null : object.body, { status: ranged && object.range ? 206 : 200, headers });
   }
   const protectedPath = path.startsWith('/api/') || path.startsWith('/assets/') || path.startsWith('/downloads/') || path.startsWith('/parties/');
   const user = protectedPath ? await sessionUser(request, env.SESSION_SECRET) : null;
@@ -327,6 +334,18 @@ async function route(request, env) {
   }
   if (path === '/api/assets') {
     if (method !== 'POST') return error('Method not allowed.', 405);
+    if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'video/mp4') {
+      const origin = request.headers.get('Origin');
+      if (origin && origin !== url.origin) return error('Invalid origin.', 403);
+      const boardId = url.searchParams.get('boardId');
+      if (!boardPattern.test(boardId || '')) return error('Choose a cloud board to upload a video.', 400);
+      const board = await directory(env).boardFor(boardId, user.email);
+      if (!board) return error('Board not found.', 404);
+      if (!canEdit(board.role)) return error('You can only view this board.', 403);
+      const asset = `${crypto.randomUUID()}.mp4`;
+      try { return json({ asset, bytes: await storeVideoMp4(request, env.FILES, asset, request.signal) }); }
+      catch (cause) { return error(cause.message, 400); }
+    }
     if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'model/gltf-binary') {
       const boardId = url.searchParams.get('boardId');
       if (!boardPattern.test(boardId || '')) return error('Choose a cloud board to upload a 3D model.', 400);
@@ -374,7 +393,9 @@ async function route(request, env) {
     const asset = path.slice('/assets/'.length);
     if (!assetPattern.test(asset)) return error('Asset not found.', 404);
     if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
-    const object = await env.FILES.get(`assets/${asset}`, asset.endsWith('.mp4') ? { range: request.headers } : undefined);
+    // Only a request that asks for a byte range gets one (206); a plain fetch, as fal makes, gets the whole file (200).
+    const ranged = asset.endsWith('.mp4') && request.headers.has('Range');
+    const object = await env.FILES.get(`assets/${asset}`, ranged ? { range: request.headers } : undefined);
     if (!object) return error('Asset not found.', 404);
     const headers = {
       'Content-Type': assetTypes[asset.split('.').pop()],
@@ -387,7 +408,7 @@ async function route(request, env) {
     // https://developers.cloudflare.com/r2/api/workers/workers-api-reference/#ranged-reads
     if (asset.endsWith('.mp4')) {
       headers['Accept-Ranges'] = 'bytes';
-      if (object.range) { const { offset, length } = object.range; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; return new Response(method === 'HEAD' ? null : object.body, { status: 206, headers: { ...headers, 'Content-Length': String(length) } }); }
+      if (ranged && object.range) { const range = object.range, offset = 'suffix' in range ? object.size - range.suffix : range.offset ?? 0, length = range.length ?? object.size - offset; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; return new Response(method === 'HEAD' ? null : object.body, { status: 206, headers: { ...headers, 'Content-Length': String(length) } }); }
     }
     return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }

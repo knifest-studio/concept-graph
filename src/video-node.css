@@ -55,3 +55,6 @@
 .video-info{font-size:10px;overflow-wrap:anywhere;padding:0 12px 10px;color:var(--muted)}
 .video-node.collapsed-node{width:72px;height:72px}
 .video-node.collapsed-node header{display:none}
+
+.video-input-preview{display:grid;place-items:center;gap:2px;color:var(--muted)}
+.video-input-preview em{font-size:9px;font-style:normal;font-variant-numeric:tabular-nums}

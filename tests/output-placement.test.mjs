@@ -284,3 +284,11 @@ test('two big runs started together on a full screen never land on top of each o
   graph = deliver(graph, 'nano', 8); graph = deliver(graph, 'gpt', 8);
   assert.deepEqual(outputs(graph, 'gpt')[0].position, gpt); assert.deepEqual(outputs(graph, 'nano')[0].position, nano);
 });
+
+test('a result pulled onto a narrow screen never covers the prompt it came from', () => {
+  // The prompt sits at the screen's right edge with no room right of it or under it on screen: pulling the result back
+  // on screen would lay it over the prompt, so it stays beside the prompt instead.
+  const edge = { x: -400, y: -100, width: 760, height: 360 }, at = placed(board([prompt('p', 0, 0, { height: 300 })]), job({ view: edge }));
+  assert.ok(!overlap({ ...at, width: 310, height: 310 }, box(board([prompt('p', 0, 0, { height: 300 })]).nodes[0])));
+  assert.equal(at.y, 0); assert.ok(at.x >= 310);
+});
