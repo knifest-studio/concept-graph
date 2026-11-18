@@ -56,6 +56,8 @@ export class Directory extends DurableObject {
     // People without image access who asked for it, shown to admins in Team access until access is given or the request dismissed.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS access_requests (email TEXT PRIMARY KEY, name TEXT, requestedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    // When each person's AI agent (MCP) last called a tool, so they can see it is connected and working (cloud/agents.mjs).
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS agent_activity (email TEXT PRIMARY KEY, lastSeen INTEGER NOT NULL)');
     // Only the owner keeps 3D on deploy; record the seed so a later revocation survives room restarts.
     if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'model3dImported'").toArray().length) {
       const now = new Date().toISOString();
@@ -88,6 +90,11 @@ export class Directory extends DurableObject {
     return this.ctx.storage.sql.exec('SELECT 1 FROM site_admins WHERE email = ?', address).toArray().length ? 'admin' : null;
   }
 
+  agentSeen(person, at) {
+    const address = email(person);
+    if (address && Number.isSafeInteger(at)) this.ctx.storage.sql.exec('INSERT INTO agent_activity (email, lastSeen) VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET lastSeen = MAX(lastSeen, excluded.lastSeen)', address, at);
+  }
+  agentLastSeen(person) { return this.ctx.storage.sql.exec('SELECT lastSeen FROM agent_activity WHERE email = ?', email(person) || '').toArray()[0]?.lastSeen ?? null; }
   nanoEntries() { return this.ctx.storage.sql.exec('SELECT entry, addedBy, addedAt FROM nano_access ORDER BY entry').toArray().map(row => ({ ...row })); }
   nanoAllowed(person) { return nanoAllowed(person, this.nanoEntries().map(row => row.entry).join(',')); }
   model3dEntries() { return this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM model3d_access ORDER BY email').toArray().map(row => ({ ...row })); }

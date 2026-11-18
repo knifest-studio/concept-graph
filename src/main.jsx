@@ -24,7 +24,8 @@ import { cloudHelperDownload, fetchHelperArchive, helperOutdated } from './helpe
 import { detectPlatform, loopbackBlocked } from './platform-detection.mjs';
 import { useCanvasImage, useImageButtonZoom } from './canvas-image-hooks.jsx';
 import { NodeContextMenu } from './NodeContextMenu.jsx';
-import { boardFromPath, nodeFromHash, nodePath } from './cloud-boards.mjs';
+import { agoForms, boardFromPath, nodeFromHash, nodePath, relativeTime } from './cloud-boards.mjs';
+import { agentShownMs } from './BoardPresence.jsx';
 import { AnnotationTools, ArrowNode, AuthorBadge, ColorPicker, DrawingNode, LightAnnotation, SectionPreview, ShapeNode, StickyNode, StampNode, StrokePreview } from './BoardAnnotations.jsx';
 import { arrowPalette, arrowPosition, shiftArrow, boardAuthor, stamps, drawingFromStroke, isAnnotation, penPalette, reconcileArrows, shapeDefault, shapePalette, simplifyStroke, stickyPalette, contrastColor, reconcileStampAttachments } from './annotations.mjs';
 import { cleanSections, maxSections, mergeSections, nextSectionName, sectionDefault, sectionMinimum, sectionPalette } from './sections.mjs';
@@ -309,6 +310,7 @@ function ExpandedImageNode({ id, data, selected }) {
     {image.src ? <img ref={imageElement} className="image-content" src={image.src} style={{ aspectRatio }} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt={imageName({ data })} draggable="false"/> : <span className="image-content image-placeholder" style={{ aspectRatio: aspectRatio || '1' }}/>}
     {data.mask && <ImageMask data={data} preview={hovered || focused || selected}/>}<div className="image-shade"/><ResolutionBadge pixels={data.pixels}/>
     <button className="image-collapse nodrag" type="button" aria-label={t('Collapse image node')} data-tooltip={t('Collapse node')} onClick={event => { event.stopPropagation(); canvas.toggleNodeCollapsed(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="collapse" size={15}/></button>
+    {image.src && <button className="image-download nodrag" type="button" aria-label={t('Download image')} data-tooltip={t('Download image')} onClick={event => { event.stopPropagation(); canvas.downloadNodeImage(id); }} onDoubleClick={event => event.stopPropagation()}><Icon name="download" size={15}/></button>}
     <button className="image-expand nodrag" style={{ '--inverse-zoom': expandScale }} data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} onClick={() => canvas.view(id)}><Icon name="expand" size={24}/></button>
     <button ref={variationButton} type="button" className={`image-prompt-from nodrag ${view.highlight ? 'onboarding-highlight' : ''}`} data-tooltip={t('New prompt that uses this image as a reference')} onClick={event => { event.stopPropagation(); canvas.promptFrom(id); }} onDoubleClick={event => event.stopPropagation()}>{t('+ Prompt from this')}</button>
     <Handle type="source" position={Position.Right} aria-label={t('Connect image as reference')}/>
@@ -530,6 +532,7 @@ function SlideshowStage({ id, slide, count }) {
     {image.src ? <img ref={ref} key={slide.id} className="slideshow-image" src={image.src} referrerPolicy="no-referrer" crossOrigin={hosted ? 'anonymous' : undefined} alt="" draggable="false"/> : <span className="slideshow-image image-placeholder"/>}
     <div className="image-shade"/>
     <button className="image-expand nodrag" data-tooltip={t('View fullscreen')} aria-label={t('Open image fullscreen')} {...press(() => canvas.view(slide.id))}><Icon name="expand" size={24}/></button>
+    {image.src && <button type="button" className="image-download nodrag" aria-label={t('Download image')} data-tooltip={t('Download image')} {...press(() => canvas.downloadNodeImage(slide.id))}><Icon name="download" size={15}/></button>}
     {count > 1 && <><button type="button" className="slideshow-step previous nodrag" data-analytics-repeat aria-label={t('Previous image')} data-tooltip={t('Previous image')} {...press(() => canvas.showSlide(id, -1))}><Icon name="chevron" size={18}/></button>
       <button type="button" className="slideshow-step next nodrag" data-analytics-repeat aria-label={t('Next image')} data-tooltip={t('Next image')} {...press(() => canvas.showSlide(id, 1))}><Icon name="chevron" size={18}/></button></>}
     <button type="button" className="image-prompt-from nodrag" data-tooltip={t('New prompt that uses this image as a reference')} {...press(() => canvas.promptFrom(slide.id))}>{t('+ Prompt from this')}</button>
@@ -558,7 +561,8 @@ function SectionNode({ id, data, selected }) {
     {sectionEdges.map(side => <i key={side} className={`section-edge ${side} section-handle`}/>)}
     {/* Zoomed out the visible title is drawn on top (SectionTitles); this copy stays under it, invisible, so the title still drags and renames. */}
     <div className={`section-label section-handle${full || editing ? '' : ' ghost'}`}>{editing ? <RenameField name={data.name} label={t('Section name')} className="section-name-input" onSave={name => canvas.editSection(id, { name })} onDone={() => canvas.renameSection(null)}/> : <strong tabIndex={0} role="button" aria-label={t('Rename section')} title={t('Drag to move the section with its contents · double-click to rename')} onDoubleClick={() => canvas.renameSection(id)} onKeyDown={event => { if (event.key === 'Enter') { event.stopPropagation(); canvas.renameSection(id); } }}>{data.name}</strong>}{selected && !editing && <ColorPicker color={data.color} colors={sectionPalette} label={t('Section color')} allowDefault custom onChange={color => canvas.editSection(id, { color })}/>}</div>
-    {full && <NodeResizer isVisible={selected && !editing} minWidth={sectionMinimum.width} minHeight={sectionMinimum.height} handleClassName="section-resize-handle" lineClassName="section-resize-line" onResizeStart={canvas.sectionResizeStart} onResizeEnd={canvas.sectionResizeEnd}/>}
+    {/* Zoomed out a large section is easiest to resize, so a selected one keeps its handles at every level of detail. */}
+    {(full || selected) && <NodeResizer isVisible={selected && !editing} minWidth={sectionMinimum.width} minHeight={sectionMinimum.height} handleClassName="section-resize-handle" lineClassName="section-resize-line" onResizeStart={canvas.sectionResizeStart} onResizeEnd={canvas.sectionResizeEnd}/>}
   </div></NodeContextMenu>;
 }
 
@@ -581,11 +585,25 @@ function SelectionBounds({ nodes }) {
   return <ViewportPortal><div ref={grip} className="selection-grip" style={place} onClick={click} onContextMenu={event => event.preventDefault()}/><div className="selection-bounds" style={place} aria-hidden="true">{['nw', 'ne', 'sw', 'se'].map(corner => <i key={corner} className={corner}/>)}</div></ViewportPortal>;
 }
 
+// Zoomed out, the title people see is this copy on top, while the section's own title lies under any card that covers
+// it, so a press there picked the card (Nov 18: a section could not be selected or resized). Presses on the copy go to
+// the section's own title, as if it had been pressed: a click selects, a drag moves, a double-click renames.
+const forwardToSection = id => {
+  const target = () => document.querySelector(`.react-flow__node-section[data-id="${CSS.escape(id)}"] .section-label strong`);
+  const forward = event => {
+    const element = target();
+    if (!element) return;
+    event.preventDefault(); event.stopPropagation();
+    element.dispatchEvent(new MouseEvent(event.type, { bubbles: true, cancelable: true, view: window, detail: event.detail, button: event.button, buttons: event.buttons,
+      clientX: event.clientX, clientY: event.clientY, screenX: event.screenX, screenY: event.screenY, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, altKey: event.altKey }));
+  };
+  return { onMouseDown: forward, onClick: forward, onDoubleClick: forward, onContextMenu: forward };
+};
 function SectionTitles({ sections }) {
   const { detail, renaming } = useCanvasValue(state => ({ detail: state.detail, renaming: state.renaming }), shallowEqual);
   const zoom = useStore(state => detail === 'full' ? 1 : state.transform[2]), shown = useMemo(() => detail === 'full' ? null : visibleTitles(sections, zoom), [sections, zoom, detail]);
   if (detail === 'full' || !sections.length) return null;
-  return <ViewportPortal>{sections.map(frame => frame.id === renaming || !shown.has(frame.id) ? null : <div key={frame.id} className={`section-title${frame.selected ? ' selected' : ''}${frame.data.color ? ' colored' : ''}`} style={{ transform: `translate(${frame.position.x}px, ${frame.position.y}px)`, '--frame-width': `${frame.width}px`, ...sectionStyle(frame.data.color) }} aria-hidden="true"><span>{frame.data.name}</span></div>)}</ViewportPortal>;
+  return <ViewportPortal>{sections.map(frame => frame.id === renaming || !shown.has(frame.id) ? null : <div key={frame.id} className={`section-title${frame.selected ? ' selected' : ''}${frame.data.color ? ' colored' : ''}`} style={{ transform: `translate(${frame.position.x}px, ${frame.position.y}px)`, '--frame-width': `${frame.width}px`, ...sectionStyle(frame.data.color) }} aria-hidden="true"><span {...forwardToSection(frame.id)}>{frame.data.name}</span></div>)}</ViewportPortal>;
 }
 
 function AnnotationNode(props) {
@@ -804,6 +822,21 @@ function TemplateDetails({ template, library = false, onClose }) {
 function AgentConnect({ onClose, cloud = false }) {
   const [setup, setSetup] = useState(cloud ? { available: true } : null), [error, setError] = useState(''), [copyStatus, setCopyStatus] = useState('');
   const promptRef = useRef(null), endpoint = `${location.origin}/mcp`;
+  // On team boards: which agents this person connected (their OAuth grants), and when one last called a tool.
+  const [agents, setAgents] = useState(null), [agentsError, setAgentsError] = useState(''), [removing, setRemoving] = useState('');
+  useEffect(() => {
+    if (!cloud) return;
+    let active = true;
+    api('/api/agents').then(value => { if (active) setAgents(value); }).catch(() => { if (active) setAgentsError(t('Could not load your connected agents.')); });
+    return () => { active = false; };
+  }, [cloud]);
+  const disconnect = async agent => {
+    setRemoving(agent.id); setAgentsError('');
+    try { await api(`/api/agents/${encodeURIComponent(agent.id)}`, { method: 'DELETE' }); setAgents(current => ({ ...current, agents: current.agents.filter(item => item.id !== agent.id) })); }
+    catch (cause) { setAgentsError(cause.message || t('Could not disconnect the agent.')); }
+    finally { setRemoving(''); }
+  };
+  const ago = value => relativeTime(new Date(value).toISOString(), Date.now(), { recently: t('recently'), now: t('just now'), ago: (count, unit) => plural(count, ...agoForms[unit]) });
   useEffect(() => {
     if (cloud) return;
     let active = true;
@@ -829,6 +862,15 @@ function AgentConnect({ onClose, cloud = false }) {
   return <div className="board-modal" role="dialog" aria-label={t('Connect MCP')} aria-modal="true" aria-labelledby="agent-connect-title" onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
     <div className="agent-connect-card">
       <div className="agent-connect-heading"><div><span className="eyebrow">{t('MCP CONNECTION')}</span><h2 id="agent-connect-title">{t('Connect MCP')}</h2></div><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><Icon name="close" size={17}/></button></div>
+      {cloud && <section className="agent-status" aria-label={t('Your connected agents')}>
+        {agentsError ? <p className="agent-connect-error" role="alert">{agentsError}</p> : null}
+        {!agents ? !agentsError && <p>{t('Checking your connected agents…')}</p>
+          : agents.agents.length ? <>
+            <p className={`agent-status-line${agents.lastUsed && Date.now() - agents.lastUsed < agentShownMs ? ' active' : ''}`}><span className="agent-status-dot" aria-hidden="true"/>{agents.lastUsed ? t('Your agent last worked {time}.', { time: ago(agents.lastUsed) }) : t('Connected, not used yet.')}</p>
+            <ul className="agent-list">{agents.agents.map(agent => <li key={agent.id}><span><b>{agent.client || t('AI agent')}</b>{agent.connectedAt && <small>{t('connected {time}', { time: ago(agent.connectedAt) })}</small>}</span>
+              <button type="button" className="ghost-button" aria-label={t('Disconnect agent')} disabled={removing === agent.id} onClick={() => disconnect(agent)}>{removing === agent.id ? t('Disconnecting…') : t('Disconnect')}</button></li>)}</ul>
+          </> : <p className="agent-status-line"><span className="agent-status-dot" aria-hidden="true"/>{agents.available === false ? t('Agents cannot connect at this address.') : t('No agent is connected yet.')}</p>}
+      </section>}
       <p>{cloud ? t('Copy this message and send it to Claude Code, Codex or another agent. It connects with your Google sign-in, and you approve access in the browser.') : t('Copy this message and send it to Codex or Claude Code running on this computer. The agent can set up the connection for you.')}</p>
       {error ? <p className="agent-connect-error" role="alert">{error}</p> : !setup ? <p>{t('Loading connection details…')}</p> : <>
         {!setup.available && <p className="agent-connect-error" role="alert">{t('MCP is unavailable in this window. Close any other Concept Graph window and restart the app.')}</p>}
@@ -1952,6 +1994,8 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     checkpoint();
     putNodes(current => current.some(node => node.selected) ? current.map(deselected) : current); putGroups(current => current.map(deselected));
     putSections(current => [...current.map(deselected), section]); markDirty();
+    // People named a new section first thing (Nov 18: 4 of 5 new sections had their title clicked within seconds), so its name opens for typing.
+    setRenaming(section.id);
     return section;
   };
   // Shift S and the menu wrap the selection; the menu of an unselected item wraps only that item, like Figma's right-click selection.
@@ -2790,12 +2834,14 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
     putEdges(current => [...current, edge]); if (cloud) track('connections_made', { count: 1 }); setFocusId(node.id); markDirty();
     if (fromNode.type === 'image') guide.report({ type: 'variation' });
   };
-  const downloadImage = async asset => {
+  const downloadImage = async (asset, name = '') => {
     try {
       const response = await request(`/assets/${asset}`);
       if (!response.ok) throw new Error(t('Could not download image.'));
       const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
-      link.href = url; link.download = asset;
+      // Saved under the image's name when it has one, so a folder of downloads still says what each image is.
+      const base = String(name).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+      link.href = url; link.download = base ? `${base}.${asset.split('.').pop()}` : asset;
       document.body.appendChild(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (error) { notify(error.message); }
@@ -3066,7 +3112,9 @@ function App({ boardId, boards, updateBoards, selectBoard, theme, setTheme, wait
   // re-renders no card by itself; changing values reach cards through the canvas store below.
   const latest = useRef(null);
   const rename = value => { if (value === null || !readOnlyRef.current) setRenaming(value); };
-  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), videoImage: imageId => addVideo([imageId]), setVideo, setVideoSpeed, setVideoRole, disconnectVideo, learnVideoMetadata, setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, requestAccess, setGenerationSettings, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
+  latest.current = { cropImage: nodeId => editImage(nodeId, 'crop'), maskImage: nodeId => editImage(nodeId, 'mask'), resizeImage: nodeId => editImage(nodeId, 'resize'), restoreImageSize, removeMask, renameGroup: rename, renameSection: rename, editGroup, editSection, unwrapSection, wrapInSection, sectionResizeStart, sectionResizeEnd, editAnnotation, removeNode: nodeId => removeNodes([nodeId]), fixReadiness, promptFrom, describeImage: imageId => addDescribe([imageId]), upscaleImage: imageId => addUpscale([imageId]), model3dImage: imageId => addModel3d([imageId]), videoImage: imageId => addVideo([imageId]), setVideo, setVideoSpeed, setVideoRole, disconnectVideo, learnVideoMetadata, setModeler, saveModelView, turnModel, focusModelSource: id => { if (nodeRef.current.some(node => node.id === id && node.type === 'image')) { setModelView(null); focusNode(id, 'image'); } }, openModel: (id, orbit) => setModelView({ id, orbit }), setUpscale, openRunDetails, checkpoint, cancelCaption, copyImage, copyNodeId,
+    // The card's Download saves the image as shown, at full size: a resized copy's original, never the smaller copy.
+    downloadNodeImage: nodeId => { const node = nodeRef.current.find(item => item.id === nodeId && item.type === 'image'); if (node?.data.asset) downloadImage(node.data.unresized?.asset || node.data.asset, imageName(node)); }, arrange, duplicateNode, saveTemplateFromNode, switchTemplate, setGenerator, requestAccess, setGenerationSettings, clearFocus: () => setFocusId(null), followPeer, returnTo, setVariants, setPromptHeight, setArrowEnd, learnAspect: (asset, aspect) => setLearnedAspects(current => Math.abs((current.get(asset) || 0) - aspect) < .005 ? current : new Map(current).set(asset, aspect)), toggleNodeCollapsed, toggleGroup, ungroup, toggleSlideshow, showSlide,
     chatNode, focusNode, copyNodeLink,
     editText: (nodeId, text) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, text } } : node)); markDirty(); },
     editCaption: (nodeId, caption) => { if (mcpLocked.current) return; putNodesSoon(current => current.map(node => node.id === nodeId ? { ...node, data: { ...node.data, caption } } : node)); markDirty(); },

@@ -55,6 +55,12 @@
 @media(max-width:600px){.cloud-home-header .account-menu{margin-left:auto}}
 .presence-person,.presence-more{position:relative;margin-left:-4px;padding:0;border-radius:50%;box-shadow:0 0 0 2px var(--panel);transition:transform .12s ease}.presence-person:hover,.presence-person:focus-visible,.presence-more:hover,.presence-more[aria-expanded="true"]{z-index:1;transform:translateY(-2px)}
 .presence-avatar{width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:650;letter-spacing:.2px}
+/* Someone's AI agent at work: their avatar with a robot badge and a dashed ring, set a little apart from the people. */
+.presence-agent{position:relative;display:inline-flex;margin-left:6px;border-radius:50%;box-shadow:0 0 0 2px var(--panel),0 0 0 3.5px var(--purple)}.presence-agent+.presence-agent{margin-left:9px}
+.presence-agent .presence-avatar{opacity:.92}
+.presence-agent-mark{position:absolute;right:-5px;bottom:-4px;display:grid;place-items:center;width:17px;height:17px;border-radius:50%;background:var(--purple);color:#fff;box-shadow:0 0 0 2px var(--panel);animation:agent-working 1.6s ease-in-out infinite}
+@keyframes agent-working{50%{transform:scale(1.12)}}
+@media(prefers-reduced-motion:reduce){.presence-agent-mark{animation:none}}
 .presence-more{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:var(--soft-purple);color:var(--purple);font-size:10px;font-weight:650}
 .presence-panel{position:absolute;left:0;top:calc(100% + 12px);z-index:60;width:250px;max-width:calc(100vw - 24px);max-height:min(60vh,420px);overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow);padding:6px}
 .presence-panel>strong{display:block;padding:8px 10px 6px;font-size:10px;font-weight:600;color:var(--muted)}.presence-panel [role="menuitem"]{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 10px;border-radius:7px}.presence-panel [role="menuitem"]:hover,.presence-panel [role="menuitem"]:focus-visible{background:var(--soft-purple);outline:none}
