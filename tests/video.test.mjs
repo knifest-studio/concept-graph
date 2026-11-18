@@ -241,6 +241,9 @@ test('video cards render clamps and role errors, and light/collapsed results nev
   const clip = clipInput('clip', 8, { poster: png }), editing = render(VideoPrompt, { text: 'Edit #1', task: 'video', videoModel: 'seedance', duration: 20, videoRoles: { clip: 'edit' } }, { videoInputs: new Map([['v', [clip]]]) });
   assert.match(editing, /Reference video/); assert.match(editing, /Edit this video/); assert.match(editing, /Extend this video/); assert.doesNotMatch(editing, /Start frame/);
   assert.match(editing, /Includes 8 s of input video/); assert.match(editing, /8 s · ≈\$4.54/); assert.match(editing, /From video/); assert.match(editing, /Editing follows/); assert.doesNotMatch(editing, /auto s|<video|src="[^"]*\.mp4/);
+  const walk = render(VideoPrompt, { text: 'faster', task: 'video', videoModel: 'minimax' }, { videoInputs: new Map([['v', [clipInput('walk', 5.2, { width: 752, height: 800 })]]]) });
+  assert.match(walk, /<option value="auto" selected="">Auto<\/option>/); assert.match(walk, /Follows the inputs/); assert.doesNotMatch(walk, /Shape .* for this model/);
+  const omniWalk = render(VideoPrompt, { text: 'faster', task: 'video', videoModel: 'omni' }, { videoInputs: new Map([['v', [clipInput('walk', 5.2, { width: 752, height: 800 })]]]) }); assert.match(omniWalk, /9:16 from the inputs/);
   const uploaded = render(VideoNode, clipNode().data); assert.match(uploaded, /Flight.mp4/); assert.match(uploaded, /1280 × 720/); assert.doesNotMatch(uploaded, /≈\$0.00|MiniMax H3/);
   setLanguage('uk');const uk=render(VideoPrompt,target.data,{videoInputs:new Map([['v',inputs]])});assert.match(uk,/Згенерувати відео на 10 с/);assert.match(uk,/Початковий кадр/);assert.doesNotMatch(uk,/Generate a 10/);
 });
@@ -411,4 +414,19 @@ test('a video dragged from its output into empty space starts a node, like image
   const { edgeDropCreatesPrompt } = await import('../src/canvas.mjs');
   const drop = type => edgeDropCreatesPrompt({ isValid: false, fromNode: { id: 'v', type }, fromHandle: { type: 'source' } }, true);
   assert.equal(drop('video'), true); assert.equal(drop('image'), true); assert.equal(drop('model'), false);
+});
+
+test('Auto format keeps the shape of the inputs instead of forcing 16:9', () => {
+  // A portrait walk cycle as a MiniMax reference must not be re-framed to 16:9 (Nov 18: the background changed).
+  const portrait = clipInput('walk', 5.184, { width: 752, height: 800 });
+  const minimax = resolveClips('minimax', [portrait]);
+  assert.equal(minimax.requested.videoAspectRatio, 'auto'); assert.equal(minimax.applied.videoAspectRatio, 'auto'); assert.deepEqual(minimax.unsupported, {});
+  assert.equal(videoInput(minimax, 'make it faster', ['https://x/walk.mp4']).aspect_ratio, 'adaptive');
+  assert.equal(videoInput(resolveClips('kling', [portrait]), 'x', ['https://x/walk.mp4']).aspect_ratio, 'auto');
+  assert.equal(resolveClips('omni', [portrait]).applied.videoAspectRatio, '9:16');
+  assert.equal(resolveClips('omni', [clipInput()]).applied.videoAspectRatio, '16:9');
+  // A chosen shape is still sent as chosen; text-only runs stay 16:9 without a clamp, even when Auto was picked.
+  assert.equal(videoInput(resolveClips('minimax', [portrait], {}, { videoAspectRatio: '1:1' }), 'x', ['https://x/walk.mp4']).aspect_ratio, '1:1');
+  const text = resolveVideo({ data: { task: 'video', videoModel: 'minimax', videoAspectRatio: 'auto' } }, []);
+  assert.equal(text.applied.videoAspectRatio, '16:9'); assert.deepEqual(text.unsupported, {}); assert.equal(videoInput(text, 'x', []).aspect_ratio, '16:9');
 });
