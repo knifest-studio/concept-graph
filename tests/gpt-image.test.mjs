@@ -140,7 +140,7 @@ runtimeTest('stale and multiple masks fail before quota reservation or a paid re
 });
 
 test('settings use the company key, the existing limits and only a loopback endpoint override', () => {
-  assert.deepEqual(gptImageSettings({}), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: 'https://api.openai.com' });
+  assert.deepEqual(gptImageSettings({}), { configured: false, dailyImages: 300, monthlyUsd: 300, endpoint: 'https://api.openai.com' });
   assert.deepEqual(gptImageSettings({ OPENAI_API_KEY: 'key', NANO_BANANA_DAILY_IMAGES: '2', NANO_BANANA_MONTHLY_USD: '1.25', GPT_IMAGE_ENDPOINT: 'http://127.0.0.1:8789/path' }),
     { configured: true, dailyImages: 2, monthlyUsd: 1.25, endpoint: 'http://127.0.0.1:8789' });
   assert.equal(gptImageSettings({ OPENAI_API_KEY: '  ', GEMINI_API_KEY: 'key' }).configured, false);
@@ -298,7 +298,7 @@ function setup(t, extra = {}, data, refs) {
   t.after(() => database.close());
   const sql = { exec(query, ...args) { const rows = database.prepare(query).all(...args).map(row => ({ ...row })); return { toArray: () => rows }; } };
   let directory, room;
-  const env = { SESSION_SECRET: 'test', OPENAI_API_KEY: 'company-key', GEMINI_API_KEY: 'gemini-key', NANO_BANANA_ALLOWED: '@studio.example',
+  const env = { SESSION_SECRET: 'test', OPENAI_API_KEY: 'company-key', GEMINI_API_KEY: 'gemini-key', NANO_BANANA_ALLOWED: '@studio.example', NANO_BANANA_DAILY_IMAGES: '100', NANO_BANANA_MONTHLY_USD: '100',
     Directory: { idFromName: name => name, get: () => directory }, BoardRoom: { idFromName: name => name, get: () => room },
     FILES: { get: async key => files.has(key) ? { size: files.get(key).length, arrayBuffer: async () => files.get(key).slice().buffer } : null, put: async (key, bytes) => files.set(key, new Uint8Array(bytes)) }, ...extra };
   directory = new Directory({ storage: { sql } }, env);

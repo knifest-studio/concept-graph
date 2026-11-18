@@ -197,6 +197,14 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const refreshSharing = () => services.api(`/api/cloud/boards/${encodeURIComponent(boardId)}/sharing`).then(result => onSharing(result.sharing)).catch(() => {});
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted, refreshSharing };
   const [nano, setNano] = useState(undefined), nanoSoon = useRef(() => {});
+  // A voice invite link (?voice=1) opens the board with its voice panel open. Joining still takes a click: browsers grant
+  // the microphone only after one. The parameter is removed so a reload or a copied address does not reopen the panel.
+  const [voiceLink] = useState(() => {
+    const url = new URL(location.href);
+    if (url.searchParams.get('voice') !== '1') return false;
+    url.searchParams.delete('voice'); history.replaceState(history.state, '', url.href);
+    return true;
+  });
   useEffect(() => {
     // Shared site-provider allowances change with teammates' runs and the UTC day, so they are re-read.
     let request = 0, timer = 0;
@@ -313,10 +321,11 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     };
     // Calling a teammate (a presence ID) or everyone ('all') to where this person is looking. The room names the caller and
     // answers with how many it reached; each person called later says whether they are coming.
-    next.callAttention = (to, name) => {
+    // With `voice`, the call invites them to the board's voice chat instead.
+    next.callAttention = (to, name, voice = false) => {
       const local = provider.awareness.getLocalState(), spot = local?.cursor || local?.view || null;
-      next.calling = { name, everyone: to === 'all', coming: [], later: [] };
-      provider.sendMessage(JSON.stringify({ type: 'attention', to, page: local?.page ?? null, spot }));
+      next.calling = { name, everyone: to === 'all', voice, coming: [], later: [] };
+      provider.sendMessage(JSON.stringify({ type: 'attention', to, page: local?.page ?? null, spot, ...(voice ? { voice: true } : {}) }));
     };
     next.answerCall = (id, answer) => provider.sendMessage(JSON.stringify({ type: 'attention-reply', id, answer }));
     next.ping = spot => {
@@ -328,16 +337,20 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       const calling = next.calling, names = list => list.join(', ');
       if (value.type === 'attention') {
         if (typeof value.id !== 'string' || typeof value.from?.name !== 'string' || !Number.isSafeInteger(value.from?.clientId)) return;
-        setCall({ id: value.id, from: value.from, everyone: value.everyone === true, page: typeof value.page === 'string' ? value.page : null, spot: value.spot || null });
+        // Someone already in voice has nothing to answer when everyone is invited.
+        if (value.voice === true && next.voiceStore?.get()?.joined) return;
+        setCall({ id: value.id, from: value.from, everyone: value.everyone === true, voice: value.voice === true, page: typeof value.page === 'string' ? value.page : null, spot: value.spot || null });
         const sounds = soundPreferenceKey(`cloud:${user.name}`);
         if (readSoundPreference(localStorage, sounds)) { unlockSounds(); playSound('call', () => readSoundPreference(localStorage, sounds), { background: true }); }
       } else if (value.type === 'attention-sent' && calling) {
         calling.id = value.id;
-        next.inform?.(calling.everyone ? plural(value.people, 'Called {count} person here', 'Called {count} people here') : t('Called {name} here', { name: calling.name }), 'call_sent');
+        if (calling.voice) next.inform?.(calling.everyone ? plural(value.people, 'Invited {count} person to voice', 'Invited {count} people to voice') : t('Invited {name} to voice', { name: calling.name }), 'voice_invite_sent');
+        else next.inform?.(calling.everyone ? plural(value.people, 'Called {count} person here', 'Called {count} people here') : t('Called {name} here', { name: calling.name }), 'call_sent');
       } else if (value.type === 'attention-reply' && calling?.id === value.id && typeof value.from?.name === 'string') {
         calling[value.answer === 'coming' ? 'coming' : 'later'].push(value.from.name);
         // Each answer shows the whole list again, so it is not counted: answers were the most frequent toast logged as an error.
-        next.inform?.([calling.coming.length && t('Coming: {names}', { names: names(calling.coming) }), calling.later.length && t('Not now: {names}', { names: names(calling.later) })].filter(Boolean).join(' · '));
+        const coming = calling.voice ? t('Joining voice: {names}', { names: names(calling.coming) }) : t('Coming: {names}', { names: names(calling.coming) });
+        next.inform?.([calling.coming.length && coming, calling.later.length && t('Not now: {names}', { names: names(calling.later) })].filter(Boolean).join(' · '));
       } else if (value.type === 'attention-failed') {
         next.inform?.(value.reason === 'busy' ? t('Wait a few seconds before calling again.') : value.reason === 'alone' ? t('Nobody else is on this board right now.') : t('{name} has left the board.', { name: calling?.name || t('Someone') }), value.reason === 'busy' ? 'call_busy' : value.reason === 'alone' ? 'call_alone' : 'call_left');
       }
@@ -436,7 +449,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   session.toolbar = <>
     <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
     <ChatButton session={session} open={chatOpen} button={chatButton} onClick={() => setChatOpen(value => !value)}/>
-    <VoiceControl session={session}/>
+    <VoiceControl session={session} peers={peers} boardId={boardId} openOnStart={voiceLink}/>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" aria-label={asking ? `${t('Share')} · ${plural(asking, '{count} person asks for access', '{count} people ask for access')}` : undefined} onClick={() => setShareOpen(true)}>{t('Share')}{asking > 0 && <span className="share-asking" aria-hidden="true">{asking}</span>}</button>
   </>;
   session.generationSharing = editable ? <CodexSharingDetails view={sharingView} {...sharingActions}/> : null;
@@ -451,6 +464,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     {teamOpen && <TeamAccessDialog services={services} onRequests={setAccessRequests} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
     {call && (caller => <AttentionCard key={call.id} call={call} color={caller?.user.color || '#6b6e89'} pageName={presencePages(session.doc).length > 1 ? presencePages(session.doc).find(page => page.id === (caller?.page ?? call.page))?.name : ''}
       onGo={() => { session.answerCall(call.id, 'coming'); const arrived = session.follow?.(call.from.clientId, { ...call, name: call.from.name }); if (arrived) session.ping({ ...arrived.spot, page: arrived.page, color: caller?.user.color || '#6b6e89' }); return arrived; }}
+      onJoin={() => { session.answerCall(call.id, 'coming'); session.joinVoice(); setCall(null); }}
       onLater={() => { session.answerCall(call.id, 'later'); setCall(null); }} onBack={previous => session.returnTo?.(previous)} onClose={() => setCall(null)}/>)(peers.find(peer => peer.id === call.from.clientId))}
     {historyOpen && <VersionHistory boardId={boardId} services={services} editable={editable} ago={value => relativeTime(value, Date.now(), timeWords)} onRestored={() => { setHistoryOpen(false); historyButton.current?.focus(); }} onClose={() => { setHistoryOpen(false); historyButton.current?.focus(); }}/>}
     {shareOpen && <ShareDialog boardId={boardId} name={boardName} sharing={sharing} services={services} onChange={onSharing} onClose={() => { setShareOpen(false); shareButton.current?.focus(); }}/>}

@@ -65,7 +65,7 @@ export const localEndpoint = value => {
 };
 
 // Production sets the same numbers in wrangler.jsonc; these apply when a variable is missing or unreadable.
-export const defaultDailyImages = 100, defaultMonthlyUsd = 100;
+export const defaultDailyImages = 300, defaultMonthlyUsd = 300;
 export function nanoSettings(env) {
   return {
     configured: typeof env.GEMINI_API_KEY === 'string' && env.GEMINI_API_KEY.trim() !== '',

@@ -73,6 +73,19 @@ test('call toasts are counted as notices, and the list of answers is not counted
   assert.deepEqual(logged.map(([, message]) => message), ['Called 3 people here', 'Coming: Bo', 'Coming: Bo · Not now: Cy', 'Wait a few seconds before calling again.', 'Nobody else is on this board right now.', 'Bo has left the board.']);
 });
 
+test('voice invite toasts say invited and joining, count once as news, and an invite is not shown to someone already in voice', () => {
+  const logged = [], calls = [], next = { inform: (message, notice) => logged.push(['news', message, notice]), notify: message => logged.push(['error', message]), voiceStore: { get: () => ({ joined: true }) } };
+  const callMessage = run(part(workspace, '    const callMessage = value => {', '    // The room forgets presence'), { next, t, plural, setCall: value => calls.push(value), user: { name: 'Ann' } }, 'callMessage');
+  next.calling = { name: 'Bo', everyone: false, voice: true, coming: [], later: [] };
+  callMessage({ type: 'attention-sent', id: 'call', voice: true, people: 1 });
+  callMessage({ type: 'attention-reply', id: 'call', answer: 'coming', from: { name: 'Bo' } });
+  next.calling = { name: '', everyone: true, voice: true, coming: [], later: [] };
+  callMessage({ type: 'attention-sent', id: 'all', voice: true, people: 3 });
+  assert.deepEqual(logged.map(([kind, message, notice]) => [kind, message, notice]), [['news', 'Invited Bo to voice', 'voice_invite_sent'], ['news', 'Joining voice: Bo', undefined], ['news', 'Invited 3 people to voice', 'voice_invite_sent']]);
+  callMessage({ type: 'attention', id: 'x', voice: true, everyone: true, from: { name: 'Bo', clientId: 2 } });
+  assert.deepEqual(calls, [], 'already in voice');
+});
+
 test('upscaler, size, 3D generator and variant buttons inside a prompt carry fixed analytics names', async () => {
   const { code } = await transformWithEsbuild(part(main, 'const upscaleOptions =', '\nconst ModelNode = props'), 'nodes.jsx', { loader: 'jsx', jsx: 'transform' });
   const view = { active: false, starting: false, timer: '', byName: '', userName: 'Ann', images: 1, nanoReady: true, nanoNote: '', falReady: true, readOnly: false, focus: false, runId: null, error: '' };

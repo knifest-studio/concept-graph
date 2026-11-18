@@ -94,19 +94,19 @@ test('the allowed list matches whole emails and whole @domains in any case', () 
 
 test('settings come from the Worker environment with safe defaults, and the endpoint override stays on this machine', () => {
   const google = 'https://generativelanguage.googleapis.com';
-  assert.deepEqual(nanoSettings({}), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: google });
+  assert.deepEqual(nanoSettings({}), { configured: false, dailyImages: 300, monthlyUsd: 300, endpoint: google });
   assert.deepEqual(nanoSettings({ GEMINI_API_KEY: 'k', NANO_BANANA_DAILY_IMAGES: '20', NANO_BANANA_MONTHLY_USD: '12.5', NANO_BANANA_ENDPOINT: 'http://127.0.0.1:8788/' }),
     { configured: true, dailyImages: 20, monthlyUsd: 12.5, endpoint: 'http://127.0.0.1:8788' });
   assert.equal(nanoSettings({ GEMINI_API_KEY: '  ' }).configured, false);
-  assert.deepEqual(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 'many', NANO_BANANA_MONTHLY_USD: '-1' }), { configured: false, dailyImages: 100, monthlyUsd: 100, endpoint: google });
+  assert.deepEqual(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 'many', NANO_BANANA_MONTHLY_USD: '-1' }), { configured: false, dailyImages: 300, monthlyUsd: 300, endpoint: google });
   assert.equal(nanoSettings({ NANO_BANANA_DAILY_IMAGES: 0 }).dailyImages, 0);
   for (const endpoint of ['https://attacker.example', 'http://localhost.attacker.example', 'file:///etc/passwd', 'not a url']) assert.equal(nanoSettings({ NANO_BANANA_ENDPOINT: endpoint }).endpoint, google, endpoint);
   assert.equal(nanoSettings({ NANO_BANANA_ENDPOINT: 'http://localhost:9000' }).endpoint, 'http://localhost:9000');
 });
 
-test('the deployed limits are 100 images per person a day and $100 a team month, the same as the code falls back to', async () => {
+test('the deployed limits are 300 images per person a day and $300 a team month, the same as the code falls back to', async () => {
   const { vars } = JSON.parse(await readFile(new URL('../cloud/wrangler.jsonc', import.meta.url), 'utf8'));
-  assert.deepEqual([defaultDailyImages, defaultMonthlyUsd], [100, 100]);
+  assert.deepEqual([defaultDailyImages, defaultMonthlyUsd], [300, 300]);
   const deployed = nanoSettings(vars), fallback = nanoSettings({});
   assert.deepEqual([deployed.dailyImages, deployed.monthlyUsd], [fallback.dailyImages, fallback.monthlyUsd]);
 });
@@ -322,7 +322,7 @@ function cloudSetup(t, extra = {}) {
   const files = new Map(), waits = [], rooms = new Map();
   let directory;
   const env = {
-    SESSION_SECRET: 'session-test', GEMINI_API_KEY: 'test-gemini-key', NANO_BANANA_ALLOWED: '@studio.example, solo@mail.example',
+    SESSION_SECRET: 'session-test', GEMINI_API_KEY: 'test-gemini-key', NANO_BANANA_ALLOWED: '@studio.example, solo@mail.example', NANO_BANANA_DAILY_IMAGES: '100', NANO_BANANA_MONTHLY_USD: '100',
     Directory: { idFromName: name => name, get: () => directory },
     BoardRoom: { idFromName: name => name, get: name => rooms.get(name) || room(name) },
     FILES: {

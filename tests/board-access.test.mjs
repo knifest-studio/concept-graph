@@ -423,6 +423,20 @@ test('a call reaches only the person called, in the caller’s own name, at most
   boardRoom.getConnections = () => [alice];
   send(alice, { type: 'attention', to: 'all' });
   assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'alone' });
+  // A voice invite is the same call with a flag, spaced out the same way; anything but true is an ordinary call.
+  boardRoom.callTimes.clear();
+  boardRoom.getConnections = () => [alice, bob, bobTablet, carol];
+  send(alice, { type: 'attention', to: 21, voice: true, page: 'page-1' });
+  const invite = received(bobTablet).at(-1);
+  assert.deepEqual({ ...invite, id: 0 }, { type: 'attention', id: 0, from: { name: 'Alice', clientId: 11 }, everyone: false, voice: true, page: 'page-1', spot: null });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-sent', id: invite.id, everyone: false, voice: true, people: 1 });
+  send(alice, { type: 'attention', to: 31, voice: true });
+  assert.deepEqual(received(alice).at(-1), { type: 'attention-failed', reason: 'busy' });
+  boardRoom.callTimes.clear();
+  send(alice, { type: 'attention', to: 31, voice: 'yes' });
+  assert.equal('voice' in received(carol).at(-1), false);
+  boardRoom.callTimes.clear();
+  boardRoom.getConnections = () => [alice];
   // Someone the room could not name cannot call.
   const before = received(carol).length;
   boardRoom.getConnections = () => [alice, carol];

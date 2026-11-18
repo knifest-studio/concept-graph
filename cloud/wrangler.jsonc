@@ -5,7 +5,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "triggers": { "crons": ["23 3 * * *"] },
-  "vars": { "NANO_BANANA_DAILY_IMAGES": "100", "NANO_BANANA_MONTHLY_USD": "100" },
+  "vars": { "NANO_BANANA_DAILY_IMAGES": "300", "NANO_BANANA_MONTHLY_USD": "300" },
   "durable_objects": {
     "bindings": [
       { "name": "BoardRoom", "class_name": "BoardRoom" },

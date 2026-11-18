@@ -20,17 +20,20 @@ function useTitleBlink(active, text) {
 // A teammate's call, as in Figma's spotlight and Mural's summon. One person called gets a chime and this card and decides;
 // everyone called is taken to the caller after a short countdown, unless they choose Not now. The countdown waits while
 // they type or look at another tab, so nobody is pulled away mid-sentence.
-export function AttentionCard({ call, color, pageName, onGo, onLater, onBack, onClose }) {
+// A voice invite (call.voice) asks the person to join the board's voice chat. It never joins by itself, even when everyone
+// is invited: joining turns on their microphone.
+export function AttentionCard({ call, color, pageName, onGo, onJoin, onLater, onBack, onClose }) {
   const [left, setLeft] = useState(countdown), [held, setHeld] = useState(() => document.hidden || typing()), [arrived, setArrived] = useState(null);
   const remaining = useRef(countdown), go = useRef(null); go.current = () => { const result = onGo(); if (result) setArrived(result); else onClose(); };
-  const name = call.from.name, title = call.everyone ? t('{name} is calling everyone', { name }) : t('{name} is calling you', { name });
+  const name = call.from.name, title = call.voice ? call.everyone ? t('{name} invites everyone to voice chat', { name }) : t('{name} invites you to voice chat', { name })
+    : call.everyone ? t('{name} is calling everyone', { name }) : t('{name} is calling you', { name });
   useTitleBlink(!arrived, `🔔 ${title}`);
   useEffect(() => {
     if (arrived) return;
     const timer = setInterval(() => {
       const wait = document.hidden || typing();
       setHeld(wait);
-      if (!call.everyone || wait) return;
+      if (!call.everyone || call.voice || wait) return;
       remaining.current -= 1; setLeft(remaining.current);
       if (remaining.current <= 0) { clearInterval(timer); go.current(); }
     }, 1000);
@@ -42,6 +45,14 @@ export function AttentionCard({ call, color, pageName, onGo, onLater, onBack, on
     return () => clearTimeout(timer);
   }, [arrived]);
   const style = { '--caller': color };
+  if (call.voice) return <div className="attention-card attention-voice" role="alert" data-analytics-notice="voice_invite" style={style}>
+    <span className="attention-avatar"><i/><i/><Avatar user={{ name, color }}/></span>
+    <span className="attention-text"><b>{title}</b><small>{t('Your microphone turns on when you join.')}</small></span>
+    <span className="attention-actions">
+      <button type="button" className="attention-go" data-analytics-name="Join voice from invite" onClick={onJoin}>{t('Join voice')}</button>
+      <button type="button" className="attention-secondary" data-analytics-name="Not now" onClick={onLater}>{t('Not now')}</button>
+    </span>
+  </div>;
   if (arrived) return <div className="attention-card attention-arrived" role="status" style={style}>
     <Avatar user={{ name, color }}/><span>{t('You’re with {name}', { name })}</span>
     <button type="button" className="attention-secondary" data-analytics-name="Back to where I was" onClick={() => { onBack(arrived.previous); onClose(); }}>{t('Back to where I was')}</button>

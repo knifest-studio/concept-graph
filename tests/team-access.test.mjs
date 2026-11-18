@@ -110,7 +110,7 @@ runtimeTest('admins manage per-person 3D separately from image access, including
   assert.equal(directory.model3dAllowed('waiting@studio.example'), true); assert.equal(directory.nanoAllowed('waiting@studio.example'), false);
   assert.deepEqual((await (await request('/api/nano', { email: 'solo@mail.example' })).json()).model3d, { configured: true, allowed: false });
   const status = await (await request('/api/nano', { email: 'waiting@studio.example' })).json();
-  assert.equal(status.allowed, false); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 100);
+  assert.equal(status.allowed, false); assert.equal(status.model3d.allowed, true); assert.equal(status.model3d.dailyImages, 300);
   await patch('admin@studio.example', { email: 'waiting@studio.example', allowed: false });
   assert.equal((await (await request('/api/nano', { email: 'waiting@studio.example' })).json()).model3d.allowed, false);
   for (const email of ['@studio.example', 'studio.example', 'not an email', 'a@b@c', '', null]) assert.equal((await patch('admin@studio.example', { email, allowed: true })).status, 400, String(email));
@@ -146,7 +146,7 @@ runtimeTest('Video seeds only the owner once and admins grant/revoke it independ
   directory.changeTeamAccess('owner@studio.example', { admin: { email: 'admin@studio.example', admin: true } });
   const granted = directory.changeTeamAccess('admin@studio.example', { video: { email: 'Video@Studio.example', allowed: true } });
   assert.ok(granted.access.video.some(person => person.email === 'video@studio.example')); assert.equal(directory.nanoAllowed('video@studio.example'), false); assert.equal(directory.model3dAllowed('video@studio.example'), false);
-  const status = await (await request('/api/nano', { email: 'video@studio.example' })).json(); assert.equal(status.video.allowed, true); assert.equal(status.video.dailyImages, 100);
+  const status = await (await request('/api/nano', { email: 'video@studio.example' })).json(); assert.equal(status.video.allowed, true); assert.equal(status.video.dailyImages, 300);
   directory.changeTeamAccess('owner@studio.example', { video: { email: 'owner@studio.example', allowed: false } });
   const reopened = new Directory({ storage: { sql } }, env); assert.equal(reopened.videoAllowed('owner@studio.example'), false); assert.equal(reopened.videoAllowed('video@studio.example'), true);
   directory.changeTeamAccess('admin@studio.example', { video: { email: 'video@studio.example', allowed: false } }); assert.equal(directory.videoAllowed('video@studio.example'), false);
