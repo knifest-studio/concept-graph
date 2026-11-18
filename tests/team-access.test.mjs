@@ -230,3 +230,26 @@ runtimeTest('only the site owner sees who is online and where, boards, generatio
   assert.equal(body.people.find(item => item.email === 'new@studio.example').name, 'Newcomer');
   assert.equal(await (await request('/admin', { email: 'new@studio.example' })).text(), 'static');
 });
+
+runtimeTest('limit checks reuse one month pass for 30 s, and every reservation or settle is counted at once', async t => {
+  const { sql, directory } = setup(t);
+  const now = Date.parse('2026-11-18T10:00:00.000Z'), limits = { dailyImages: 3, monthlyUsd: 1 };
+  sql.exec("INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt) VALUES ('earlier', 'new@studio.example', '2026-11-02', '2026-11', 1, 0.5, 0, ?)", now - 16 * 86400000);
+  const original = directory.ctx.storage.sql.exec.bind(directory.ctx.storage.sql); let scans = 0;
+  directory.ctx.storage.sql.exec = (query, ...bindings) => { if (/FROM nano_usage WHERE month/.test(query)) scans++; return original(query, ...bindings); };
+  // Every open tab's status poll: one pass, then answers from memory for everyone.
+  for (const email of ['new@studio.example', 'admin@studio.example', 'new@studio.example']) directory.nanoUsage(email, now + 1000);
+  assert.equal(scans, 1); assert.deepEqual(directory.nanoUsage('new@studio.example', now + 2000), { usedToday: 0, teamSpentUsd: 0.5 });
+  // A reservation counts immediately for the person and the team, so the limit cannot be passed twice.
+  const first = directory.reserveNano('new@studio.example', { ...limits, estimateUsd: 0.3 }, now + 3000);
+  assert.deepEqual(directory.nanoUsage('new@studio.example', now + 3000), { usedToday: 1, teamSpentUsd: 0.8 });
+  assert.equal(directory.reserveNano('admin@studio.example', { ...limits, estimateUsd: 0.3 }, now + 3000).status, 429);
+  directory.settleNano(first.reservation, { images: 0, usd: 0 });
+  assert.deepEqual(directory.nanoUsage('new@studio.example', now + 4000), { usedToday: 0, teamSpentUsd: 0.5 });
+  const many = directory.reserveNanoMany('admin@studio.example', { ...limits, estimates: [0.1, 0.1] }, now + 5000);
+  assert.equal(many.reservations.length, 2); assert.deepEqual(directory.nanoUsage('admin@studio.example', now + 5000), { usedToday: 2, teamSpentUsd: 0.7 });
+  // An unsettled hold stops counting against the person after 15 minutes; memory is at most 30 s behind that.
+  const scansBefore = scans; directory.nanoUsage('admin@studio.example', now + 20000); assert.equal(scans, scansBefore);
+  assert.equal(directory.nanoUsage('admin@studio.example', now + 16 * 60000).usedToday, 0); assert.equal(scans, scansBefore + 1);
+  assert.equal(directory.nanoUsage('admin@studio.example', now + 16 * 60000).teamSpentUsd, 0.7);
+});

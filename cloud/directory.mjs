@@ -4,7 +4,7 @@ import { accessModes, boardRole, canEdit, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, maxVideoEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
+const nanoReservationTtl = 15 * 60 * 1000, usageTotalsAge = 30 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, maxVideoEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
 // Someone counts as online while their visible tab polled within this time (polls come every 30–60 seconds).
 const onlineWindow = 150000, seenWrite = 5 * 60000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
@@ -253,11 +253,19 @@ export class Directory extends DurableObject {
 
   // Days and months are UTC. A reservation that was never settled (its room stopped mid-call) stops counting against
   // the person's images after 15 minutes, but its estimate stays in the team's month: Google may have billed the call.
+  // Every open tab asks for its limits each minute, and summing the whole month's rows for each ask used up the free
+  // 5M Durable Object rows read per day on 2026-11-18. One pass per month now serves everyone for up to 30 s; every
+  // write below clears it, and the 30 s bound covers reservations that stop counting without a write.
   nanoUsage(email, now = Date.now()) {
     const day = new Date(now).toISOString().slice(0, 10);
-    const row = this.ctx.storage.sql.exec(`SELECT COALESCE(SUM(CASE WHEN email = ? AND day = ? AND (open = 0 OR createdAt > ?) THEN images END), 0) AS usedToday,
-      COALESCE(SUM(usd), 0) AS teamSpentUsd FROM nano_usage WHERE month = ?`, email, day, now - nanoReservationTtl, day.slice(0, 7)).toArray()[0];
-    return { usedToday: row.usedToday, teamSpentUsd: row.teamSpentUsd };
+    let totals = this.usageTotals;
+    if (!totals || totals.day !== day || now - totals.at > usageTotalsAge || now < totals.at) {
+      const rows = this.ctx.storage.sql.exec(`SELECT email, COALESCE(SUM(usd), 0) AS usd,
+        COALESCE(SUM(CASE WHEN day = ? AND (open = 0 OR createdAt > ?) THEN images END), 0) AS images FROM nano_usage WHERE month = ? GROUP BY email`,
+        day, now - nanoReservationTtl, day.slice(0, 7)).toArray();
+      totals = this.usageTotals = { at: now, day, teamSpentUsd: rows.reduce((sum, row) => sum + row.usd, 0), usedToday: new Map(rows.map(row => [row.email, row.images])) };
+    }
+    return { usedToday: totals.usedToday.get(email) || 0, teamSpentUsd: totals.teamSpentUsd };
   }
 
   // Checks and reserves in one step, so two Generates at once cannot both pass a nearly used limit.
@@ -268,12 +276,14 @@ export class Directory extends DurableObject {
     if (teamSpentUsd + estimateUsd > monthlyUsd) return { error: 'Team budget for this month is used up.', status: 429 };
     const id = crypto.randomUUID(), day = new Date(now).toISOString().slice(0, 10);
     this.ctx.storage.sql.exec('INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind, via) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)', id, email, day, day.slice(0, 7), images ? 1 : 0, estimateUsd, now, spendKind(kind), callSource(via));
+    this.usageTotals = null;
     return { reservation: id };
   }
 
   // Records what a reserved call produced and cost; a failed call settles to zero, which refunds the reservation.
   settleNano(id, { images, usd }) {
     this.ctx.storage.sql.exec('UPDATE nano_usage SET images = ?, usd = ?, open = 0 WHERE id = ?', Math.max(0, Math.floor(images) || 0), Math.max(0, Number(usd) || 0), id);
+    this.usageTotals = null;
   }
 
   // Every call of a run of variants is reserved in one step, or none is, so a run never starts with only part of what was
@@ -291,6 +301,7 @@ export class Directory extends DurableObject {
     const day = new Date(now).toISOString().slice(0, 10), rows = estimates.map(usd => ({ id: crypto.randomUUID(), usd }));
     this.ctx.storage.sql.exec(`INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind, via)
       SELECT json_extract(value, '$.id'), ?, ?, ?, ?, json_extract(value, '$.usd'), 1, ?, ?, ? FROM json_each(?)`, email, day, day.slice(0, 7), images ? 1 : 0, now, spendKind(kind), callSource(via), JSON.stringify(rows));
+    this.usageTotals = null;
     return { reservations: rows.map(row => row.id) };
   }
 
