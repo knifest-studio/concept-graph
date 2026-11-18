@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { useCanvas, useCanvasValue, useDetail } from './canvas-context.jsx';
 import { shallowEqual, nodeStarting } from './canvas-store.mjs';
@@ -45,7 +45,12 @@ export function VideoPrompt({ id, data, assetUrl, Icon }) {
   }, shallowEqual);
   const resolved = resolveVideo({ data }, state.images), { applied, requested } = resolved, pending = state.active || state.starting;
   const disabled = state.readOnly || pending, set = (key, value) => canvas.setVideo(id, { [key]: value });
-  const text = String(data.text || ''), price = money(resolved.usd), light = detail !== 'full';
+  // The board commits typed text a moment later (putNodesSoon), so the field shows its own draft at once, as prompt cards do;
+  // a teammate's or undo's change to the stored text still replaces it.
+  const [draft, setDraft] = useState(String(data.text || '')), edited = useRef(false);
+  useLayoutEffect(() => { setDraft(String(data.text || '')); }, [data.text]);
+  const changeText = value => { setDraft(value); if (!edited.current) { canvas.checkpoint(); edited.current = true; } canvas.editText(id, value); };
+  const text = draft, price = money(resolved.usd), light = detail !== 'full';
   const modelChips = interactive => <div className="upscale-options" role={interactive ? 'radiogroup' : undefined} aria-label={interactive ? t('Video model') : undefined} aria-hidden={interactive ? undefined : true}>
     {Object.entries(videoModelLabels).map(([key, label]) => interactive
       ? <button type="button" role="radio" key={key} data-analytics-name={`Video model: ${label}`} aria-checked={resolved.model === key} data-tooltip={t(modelHints[key])} disabled={disabled} onClick={() => set('videoModel', key)}>{label}</button>
@@ -73,7 +78,7 @@ export function VideoPrompt({ id, data, assetUrl, Icon }) {
       <button className="text-node-collapse nodrag" type="button" aria-label={t('Collapse node')} data-tooltip={t('Collapse node')} onClick={() => canvas.toggleNodeCollapsed(id)}><Icon name="collapse" size={15}/></button></header>
     <div className="video-body nodrag nopan nowheel">
       <div className="upscale-settings video-models">{modelChips(true)}<small>{t(modelHints[resolved.model])} {t('{price} a second', { price: perSecond(resolved.rate) })}</small></div>
-      <textarea className="video-text" aria-label={t('Video prompt')} placeholder={t('Describe the motion. Mention images as #1, #2.')} value={text} disabled={state.readOnly} onChange={event => canvas.editText(id, event.target.value)} onFocus={() => canvas.checkpoint()} onKeyDown={event => event.stopPropagation()}/>
+      <textarea className="video-text" aria-label={t('Video prompt')} placeholder={t('Describe the motion. Mention images as #1, #2.')} value={text} disabled={state.readOnly} onChange={event => changeText(event.target.value)} onBlur={() => { edited.current = false; }} onKeyDown={event => event.stopPropagation()}/>
       <section className="video-inputs" aria-label={t('Images')}>
         {resolved.inputs.length ? resolved.inputs.map(input => {
           const reasons = resolved.issues.filter(issue => issue.nodeIds.includes(input.nodeId)).map(issue => t(issue.reason));
