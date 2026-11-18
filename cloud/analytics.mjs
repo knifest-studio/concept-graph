@@ -97,7 +97,7 @@ async function replay(request, env, user, id, seq, now) {
   return empty();
 }
 const rows = async (db, sql, ...args) => (await db.prepare(sql).bind(...args).all()).results || [];
-async function overview(env, url, now) {
+async function overview(env, url, now, store, user) {
   const days = Math.max(1, Math.min(180, Number(url.searchParams.get('days')) || 7)), cutoff = now - days * 86400000, db = env.DB;
   // Heartbeats stored before they stopped being kept are left out, so older days count the same events as new ones.
   const [totals, daily, controls, rage, errors, generations, sessions, heatmap] = await Promise.all([
@@ -113,7 +113,9 @@ async function overview(env, url, now) {
     rows(db, 'SELECT id,user,started,last_seen,event_count,replay_chunks,replay_bytes,duration,active,width,height,platform FROM analytics_sessions WHERE last_seen >= ? ORDER BY started DESC LIMIT 100', cutoff),
     rows(db, `SELECT json_extract(details,'$.route') AS route, CASE WHEN json_extract(details,'$.width') < 768 THEN 'small' WHEN json_extract(details,'$.width') < 1280 THEN 'medium' ELSE 'large' END AS viewport, ROUND(json_extract(details,'$.x')*50)/50.0 AS x, ROUND(json_extract(details,'$.y')*50)/50.0 AS y, COUNT(*) AS count FROM analytics_events WHERE time >= ? AND kind='click' AND json_type(details,'$.x') IS NOT NULL GROUP BY route,viewport,x,y LIMIT 10000`, cutoff)
   ]);
-  return json({ days, totals, daily, controls, rage, errors, generations, sessions, heatmap });
+  // Every call on the team's keys, agents' included, from the usage rows kept for limits; null if the Directory cannot say.
+  const teamKeys = await Promise.resolve(store?.teamKeyUse?.(user?.email, new Date(cutoff).toISOString().slice(0, 10), now)).catch(() => null) ?? null;
+  return json({ days, totals, daily, controls, rage, errors, generations, sessions, heatmap, teamKeys });
 }
 export async function analyticsRoute(request, env, user, url, store, now = Date.now()) {
   const path = url.pathname.slice('/api/analytics'.length), method = request.method;
@@ -129,7 +131,7 @@ export async function analyticsRoute(request, env, user, url, store, now = Date.
   if (batch && method === 'POST') return events(request, env, user.email, now);
   const upload = path.match(/^\/replay\/([^/]+)\/(\d+)$/);
   if (upload && method === 'POST' && sessionPattern.test(upload[1]) && replaySequence(upload[2]) !== null) return replay(request, env, user.email, upload[1], Number(upload[2]), now);
-  if (method === 'GET' && path === '/overview') return overview(env, url, now);
+  if (method === 'GET' && path === '/overview') return overview(env, url, now, store, user);
   const selected = path.match(/^\/sessions\/([^/]+)(?:\/(\d+))?$/);
   if (selected && method === 'GET' && sessionPattern.test(selected[1])) {
     const id = selected[1];

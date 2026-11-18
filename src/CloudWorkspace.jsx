@@ -22,7 +22,7 @@ import { terminalRun } from './run-outputs.mjs';
 import { cloudFeedback } from './feedback.mjs';
 import { sharedPreviews } from './canvas-thumbnails.mjs';
 import { keepDialogFocus } from './dialog-focus.mjs';
-import { accessBadges, boardFromPath, boardPath, coverHue, relativeTime, roleNames, signInReturn } from './cloud-boards.mjs';
+import { accessBadges, agoForms, boardFromPath, boardPath, coverHue, relativeTime, roleNames, signInReturn } from './cloud-boards.mjs';
 import { deleteBoardTemplate, readBoardTemplates, saveBoardTemplate } from './board-templates.mjs';
 import { ShareDialog } from './ShareDialog.jsx';
 import { VersionHistory } from './VersionHistory.jsx';
@@ -30,7 +30,7 @@ import { AttentionCard, AttentionPings } from './AttentionCall.jsx';
 import { TeamAccessDialog } from './TeamAccessDialog.jsx';
 import { AccountMenu } from './AccountMenu.jsx';
 import { defaultPages } from './pages.mjs';
-import { BoardPresence } from './BoardPresence.jsx';
+import { BoardPresence, agentShownMs } from './BoardPresence.jsx';
 import { BoardChatPanel, ChatButton } from './BoardChat.jsx';
 import { VoiceAudio, VoiceControl } from './BoardVoice.jsx';
 import { ChatClient } from './board-chat.mjs';
@@ -46,7 +46,6 @@ const presencePages = doc => {
   return pages.length ? pages : defaultPages();
 };
 sharedPreviews.enabled = true;
-const agoForms = { year: ['{count} year ago', '{count} years ago'], month: ['{count} month ago', '{count} months ago'], day: ['{count} day ago', '{count} days ago'], hour: ['{count} hour ago', '{count} hours ago'], minute: ['{count} minute ago', '{count} minutes ago'] };
 const timeWords = { recently: t('recently'), now: t('just now'), ago: (count, unit) => plural(count, ...agoForms[unit]) };
 
 function BoardCover({ board }) {
@@ -193,6 +192,14 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   const [chatOpen, setChatOpen] = useState(false), chatButton = useRef(null);
   // A teammate's call waiting for this person's answer; a newer call replaces it.
   const [call, setCall] = useState(null);
+  // People whose AI agent (MCP) works on this board now, this person included; the room says so on each burst of tool calls.
+  const [agents, setAgents] = useState([]);
+  useEffect(() => {
+    if (!agents.length) return;
+    const next = Math.min(...agents.map(agent => agent.at)) + agentShownMs - Date.now();
+    const timer = setTimeout(() => setAgents(current => current.filter(agent => Date.now() - agent.at < agentShownMs)), Math.max(1000, next));
+    return () => clearTimeout(timer);
+  }, [agents]);
   // The owner hears of an access request at once: Share shows it, without reopening the board.
   const refreshSharing = () => services.api(`/api/cloud/boards/${encodeURIComponent(boardId)}/sharing`).then(result => onSharing(result.sharing)).catch(() => {});
   const latest = useRef({}); latest.current = { pairing, finishPair, onAccess, onDeleted, refreshSharing };
@@ -392,6 +399,10 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
       let value;
       try { value = JSON.parse(message); } catch { return; }
       if (typeof value?.type === 'string' && value.type.startsWith('chat-')) next.chat.receive(value);
+      if (value?.type === 'agent-activity' && typeof value.email === 'string' && Number.isFinite(value.at)) {
+        const agent = { email: value.email, at: Math.min(Date.now(), value.at), user: { name: typeof value.name === 'string' ? value.name : '', color: typeof value.color === 'string' ? value.color : '' } };
+        setAgents(current => [...current.filter(item => item.email !== agent.email), agent]);
+      }
       if (typeof value?.type === 'string' && value.type.startsWith('voice-')) voice.receive(value);
       if (value?.type === 'voice-left' && Number.isSafeInteger(value.from) && value.from !== doc.clientID) removeAwarenessStates(provider.awareness, [value.from], 'voice-left');
       if (value?.type === 'access') latest.current.onAccess(value.role);
@@ -447,7 +458,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   Object.assign(session, { editRequested: !!sharing?.editRequested, requestEdit, paired, pairing, pairCancel, helperStatus, connection, peers, error, codex: sharingView, nano, refreshNano: () => nanoSoon.current(), requestAccess, role, deleted: () => onDeleted(false), home: () => session.leave?.(onBack) });
   session.cursors = visible => <Cursors cursors={session.cursorStore} pings={session.pingStore} visible={visible}/>;
   session.toolbar = <>
-    <BoardPresence peers={peers} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
+    <BoardPresence peers={peers} agents={agents} self={account?.email} pages={presencePages(session.doc)} onFollow={id => session.follow?.(id)} onCall={to => session.callAttention(to, peers.find(peer => peer.id === to)?.user.name)}/>
     <ChatButton session={session} open={chatOpen} button={chatButton} onClick={() => setChatOpen(value => !value)}/>
     <VoiceControl session={session} peers={peers} boardId={boardId} openOnStart={voiceLink}/>
     <button ref={shareButton} type="button" className="cloud-share-button" aria-haspopup="dialog" aria-label={asking ? `${t('Share')} · ${plural(asking, '{count} person asks for access', '{count} people ask for access')}` : undefined} onClick={() => setShareOpen(true)}>{t('Share')}{asking > 0 && <span className="share-asking" aria-hidden="true">{asking}</span>}</button>

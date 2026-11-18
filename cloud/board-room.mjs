@@ -26,6 +26,8 @@ import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreD
 import { base64Bytes, callMemoryBytes, expectedOutputBytes, videoMemoryBytes, MemoryBudget, model3dMemoryBytes, queueWaitTimeout, requestBytes, roomBusy, upscaleOutputBytes } from './room-memory.mjs';
 
 const chunkSize = 512 * 1024, maxAgentDeletes = 200;
+// How long tabs show that someone's agent works on the board after its last tool call (src/BoardPresence.jsx agrees).
+export const agentShownMs = 3 * 60 * 1000;
 // One call every 4 seconds per tab, and one to everyone every 15 seconds; answers are accepted for two minutes.
 const callGap = 4000, everyoneGap = 15000, callLife = 2 * 60 * 1000;
 // y-partyserver keeps the presence IDs each connection controls in its state under this key.
@@ -113,6 +115,23 @@ export class BoardRoom extends YServer {
     connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email'), name, color: ctx.request.headers.get('x-concept-graph-color') }));
     super.onConnect(connection, ctx);
     this.sendCustomMessage(connection, JSON.stringify({ type: 'access', role: connection.state.role }));
+    // A tab that opens while someone's agent works here sees it at once, not only after the agent's next call.
+    for (const activity of this.recentAgents()) this.sendCustomMessage(connection, JSON.stringify(activity));
+  }
+
+  // People's AI agents (MCP) working on this board right now: kept in memory only, since it matters for minutes. Each
+  // tool call refreshes it; tabs hear of it at most every 20 seconds per person and drop it after agentShownMs.
+  recentAgents(now = Date.now()) {
+    this.agents ??= new Map();
+    for (const [email, activity] of this.agents) if (now - activity.at > agentShownMs) this.agents.delete(email);
+    return [...this.agents.values()].map(({ sent, ...activity }) => activity);
+  }
+  agentWorked(user, tool, now = Date.now()) {
+    const previous = this.recentAgents(now).find(activity => activity.email === user.email), sent = this.agents.get(user.email)?.sent || 0;
+    const activity = { type: 'agent-activity', email: user.email, name: user.name, color: user.color, tool, at: now };
+    const announce = !previous || now - sent >= 20000;
+    this.agents.set(user.email, { ...activity, sent: announce ? now : sent });
+    if (announce) this.broadcastCustomMessage(JSON.stringify(activity));
   }
 
   isReadOnly(connection) { return !canEdit(connection.state?.role); }
@@ -378,7 +397,7 @@ export class BoardRoom extends YServer {
   // Worker RPC for a signed-in person on the allowed list. Reserves their quota, puts the run on the board and returns;
   // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes). `settings` says the
   // request comes from a page that shows generation settings (agents always do); `languages` is its Accept-Language.
-  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages, siteOrigin }) {
+  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages, siteOrigin, via = 'browser' }) {
     if (generator !== undefined && !isSiteGenerator(generator)) return { error: 'Choose a site generator.', status: 400 };
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
     const saved = readCloudGraph(this.document), target = saved.nodes.find(item => item.id === nodeId);
@@ -427,11 +446,11 @@ export class BoardRoom extends YServer {
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       // Variants are reserved together, all or none, in one call to the directory however many there are.
       if (variants) {
-        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates, kind });
+        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates, kind, via });
         if (reserved.error) return { error: reserved.fit ? `${reserved.error} Only ${reserved.fit} of ${calls} variants fit; choose fewer.` : reserved.error, status: reserved.status };
         reservations.push(...reserved.reservations);
       } else for (let index = 0; index < calls; index++) {
-        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1, kind });
+        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1, kind, via });
         if (reserved.error) {
           await release();
           return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} images fit; connect fewer.` } : reserved;
@@ -474,6 +493,7 @@ export class BoardRoom extends YServer {
   async mcp({ tool: name, args, user, siteOrigin }) {
     const tool = toolByName.get(name);
     if (!tool || tool.account) return { error: 'Unknown tool.' };
+    this.agentWorked(user, name);
     try {
       if (name === 'list_chat') return { value: this.chat().history(args, user.email) };
       if (name === 'send_chat') {
@@ -517,7 +537,7 @@ export class BoardRoom extends YServer {
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
     }
-    const result = await this.startNano({ nodeId, requester: user, settings: true, siteOrigin });
+    const result = await this.startNano({ nodeId, requester: user, settings: true, siteOrigin, via: 'agent' });
     return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: this.document.getMap('runs').get(result.run.id).provider, status: 'running' } };
   }
 

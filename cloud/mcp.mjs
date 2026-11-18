@@ -9,6 +9,7 @@ import { model3dStatus, storeModelGlb } from './model3d.mjs';
 import { gptImageStatus } from './gpt-image.mjs';
 import { canEdit } from './access.mjs';
 import { checkArgs, fail, listedTools, toolByName } from './mcp-tools.mjs';
+import { noteAgentUse } from './agents.mjs';
 
 const versions = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const maxRequest = 30 * 1024 * 1024, maxUpload = 20 * 1024 * 1024, maxShown = 4.5 * 1024 * 1024;
@@ -148,6 +149,8 @@ export const mcpApi = {
     try { messages = JSON.parse(new TextDecoder().decode(await readBody(request, maxRequest))); }
     catch (cause) { return Response.json(rpcError(null, cause.status === 413 ? -32600 : -32700, cause.status === 413 ? 'Request is too large.' : 'Invalid JSON.'), { status: cause.status === 413 ? 413 : 400 }); }
     const batch = Array.isArray(messages);
+    // A tool call means the person's agent is working now; the page shows it (cloud/agents.mjs).
+    if ((batch ? messages : [messages]).some(message => message?.method === 'tools/call')) { const noted = noteAgentUse(env, user.email); if (noted) ctx.waitUntil?.(noted); }
     const answers = (await Promise.all((batch ? messages : [messages]).map(message => answer(message, env, user, new URL(request.url).origin)))).filter(Boolean);
     if (!answers.length) return new Response(null, { status: 202 });
     return Response.json(batch ? answers : answers[0], { headers: { 'Cache-Control': 'no-store' } });

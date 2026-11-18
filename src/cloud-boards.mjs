@@ -10,6 +10,9 @@ export function relativeTime(value, now = Date.now(), words = englishTime) {
   }
 }
 
+// The interface's own words for relativeTime: catalog keys, translated where they are used.
+export const agoForms = { year: ['{count} year ago', '{count} years ago'], month: ['{count} month ago', '{count} months ago'], day: ['{count} day ago', '{count} days ago'], hour: ['{count} hour ago', '{count} hours ago'], minute: ['{count} minute ago', '{count} minutes ago'] };
+
 export function coverHue(id) {
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) | 0;
