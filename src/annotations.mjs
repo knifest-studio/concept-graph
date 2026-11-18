@@ -1,7 +1,7 @@
 export const stickyPalette = Object.freeze(['#fff3ad', '#ffd9e5', '#dceaff', '#d9f2d0', '#eadcff']);
 export const penPalette = Object.freeze(['#25243d', '#8b5cf6', '#2563eb', '#e63946', '#238636', '#d4a017']);
 export const penWidths = Object.freeze([2, 4, 8]);
-export const stamps = Object.freeze({ like: '👍', heart: '❤️', star: '⭐', check: '✅', question: '❓', fire: '🔥' });
+export const stamps = Object.freeze({ like: '👍', heart: '❤️', star: '⭐', check: '✅', question: '❓', fire: '🔥', laugh: '😂', clown: '🤡' });
 // FigJam-style shapes hold text; arrows join things and follow them when they move.
 export const shapeKinds = Object.freeze(['rectangle', 'ellipse', 'diamond', 'triangle']);
 export const shapePalette = Object.freeze(['#ffffff', '#fff3ad', '#ffd9e5', '#dceaff', '#d9f2d0', '#eadcff', '#25243d']);

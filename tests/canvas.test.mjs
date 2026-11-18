@@ -401,6 +401,8 @@ test('light cards expose connection dots on the same sides as full cards', () =>
   // React Flow reads the side from data-handlepos; a missing one bends links to the bottom and top when zoomed out.
   assert.deepEqual(lodHandleProps('source'), { className: 'lod-handle source', 'data-handlepos': 'right' });
   assert.deepEqual(lodHandleProps('target'), { className: 'lod-handle target', 'data-handlepos': 'left' });
+  // A named dot keeps its name, or the link to GPT Image's main image disappears when zoomed out.
+  assert.deepEqual(lodHandleProps('target', 'main'), { className: 'lod-handle target', 'data-handlepos': 'left', 'data-handleid': 'main' });
 });
 
 test('a folded slideshow shows one image of the group, steps through its images and connects from the card', () => {
