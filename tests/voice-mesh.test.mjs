@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VoiceMesh, micError } from '../src/voice-mesh.mjs';
+import { VoiceMesh, micError, iceSummary, voiceConnectDeadline } from '../src/voice-mesh.mjs';
 import { browserIceServers, maxSignalBytes, voiceHasSpace, voiceIce, voiceSignal } from '../cloud/voice.mjs';
 
 class Peer {
@@ -126,4 +126,36 @@ test('voice admission and signalling caps and TURN credentials are bounded', asy
   });
   assert.deepEqual(result.iceServers[0].urls, ['turn:x:3478']);
   await assert.rejects(voiceIce({ TURN_KEY_ID: 'key', TURN_KEY_API_TOKEN: 'secret' }, async () => new Response('', { status: 500 })), /unavailable/);
+});
+test('each peer reports once how it connected or why not, with candidate kinds and never addresses', async () => {
+  const stats = (pairs = true) => new Map([
+    ['l1', { id: 'l1', type: 'local-candidate', candidateType: 'host', address: '192.168.1.5' }],
+    ['l2', { id: 'l2', type: 'local-candidate', candidateType: 'srflx', address: '203.0.113.7' }],
+    ['r1', { id: 'r1', type: 'remote-candidate', candidateType: 'relay', address: '198.51.100.9' }],
+    ...(pairs ? [['p', { id: 'p', type: 'candidate-pair', localCandidateId: 'l2', remoteCandidateId: 'r1', nominated: true, state: 'succeeded' }],
+      ['t', { id: 't', type: 'transport', selectedCandidatePairId: 'p' }]] : []),
+  ]);
+  let now = 1000; const reports = [];
+  const env = setup(1, { clock: () => now, report: (name, data) => reports.push([name, data]) });
+  await env.mesh.join([{ urls: ['stun:x'] }, { urls: 'turn:x:3478', username: 'u', credential: 'c' }], [2]);
+  const pc = env.peers[0]; pc.getStats = async () => stats();
+  pc.iceConnectionState = 'failed'; pc.connectionState = 'failed'; now = 31000; pc.onconnectionstatechange(); await new Promise(setImmediate);
+  pc.connectionState = 'failed'; pc.onconnectionstatechange(); await new Promise(setImmediate);
+  assert.deepEqual(reports, [['voice_failed', { errorKind: 'ice_failed', status: 'failed/failed/stable', local: 'host,srflx', remote: 'relay', path: 'srflx-relay', turn: true, duration: 30000, count: 1 }]]);
+  assert.doesNotMatch(JSON.stringify(reports), /\d+\.\d+\.\d+\.\d+/);
+  // A connection rescued by an ICE restart still reports that it connected; flapping does not repeat it.
+  pc.connectionState = 'connected'; pc.onconnectionstatechange(); pc.onconnectionstatechange(); await new Promise(setImmediate);
+  assert.equal(reports.length, 2); assert.equal(reports[1][0], 'voice_connected'); assert.equal(reports[1][1].count, 2); assert.equal(reports[1][1].path, 'srflx-relay');
+  env.mesh.leave();
+
+  // A peer that never reaches any ICE state is reported once the deadline passes, and not after it leaves.
+  const stuck = [], quiet = setup(3, { report: (name, data) => stuck.push([name, data]) });
+  await quiet.mesh.join([{ urls: 'stun:x' }], [2]);
+  const deadline = quiet.timers.find(timer => timer.delay === voiceConnectDeadline);
+  quiet.peers[0].getStats = async () => stats(false);
+  deadline(); await new Promise(setImmediate);
+  assert.equal(stuck[0][0], 'voice_failed'); assert.equal(stuck[0][1].errorKind, 'timeout'); assert.equal(stuck[0][1].turn, false);
+  assert.equal(stuck[0][1].path, undefined); assert.equal(stuck[0][1].remote, 'relay');
+  quiet.mesh.leave(); deadline(); await new Promise(setImmediate); assert.equal(stuck.length, 1);
+  assert.deepEqual(await iceSummary({ getStats: async () => { throw new Error('closed'); } }), { local: '', remote: '' });
 });

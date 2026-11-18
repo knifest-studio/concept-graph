@@ -10,7 +10,10 @@ export const clamp = (value, min, max, fallback = min) => typeof value === 'numb
 export const byteLength = value => new TextEncoder().encode(value).length;
 const strings = { route: 160, page: 120, platform: 120, userAgent: 500, language: 40, uiLanguage: 40, theme: 20, pointer: 20, referrer: 500, version: 80, nodeType: 30, via: 40, generator: 80, model: 128, errorKind: 80, message: 1000, target: 60, combo: 80, status: 40, task: 30, run: 120, context: 60 };
 const numbers = { x: [0, 1], y: [0, 1], zoom: [.001, 100], width: [0, 16384], height: [0, 16384], screenWidth: [0, 32768], screenHeight: [0, 32768], dpr: [.1, 16], duration: [0, 604800000], active: [0, 604800000], variants: [0, 100], references: [0, 1000], count: [0, 10000], navigation: [0, 3600000], domReady: [0, 3600000], load: [0, 3600000] };
-const booleans = ['masked', 'reducedMotion', 'touch', 'meta', 'ctrl', 'alt', 'shift', 'visible', 'checked'];
+const booleans = ['masked', 'reducedMotion', 'touch', 'meta', 'ctrl', 'alt', 'shift', 'visible', 'checked', 'turn'];
+// Voice ICE candidate kinds, gathered (local), received (remote) and on the chosen pair (path); never addresses.
+const iceKind = '(?:host|srflx|prflx|relay)', iceKinds = new RegExp(`^${iceKind}(?:,${iceKind}){0,3}$`);
+const iceFacts = { local: iceKinds, remote: iceKinds, path: new RegExp(`^${iceKind}-${iceKind}$`) };
 const uiValues = {
   to: ['light', 'dark', 'system'],
   source: ['settings', 'system', 'sidebar', 'node_toolbar', 'context_menu', 'tip', 'invite', 'copy', 'sidebar_click', 'sidebar_drag', 'node_type'],
@@ -26,6 +29,7 @@ export function details(value) {
   for (const [key, [min, max]] of Object.entries(numbers)) if (typeof value[key] === 'number' && Number.isFinite(value[key])) result[key] = clamp(value[key], min, max);
   for (const key of booleans) if (typeof value[key] === 'boolean') result[key] = value[key];
   for (const [key, allowed] of Object.entries(uiValues)) if (allowed.includes(value[key])) result[key] = value[key];
+  for (const [key, pattern] of Object.entries(iceFacts)) if (typeof value[key] === 'string' && pattern.test(value[key])) result[key] = value[key];
   // Error facts are checked by shape here too, so no client can put text in them.
   if (validErrorType(value.errorType)) result.errorType = value.errorType;
   if (typeof value.location === 'string' && (ownScript.test(value.location) || ['external', 'extension', 'inline'].includes(value.location))) result.location = value.location;

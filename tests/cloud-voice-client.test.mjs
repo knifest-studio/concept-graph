@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cloudVoice, voiceReconnectWindow } from '../src/cloud-voice.mjs';
+import { cloudVoice, voiceErrorKind, voiceReconnectWindow } from '../src/cloud-voice.mjs';
 
 function setup({ api, media, admission = 'joined' } = {}) {
   let client, state;
@@ -123,4 +123,17 @@ test('leaving during a credential request prevents late microphone acquisition',
   let finish; const env = setup({ api: () => new Promise(resolve => { finish = resolve; }) });
   env.client.connected(true); const joining = env.client.join(); env.client.leave(); finish({ iceServers: [] }); await joining;
   assert.equal(env.tracks.length, 0); assert.equal(env.state().busy, false); assert.equal(env.state().joined, false);
+});
+test('voice errors reach analytics as fixed codes, once per shown message', async () => {
+  assert.equal(voiceErrorKind('Microphone access was denied. Allow it in your browser and try again.'), 'mic_denied');
+  assert.equal(voiceErrorKind('Voice credentials are unavailable. Try again.'), 'ice_unavailable');
+  assert.equal(voiceErrorKind('Voice connection failed. Leave and join again.'), 'ice_failed');
+  assert.equal(voiceErrorKind('Could not connect voice to a teammate.'), 'negotiation');
+  assert.equal(voiceErrorKind('Voice disconnected. Join again when the board reconnects.'), 'disconnected');
+  assert.equal(voiceErrorKind('Something private: name@example.com'), 'other');
+  const reports = [], env = setup({ api: async () => { throw new Error('Voice credentials are unavailable. Try again.'); } });
+  const client = cloudVoice({ provider: env.provider, id: 1, boardId: 'board', api: async () => { throw new Error('Voice credentials are unavailable. Try again.'); }, view: () => {}, sound: () => {}, report: (name, data) => reports.push([name, data]) });
+  client.connected(true); await client.join();
+  client.mesh.error('Could not connect voice to a teammate.'); client.mesh.error('Could not connect voice to a teammate.');
+  assert.deepEqual(reports, [['voice_error', { errorKind: 'ice_unavailable' }], ['voice_error', { errorKind: 'negotiation' }]]);
 });

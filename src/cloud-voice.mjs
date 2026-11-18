@@ -2,14 +2,23 @@ import { VoiceMesh } from './voice-mesh.mjs';
 
 export const voiceReconnectWindow = 20000;
 const disconnected = 'Voice disconnected. Join again when the board reconnects.';
+// Analytics gets a fixed code for each message voice can show, never the message itself.
+const errorKinds = [[/denied/, 'mic_denied'], [/No microphone/, 'mic_missing'], [/open the microphone/, 'mic_failed'], [/microphone disconnected/, 'mic_ended'],
+  [/credentials/, 'ice_unavailable'], [/full/, 'full'], [/still connecting/, 'admission'], [/cancelled/, 'cancelled'],
+  [/connect voice to a teammate/, 'negotiation'], [/connection failed/, 'ice_failed'], [/Voice disconnected/, 'disconnected']];
+export const voiceErrorKind = message => errorKinds.find(([pattern]) => pattern.test(message))?.[1] || 'other';
 
-export function cloudVoice({ provider, id, api, boardId, view, sound, browser = {} }) {
+export function cloudVoice({ provider, id, api, boardId, view, sound, report = () => {}, browser = {} }) {
   let online = false, fetching = false, recovering = false, resuming = false, dropTimer = null;
   let error = '', pending = null, epoch = 0, previous = new Set(), lastKey = '', lastStreams = [];
   const later = browser.timeout || ((run, ms) => setTimeout(run, ms));
   const cancel = browser.clearTimeout || (timer => clearTimeout(timer));
   const streams = new Map(), departures = new Map(), signals = [];
   const wire = value => { if (provider.wsconnected) provider.sendMessage(JSON.stringify(value)); };
+  const fail = reason => {
+    if (reason && reason !== error) report('voice_error', { errorKind: voiceErrorKind(reason) });
+    error = reason;
+  };
 
   function refresh() {
     const states = provider.awareness.getStates();
@@ -74,9 +83,9 @@ export function cloudVoice({ provider, id, api, boardId, view, sound, browser = 
     },
     release: () => { pending?.reject('Voice join cancelled.'); wire({ type: 'voice-leave' }); },
     publish: voice => { if (provider.awareness.getLocalState()) provider.awareness.setLocalStateField('voice', voice); },
-    changed: refresh,
+    changed: refresh, report,
     remote: (id, stream) => { if (stream) streams.set(id, stream); else streams.delete(id); refresh(); },
-    error: reason => { error = reason; refresh(); },
+    error: reason => { fail(reason); refresh(); },
   });
 
   function leave() {
@@ -90,7 +99,7 @@ export function cloudVoice({ provider, id, api, boardId, view, sound, browser = 
     signals.length = 0;
     mesh.leave();
   }
-  function giveUp() { leave(); error = disconnected; refresh(); }
+  function giveUp() { leave(); fail(disconnected); refresh(); }
   async function resume() {
     if (resuming) return;
     const request = epoch;
@@ -125,7 +134,7 @@ export function cloudVoice({ provider, id, api, boardId, view, sound, browser = 
         if (request !== epoch) return;
         fetching = false;
         await mesh.join(iceServers, [...previous]);
-      } catch (cause) { if (request === epoch) error = cause.message; }
+      } catch (cause) { if (request === epoch) fail(cause.message); }
       finally { if (request === epoch) { fetching = false; refresh(); } }
     },
     connected(value) {

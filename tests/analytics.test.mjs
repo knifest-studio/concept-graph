@@ -97,3 +97,8 @@ test('repeatable controls never count toward rage and clear a nearby burst', () 
   for (const time of [200, 300, 400, 500]) assert.equal(click(time, true), false);
   assert.equal(click(600), false); assert.equal(click(700), false); assert.equal(click(800), true);
 });
+test('voice diagnostics keep candidate kinds, a relay flag and a state, and drop anything address-like', () => {
+  assert.deepEqual(details({ local: 'host,srflx', remote: 'relay', path: 'srflx-relay', turn: true, status: 'failed/failed/stable', errorKind: 'ice_failed', count: 2, duration: 30000 }),
+    { local: 'host,srflx', remote: 'relay', path: 'srflx-relay', turn: true, status: 'failed/failed/stable', errorKind: 'ice_failed', count: 2, duration: 30000 });
+  assert.deepEqual(details({ local: '192.168.1.5', remote: 'host,203.0.113.7', path: 'host-host-host', turn: 'yes' }), {});
+});
