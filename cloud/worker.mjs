@@ -99,18 +99,18 @@ async function teamRoute(request, env, user, url) {
 // Presence for the admin panel never fails the request that carries it.
 const noteSeen = (store, person, board) => Promise.resolve().then(() => store.seen(person, board)).catch(cause => console.error('Could not record who is online:', cause));
 
-// Site admins' panel: who signed in, who is online now and on which board, their boards, team-key generations and AI agent;
-// the site owner also sees each person's spending this month. The names and sign-in dates come from D1, which may be
+// The site owner's admin panel: who signed in, who is online now and on which board, their boards, team-key generations,
+// spending this month and AI agent. The names and sign-in dates come from D1, which may be
 // over its daily allowance: then the panel still shows everyone the site's own records know.
 async function adminRoute(request, env, user) {
   if (request.method !== 'GET') return error('Method not allowed.', 405);
   const store = directory(env);
-  if (!await store.siteRole(user.email)) return error('Only site admins can open the admin panel.', 403);
+  if (await store.siteRole(user.email) !== 'owner') return error('Only the site owner can open the admin panel.', 403);
   let accounts = [], signIns = true;
   try { accounts = ((await env.DB.prepare('SELECT email, name, created_at AS joinedAt, last_login_at AS lastLoginAt FROM users ORDER BY last_login_at DESC LIMIT 1000').all()).results || []).map(({ email, name, joinedAt, lastLoginAt }) => ({ email, name, joinedAt, lastLoginAt })); }
   catch (cause) { signIns = false; console.error('Could not read who has signed in:', cause); }
   const panel = await store.adminPeople(user.email, accounts);
-  return panel ? json({ admin: { ...panel, signIns } }) : error('Only site admins can open the admin panel.', 403);
+  return panel ? json({ admin: { ...panel, signIns } }) : error('Only the site owner can open the admin panel.', 403);
 }
 
 // Only the site owner sees who spent what on the team's keys, by month, with the names people signed in with.

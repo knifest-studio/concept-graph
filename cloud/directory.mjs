@@ -118,14 +118,13 @@ export class Directory extends DurableObject {
 
   // The admin panel's people: everyone who signed in (`accounts`, from D1, read by the worker) and everyone in the site's own
   // records, with who is online now and where, when each was last here, their boards, team-key generations and AI agent.
-  // Money only for the owner. Online people first, then by when they were last here.
+  // Only the site owner sees it (null for anyone else). Online people first, then by when they were last here.
   adminPeople(person, accounts = [], now = Date.now()) {
-    const role = this.siteRole(person);
-    if (!role) return null;
+    if (this.siteRole(person) !== 'owner') return null;
     const sql = (query, ...values) => this.ctx.storage.sql.exec(query, ...values).toArray();
     const today = new Date(now).toISOString().slice(0, 10), live = now - nanoReservationTtl, people = new Map();
     const entry = address => {
-      if (!people.has(address)) people.set(address, { email: address, name: null, joinedAt: null, lastLoginAt: null, role: null, online: null, lastSeen: null, ownBoards: 0, ownImages: 0, sharedBoards: 0, todayMade: 0, monthMade: 0, ...(role === 'owner' ? { monthUsd: 0 } : {}), agentSeen: null });
+      if (!people.has(address)) people.set(address, { email: address, name: null, joinedAt: null, lastLoginAt: null, role: null, online: null, lastSeen: null, ownBoards: 0, ownImages: 0, sharedBoards: 0, todayMade: 0, monthMade: 0, monthUsd: 0, agentSeen: null });
       return people.get(address);
     };
     for (const account of Array.isArray(accounts) ? accounts : []) {
@@ -143,7 +142,7 @@ export class Directory extends DurableObject {
     for (const row of sql('SELECT owner, COUNT(*) AS boards, COALESCE(SUM(imageCount), 0) AS images FROM boards WHERE deletedAt IS NULL AND owner IS NOT NULL GROUP BY owner')) Object.assign(entry(row.owner), { ownBoards: row.boards, ownImages: row.images });
     for (const row of sql(`SELECT p.email, COUNT(*) AS boards FROM board_people p JOIN boards b ON b.id = p.board WHERE b.deletedAt IS NULL AND p.role IS NOT NULL AND (b.owner IS NULL OR b.owner != p.email) GROUP BY p.email`)) entry(row.email).sharedBoards = row.boards;
     for (const row of sql(`SELECT email, SUM(CASE WHEN day = ? THEN 1 ELSE 0 END) AS todayMade, COUNT(*) AS monthMade, COALESCE(SUM(usd), 0) AS monthUsd FROM nano_usage
-      WHERE month = ? AND (images > 0 OR usd > 0) AND (open = 0 OR createdAt > ?) GROUP BY email`, today, today.slice(0, 7), live)) Object.assign(entry(row.email), { todayMade: row.todayMade, monthMade: row.monthMade }, role === 'owner' ? { monthUsd: row.monthUsd } : {});
+      WHERE month = ? AND (images > 0 OR usd > 0) AND (open = 0 OR createdAt > ?) GROUP BY email`, today, today.slice(0, 7), live)) Object.assign(entry(row.email), { todayMade: row.todayMade, monthMade: row.monthMade, monthUsd: row.monthUsd });
     for (const row of sql('SELECT email, lastSeen FROM agent_activity')) entry(row.email).agentSeen = row.lastSeen;
     for (const item of people.values()) {
       item.role = this.siteRole(item.email);
@@ -152,7 +151,7 @@ export class Directory extends DurableObject {
     }
     const order = item => [item.online ? 1 : 0, item.lastSeen || 0, Date.parse(item.lastLoginAt || '') || 0];
     const list = [...people.values()].sort((a, b) => { const x = order(a), y = order(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2] || a.email.localeCompare(b.email); });
-    return { role, now, onlineWindow, boards: boardNames.size, people: list };
+    return { now, onlineWindow, boards: boardNames.size, people: list };
   }
 
   agentLastSeen(person) { return this.ctx.storage.sql.exec('SELECT lastSeen FROM agent_activity WHERE email = ?', email(person) || '').toArray()[0]?.lastSeen ?? null; }

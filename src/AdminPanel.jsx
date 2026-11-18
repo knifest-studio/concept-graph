@@ -12,8 +12,8 @@ function ago(time, now) {
   return format.format(0, 'minute');
 }
 
-// Site admins' panel (/admin): who is online now and on which board, when each person was last here, their boards,
-// team-key generations and AI agent; the owner also sees spending. It re-reads itself while visible, like the boards list.
+// The site owner's panel (/admin): who is online now and on which board, when each person was last here, their boards,
+// team-key generations, spending and AI agent. It re-reads itself while visible, like the boards list.
 export default function AdminPanel({ services }) {
   const [data, setData] = useState(null), [error, setError] = useState(''), [query, setQuery] = useState('');
   useEffect(() => {
@@ -24,7 +24,7 @@ export default function AdminPanel({ services }) {
     document.addEventListener('visibilitychange', load);
     return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', load); };
   }, [services]);
-  const people = data?.people || [], owner = data?.role === 'owner', words = query.trim().toLowerCase();
+  const people = data?.people || [], words = query.trim().toLowerCase();
   const shown = words ? people.filter(person => `${person.name || ''} ${person.email}`.toLowerCase().includes(words)) : people;
   const totals = data && [
     [people.filter(person => person.online).length, 'Online now'],
@@ -43,7 +43,7 @@ export default function AdminPanel({ services }) {
         <div className="admin-people-head"><h2>{t('People')}</h2><input type="search" aria-label={t('Find a person')} placeholder={t('Find a person')} value={query} onChange={event => setQuery(event.target.value)}/></div>
         <p>{t('Online means the site is open in a visible tab right now (checked every 30–60 seconds). Visits are recorded from the day this panel was added, so earlier ones show as —.')}{!data.signIns && ` ${t('The sign-in list cannot be read right now, so names and sign-in dates may be missing.')}`}</p>
         <div className="analytics-table admin-table"><table>
-          <thead><tr>{['Person', 'Status', 'Own boards', 'Invited to', 'Generations', ...(owner ? ['Spent in the month'] : []), 'AI agent', 'First sign-in', 'Last sign-in'].map(title => <th key={title} scope="col">{t(title)}</th>)}</tr></thead>
+          <thead><tr>{['Person', 'Status', 'Own boards', 'Invited to', 'Generations', 'Spent in the month', 'AI agent', 'First sign-in', 'Last sign-in'].map(title => <th key={title} scope="col">{t(title)}</th>)}</tr></thead>
           <tbody>{shown.map(person => <tr key={person.email}>
             <td><b>{person.name || person.email}</b>{person.role && <span className="admin-role">{t(person.role === 'owner' ? 'Owner' : 'Admin')}</span>}{person.name && <small>{person.email}</small>}</td>
             <td>{person.online ? <><span className="admin-status">{t('Online')}</span>{person.online.board ? <small>{t('on board')} <a href={`/b/${person.online.board.id}`}>{person.online.board.name}</a></small> : <small>{t('on the boards list')}</small>}</>
@@ -51,7 +51,7 @@ export default function AdminPanel({ services }) {
             <td>{person.ownBoards}{person.ownImages > 0 && <small>{plural(person.ownImages, '{count} image', '{count} images')}</small>}</td>
             <td>{person.sharedBoards}</td>
             <td>{person.monthMade ? <>{t('{count} today', { count: person.todayMade })}<small>{t('{count} this month', { count: person.monthMade })}</small></> : '—'}</td>
-            {owner && <td>{person.monthUsd ? money(person.monthUsd) : '—'}</td>}
+            <td>{person.monthUsd ? money(person.monthUsd) : '—'}</td>
             <td>{person.agentSeen ? <span title={new Date(person.agentSeen).toLocaleString(locale())}>{ago(person.agentSeen, data.now)}</span> : '—'}</td>
             <td>{day(person.joinedAt)}</td>
             <td>{day(person.lastLoginAt)}</td>
