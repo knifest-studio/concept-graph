@@ -1,3 +1,4 @@
+import { maxVideoBytes, validateMp4Header } from './src/video-assets.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, constants } from 'node:fs';
 import { writeFile, stat, mkdtemp, copyFile, rm } from 'node:fs/promises';
@@ -13,7 +14,7 @@ import { imageAssets } from './src/image-edits.mjs';
 export const maxBoardArchiveBytes = 512 * 1024 * 1024;
 const maxManifestBytes = 32 * 1024 * 1024, maxImageBytes = 30 * 1024 * 1024, maxEntries = 5000;
 const assetPattern = /^[\da-f-]{36}\.(png|jpg|webp|gif)$/;
-const assetLimit = asset => asset.endsWith('.glb') ? maxModelBytes : maxImageBytes;
+const assetLimit = asset => asset.endsWith('.mp4') ? maxVideoBytes : asset.endsWith('.glb') ? maxModelBytes : maxImageBytes;
 const format = 'concept-graph-board';
 const fail = message => { throw new Error(message); };
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 120;
@@ -104,6 +105,12 @@ function hasImageEdits(graph) {
 // A cloud run's list of the images it was given (graph.mjs runInputRecord) names files that only it may still use.
 const hasRunInputs = graph => graph.runs.some(run => run.inputs?.length);
 
+function hasVideos(graph) {
+  let found = false;
+  visitNodes(graph, node => { if (node?.type === 'video' || node?.data?.task === 'video') found = true; });
+  return found;
+}
+
 function hasModels(graph) {
   let found = false;
   visitNodes(graph, node => { if (node?.type === 'model' || node?.data?.task === 'model3d') found = true; });
@@ -136,12 +143,12 @@ export async function exportBoardArchive(board, assetsDir) {
   let total = 0;
   for (const asset of needed) {
     const filename = path.join(assetsDir, asset), info = await stat(filename);
-    if (!info.isFile() || info.size > assetLimit(asset)) fail('An asset exceeds its file size limit (images 30 MB, models 80 MB).');
+    if (!info.isFile() || info.size > assetLimit(asset)) fail('An asset exceeds its file size limit (images 30 MB, models 80 MB, videos 128 MB).');
     total += info.size;
     if (total > maxBoardArchiveBytes) fail('This board exceeds the 512 MB export limit.');
     assets[asset] = { size: info.size, sha256: await fileHash(filename) };
   }
-  const manifest = Buffer.from(JSON.stringify({ format, version: hasRunInputs(saved.graph) ? 10 : hasModels(saved.graph) ? 9 : hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
+  const manifest = Buffer.from(JSON.stringify({ format, version: hasVideos(saved.graph) ? 11 : hasRunInputs(saved.graph) ? 10 : hasModels(saved.graph) ? 9 : hasImageEdits(saved.graph) ? 8 : hasShapes(saved.graph) ? 7 : hasSections(saved.graph) ? 6 : hasPageData(saved.graph) ? 5 : hasAnnotations(saved.graph) ? 4 : hasCaptions(saved.graph) ? 3 : hasTemplate(saved.graph) ? 2 : 1, exportedAt: new Date().toISOString(), board: saved, assets }, null, 2));
   if (manifest.length > maxManifestBytes || total + manifest.length + (needed.size + 1) * 512 > maxBoardArchiveBytes) fail('This board exceeds the archive size limits.');
   const zip = new yazl.ZipFile();
   zip.on('error', error => zip.outputStream.destroy(error));
@@ -173,7 +180,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     for await (const entry of zip.eachEntry()) {
       const name = entry.fileName;
       if (entries.size >= maxEntries || entries.has(name)) fail('The archive has too many entries or duplicate filenames.');
-      if (name !== 'board.json' && !/^assets\/[\da-f-]{36}\.(png|jpg|webp|gif|glb)$/.test(name)) fail('The archive contains an unexpected file path.');
+      if (name !== 'board.json' && !/^assets\/[\da-f-]{36}\.(png|jpg|webp|gif|glb|mp4)$/.test(name)) fail('The archive contains an unexpected file path.');
       if (!entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0o170000) === 0o120000) fail('Encrypted files, links, or unsupported compression are not allowed.');
       const limit = name === 'board.json' ? maxManifestBytes : assetLimit(name);
       if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0 || entry.uncompressedSize > limit) fail('An archive entry exceeds its size limit.');
@@ -186,7 +193,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     let manifest;
     try { manifest = JSON.parse((await readEntry(zip, manifestEntry, maxManifestBytes)).toString('utf8')); }
     catch { fail('The board manifest is damaged or invalid.'); }
-    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(manifest.version)) fail('This board format version is not supported.');
+    if (manifest?.format !== format || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(manifest.version)) fail('This board format version is not supported.');
     const board = manifest.board;
     boardName(board?.name); validateArchiveGraph(board.graph);
     if (manifest.version === 1 && hasTemplate(board.graph)) fail('This board uses custom nodes and requires a newer board format.');
@@ -202,6 +209,7 @@ export async function importBoardArchive(bytes, assetsDir) {
     if (manifest.version < 9 && hasModels(board.graph)) fail('This board uses 3D models and requires a newer board format.');
     // Apps before format 10 would not import the images a run lists, so they refuse it instead.
     if (manifest.version < 10 && hasRunInputs(board.graph)) fail('This board lists the images its generations used and requires a newer board format.');
+    if (manifest.version < 11 && hasVideos(board.graph)) fail('This board uses video and requires a newer board format.');
     const needed = referencedAssets(board.graph), inventory = manifest.assets;
     if (!inventory || typeof inventory !== 'object' || Array.isArray(inventory)
       || Object.keys(inventory).length !== needed.size || entries.size !== needed.size + 1) fail('The image inventory does not match the board.');
@@ -214,7 +222,8 @@ export async function importBoardArchive(bytes, assetsDir) {
     for (const asset of needed) {
       const image = await readEntry(zip, entries.get(`assets/${asset}`), assetLimit(asset));
       if (createHash('sha256').update(image).digest('hex') !== inventory[asset].sha256) fail('An image checksum does not match; the archive may be damaged.');
-      if (asset.endsWith('.glb')) validateGlb(image);
+      if (asset.endsWith('.mp4')) validateMp4Header(image);
+      else if (asset.endsWith('.glb')) validateGlb(image);
       else if ('.' + imageFormat(image) !== path.extname(asset)) fail('An image format does not match its filename.');
       const name = randomUUID() + path.extname(asset);
       await writeFile(path.join(staging, name), image, { flag: 'wx' });
@@ -228,7 +237,7 @@ export async function importBoardArchive(bytes, assetsDir) {
         if (node.data.mask) for (const key of ['asset', 'marked', 'base', 'source']) node.data.mask[key] = remap.get(node.data.mask[key]);
         if (node.data.unresized) { node.data.unresized.asset = remap.get(node.data.unresized.asset); if (node.data.unresized.uncropped) node.data.unresized.uncropped.asset = remap.get(node.data.unresized.uncropped.asset); }
       }
-      if (node?.type === 'model') { node.data.asset = remap.get(node.data.asset); if (node.data.poster) node.data.poster = remap.get(node.data.poster); }
+      if (['model', 'video'].includes(node?.type)) { node.data.asset = remap.get(node.data.asset); if (node.data.poster) node.data.poster = remap.get(node.data.poster); }
       if (node?.type === 'text' && node.data.template) node.data.template.assets = node.data.template.assets.map(asset => remap.get(asset));
     };
     graph.nodes.forEach(remapNode);

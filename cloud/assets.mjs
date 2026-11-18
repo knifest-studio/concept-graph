@@ -1,6 +1,6 @@
 export const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
-export const assetPattern = /^[\da-f-]{36}\.(png|jpg|gif|webp|glb)$/;
-export const assetTypes = { glb: 'model/gltf-binary', png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+export const assetPattern = /^[\da-f-]{36}\.(png|jpg|gif|webp|glb|mp4)$/;
+export const assetTypes = { mp4: 'video/mp4', glb: 'model/gltf-binary', png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 export const imageTypes = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 export function imageFormat(bytes) {

@@ -33,7 +33,7 @@ const runOrder = (a, b) => runKey(a) < runKey(b) ? -1 : runKey(a) > runKey(b) ? 
  * carries the shape it is expected to have.
  */
 export function expectedOutputs(graph, run, prompt = graph.nodes.find(node => node.id === run.nodeId)) {
-  const task = run.task || prompt?.data?.task, describe = task === 'describe', model3d = task === model3dTask, upscale = task === 'upscale' || model3d, outputIds = run.outputIds || [];
+  const task = run.task || prompt?.data?.task, describe = task === 'describe', video = task === 'video', model3d = task === model3dTask, upscale = task === 'upscale' || model3d, outputIds = run.outputIds || [];
   let connected;
   const sources = () => connected ||= [...new Set(graph.edges.filter(edge => edge.target === run.nodeId).map(edge => edge.source))]
     .map(id => graph.nodes.find(node => node.id === id)).filter(node => node?.type === 'image');
@@ -41,8 +41,8 @@ export function expectedOutputs(graph, run, prompt = graph.nodes.find(node => no
     : isSiteGenerator(run.provider) ? run.variants || 1 : Math.max(run.variants || 1, codexImageActive(run) ? outputIds.length + 1 : 1);
   const target = run.target || prompt, inputs = run.snapshot ? run.snapshot.filter(node => node.type === 'image') : sources();
   // A shape the run asked for and its generator uses (run.settings, written when it started) is the shape it will have.
-  const chosen = ratioAspect(run.settings?.applied?.aspectRatio);
-  return Array.from({ length: count }, (_, slot) => ({ type: describe ? 'text' : model3d ? 'model' : 'image',
+  const chosen = ratioAspect(video ? run.settings?.applied?.videoAspectRatio : run.settings?.applied?.aspectRatio);
+  return Array.from({ length: count }, (_, slot) => ({ type: describe ? 'text' : video ? 'video' : model3d ? 'model' : 'image',
     aspect: model3d ? 1 : upscale ? knownAspect(inputs[slot]) || 1 : chosen || knownAspect(target) || knownAspect(inputs.length === 1 ? inputs[0] : null) || 1 }));
 }
 

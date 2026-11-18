@@ -513,6 +513,7 @@ async function startRun(board, { nodeId, revision, view }, ensureConnected = () 
   if (revision !== graph.revision) throw conflict(graph);
   if (graph.runs.some(r => r.nodeId === nodeId && ['queued', 'running'].includes(r.status))) throw Object.assign(new Error('This prompt is already running.'), { status: 409 });
   const inputs = collectInputs(graph, nodeId);
+  if (inputs.task === 'video') throw Object.assign(new Error('Video generation runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   if (inputs.task === model3dTask) throw Object.assign(new Error('3D generation runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   if (inputs.task === upscaleTask) throw Object.assign(new Error('Upscaling runs on Concept Graph Cloud, not on this computer.'), { status: 400 });
   for (const asset of inputs.images) await stat(path.join(assetsDir, asset));
@@ -826,7 +827,7 @@ const server = http.createServer(async (request, response) => {
     let filename;
     if (url.pathname.startsWith('/assets/')) {
       const asset = url.pathname.slice('/assets/'.length);
-      if (!/^[\da-f-]{36}\.(png|jpg|webp|gif|glb)$/.test(asset)) return json(response, { error: 'Not found.' }, 404);
+      if (!/^[\da-f-]{36}\.(png|jpg|webp|gif|glb|mp4)$/.test(asset)) return json(response, { error: 'Not found.' }, 404);
       filename = path.join(assetsDir, asset);
     } else {
       const relative = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);

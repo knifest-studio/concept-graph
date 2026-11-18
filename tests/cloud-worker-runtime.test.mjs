@@ -780,3 +780,19 @@ runtimeTest('GLB asset upload streams valid models, rejects malformed/oversize i
   assert.equal(streamed.status, 200); assert.equal((await streamed.json()).bytes, length);
   assert.equal(completed, true); assert.deepEqual(parts, [5 * 1024 * 1024, 1024 * 1024]);
 });
+
+
+runtimeTest('video input capabilities require no session, only expose their named image, and MP4 supports streamed range reads', async t => {
+  const { env, request, files } = setup(t), { signVideoInput } = await import('../cloud/auth.mjs');
+  const asset = '11111111-1111-1111-1111-111111111111.png', video = '22222222-2222-2222-2222-222222222222.mp4', bytes = new Uint8Array([0,0,0,20,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109]);
+  await env.FILES.put('assets/'+asset,bytes,{httpMetadata:{contentType:'image/png'}});
+  const token = await signVideoInput(asset,env.SESSION_SECRET), get = path => worker.fetch(new Request('http://localhost:8787'+path),env,{waitUntil(){}});
+  const input = await get(`/api/video-inputs/${asset}?token=${token}`); assert.equal(input.status,200);assert.equal(input.headers.get('Cache-Control'),'no-store');assert.deepEqual(new Uint8Array(await input.arrayBuffer()),bytes);
+  assert.equal((await get(`/api/video-inputs/${asset}`)).status,403);assert.equal((await get(`/api/video-inputs/${video}?token=${token}`)).status,403);
+  const expired = await signVideoInput(asset,env.SESSION_SECRET,Date.now()-21*60000);assert.equal((await get(`/api/video-inputs/${asset}?token=${expired}`)).status,403);
+  assert.equal((await get('/assets/'+video)).status,401);
+  const original = env.FILES.get;env.FILES.get = async (key, options) => key === 'assets/'+video ? { body: bytes.subarray(4,12), size: bytes.length, range: {offset:4,length:8}, httpEtag:'"video"' } : original(key,options);
+  const cookie = 'cg_session='+await signSession(sessionIdentity({name:'Viewer',email:'viewer@example.com'}),env.SESSION_SECRET);
+  const response = await worker.fetch(new Request('http://localhost:8787/assets/'+video,{headers:{Cookie:cookie,Range:'bytes=4-11'}}),env,{waitUntil(){}});
+  assert.equal(response.status,206);assert.equal(response.headers.get('Content-Type'),'video/mp4');assert.equal(response.headers.get('Content-Range'),'bytes 4-11/20');assert.equal(response.headers.get('Content-Length'),'8');assert.equal((await response.arrayBuffer()).byteLength,8);
+});

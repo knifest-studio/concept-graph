@@ -488,3 +488,47 @@ runtimeTest('MCP GLB upload and placement work without generator access, reject 
   assert.match((await viewer.tool('upload_model', { boardId, data })).error, /only view/);
   assert.match((await viewer.tool('add_model_node', { boardId, asset: uploaded.asset })).error, /only view/);
 });
+
+
+runtimeTest('Video UI and MCP enforce separate access, reserve the clamped price, stream MP4 and preserve run metadata', async t => {
+  const { directory, rooms, files, request, settle } = setup(t, { SITE_OWNER_EMAIL: 'owner@studio.example', FAL_KEY: 'test-fal', NANO_BANANA_ALLOWED: '@studio.example' });
+  const lead = await connect(request, 'lead@studio.example'), { board } = await lead.tool('create_board', { name: 'Video board' }), boardId = board.id;
+  const asset = (await lead.tool('upload_image', { data: Buffer.from(png(400, 400)).toString('base64') })).asset;
+  const image = await lead.tool('add_image_node', { boardId, asset });
+  const { nodeId } = await lead.tool('add_video_node', { boardId, prompt: 'Animate #1', model: 'omni', settings: { duration: 20 }, imageInputs: [{ nodeId: image.nodeId, role: 'start' }] });
+  assert.ok(nodeId); assert.equal((await lead.tool('whoami')).video.allowed, false);
+  const start = () => request(`/api/boards/${boardId}/nano`, { method: 'POST', headers: { Cookie: lead.session }, body: JSON.stringify({ nodeId }) });
+  assert.equal((await start()).status, 403); assert.match((await lead.tool('start_run', { boardId, nodeId })).error, /Video generation isn’t available/);
+  directory.changeTeamAccess('owner@studio.example', { video: { email: 'lead@studio.example', allowed: true }, nano: { entry: '@studio.example', allowed: false } });
+  assert.equal((await lead.tool('whoami')).nanoBanana.allowed, false);
+  const bytes = new Uint8Array([0,0,0,20,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109]), calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    calls.push({ url, init });
+    if (init.method === 'POST') {
+      const input = JSON.parse(init.body); assert.equal(input.duration, 15); assert.equal(input.resolution, '720p'); assert.match(input.image_url, /video-inputs.*token=/); assert.equal(input.prompt, 'Animate the start frame');
+      return Response.json({ status_url: 'https://queue.fal.run/status', response_url: 'https://queue.fal.run/result' });
+    }
+    if (url.endsWith('/stream')) return new Response('data: {"status":"COMPLETED"}\n\n');
+    if (url.endsWith('/result')) return Response.json({ video: { url: 'https://media.example/out.mp4' } });
+    assert.equal(init.headers, undefined); const response = new Response(bytes); response.arrayBuffer = () => { throw Error('buffered'); }; return response;
+  });
+  const run = await lead.tool('start_run', { boardId, nodeId }); assert.ok(run.runId); await settle();
+  const room = rooms.get(boardId), record = room.document.getMap('runs').get(run.runId); assert.equal(record.status, 'completed'); assert.equal(record.task, 'video'); assert.equal(record.settings.requested.duration, 20); assert.equal(record.settings.applied.duration, 15); assert.equal(record.usd, 1.2285);
+  const shown = await lead.tool('get_board', { boardId }), output = shown.nodes.find(n => n.type === 'video'); assert.ok(output); assert.equal(output.data.endpoint, 'google/gemini-omni-flash/v1.2/image-to-video'); assert.equal(output.data.poster, asset); assert.equal(files.get('assets/' + output.data.asset).size, bytes.length);
+  const full = await lead.tool('get_run', { boardId, runId: run.runId }); assert.equal(full.inputs[0].role, 'start'); assert.equal(full.outputIds[0], output.id);
+  assert.equal(directory.nanoUsage('lead@studio.example').usedToday, 1); assert.equal(directory.nanoUsage('lead@studio.example').teamSpentUsd, 1.2285); assert.equal(calls.filter(c => c.init.method === 'POST').length, 1);
+  directory.changeTeamAccess('owner@studio.example', { video: { email: 'lead@studio.example', allowed: false } }); assert.equal((await start()).status, 403);
+});
+
+runtimeTest('Video blocks incompatible inputs and over-budget requests before queuing a paid call', async t => {
+  const { directory, rooms, request } = setup(t, { SITE_OWNER_EMAIL: 'owner@studio.example', FAL_KEY: 'test-fal', NANO_BANANA_MONTHLY_USD: '.2' });
+  const lead = await connect(request, 'lead@studio.example'), { board } = await lead.tool('create_board', { name: 'Video limits' }), boardId = board.id;
+  directory.changeTeamAccess('owner@studio.example', { video: { email: 'lead@studio.example', allowed: true } });
+  const asset = (await lead.tool('upload_image', { data: Buffer.from(png(400,400)).toString('base64') })).asset;
+  const first = await lead.tool('add_image_node', { boardId, asset }), second = await lead.tool('add_image_node', { boardId, asset });
+  const mixed = await lead.tool('add_video_node', { boardId, prompt: 'Go', model: 'omni', imageInputs: [{nodeId:first.nodeId,role:'start'},{nodeId:second.nodeId,role:'reference'}] });
+  assert.match((await lead.tool('start_run', { boardId, nodeId: mixed.nodeId })).error, /cannot combine frames/);
+  const costly = await lead.tool('add_video_node', { boardId, prompt: 'Go', model: 'seedance', settings: { duration: 30 } });
+  assert.match((await lead.tool('start_run', { boardId, nodeId: costly.nodeId })).error, /budget/i);
+  assert.equal(rooms.get(boardId).document.getMap('runs').size,0); assert.equal(directory.nanoUsage('lead@studio.example').usedToday,0);
+});

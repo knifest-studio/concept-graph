@@ -56,7 +56,7 @@ function ownReadiness({ required, paired, online = true, status }) {
 
 export function directInputCounts(graph) {
   // A describe node feeds nothing into the prompts it connects to, so it is not counted.
-  const types = new Map(graph.nodes.filter(node => !isDescribe(node) && ['text', 'image'].includes(node.type) && !['upscale', 'model3d'].includes(node.data.task)).map(node => [node.id, node.type])), counts = new Map(graph.nodes.map(node => [node.id, { images: 0, text: 0 }])), seen = new Map();
+  const types = new Map(graph.nodes.filter(node => !isDescribe(node) && ['text', 'image'].includes(node.type) && !['upscale', 'model3d', 'video'].includes(node.data.task)).map(node => [node.id, node.type])), counts = new Map(graph.nodes.map(node => [node.id, { images: 0, text: 0 }])), seen = new Map();
   for (const edge of graph.edges) {
     if (!types.has(edge.source) || !counts.has(edge.target)) continue;
     const sources = seen.get(edge.target) || new Set();

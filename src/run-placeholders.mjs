@@ -25,7 +25,7 @@ export function runPlaceholders(graph, runs, page, spawns) {
     const first = run.outputIds?.length || 0, started = run.variantsStarted ?? (run.variants > 1 && !isSiteGenerator(run.provider) ? first + 1 : Infinity);
     for (const [index, { id, position, size, type, aspect }] of slots.entries()) {
       const slot = first + index, describe = type === 'text', spawnAt = spawns?.get(run.id)?.get(id), animation = Number.isFinite(spawnAt) ? { spawnAt } : {};
-      const status = run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : task === 'model3d' ? 'Generating 3D' : task === 'upscale' ? 'Upscaling' : 'Generating';
+      const status = run.status === 'queued' || slot >= started ? 'Queued' : describe ? 'Describing' : task === 'video' ? 'Generating video' : task === 'model3d' ? 'Generating 3D' : task === 'upscale' ? 'Upscaling' : 'Generating';
       nodes.push({ id, type: 'pending', position, ...pageFields, z: z + index, selectable: false, draggable: false, connectable: false, deletable: false, focusable: false,
         measured: size, style: size, data: { aspect, runId: run.id, ...animation, describe, slot, status, seed: describe ? undefined : waitingSeed(id) } });
       edges.push({ id: `${id}-edge`, source: run.nodeId, target: id, type: 'pending', data: animation, className: 'pending-edge', selectable: false, deletable: false, focusable: false });

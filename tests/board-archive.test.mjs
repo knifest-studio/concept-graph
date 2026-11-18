@@ -174,7 +174,7 @@ test('invalid archives, missing/history images, checksums and malformed history 
   const originalFiles = await unpack(await collect(await exportBoardArchive(board, source)));
   await assert.rejects(importBoardArchive(Buffer.from('not a zip'), destination), /damaged/);
   const invalid = [Buffer.from('not a zip'), Buffer.from('PK')];
-  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 11;
+  const version = new Map(originalFiles), future = JSON.parse(version.get('board.json')); future.version = 12;
   version.set('board.json', Buffer.from(JSON.stringify(future))); invalid.push(await pack(version));
   const missing = new Map(originalFiles); missing.delete(`assets/${historical}`); invalid.push(await pack(missing));
   const corrupt = new Map(originalFiles); corrupt.set(`assets/${historical}`, Buffer.alloc(corrupt.get(`assets/${historical}`).length)); invalid.push(await pack(corrupt));
@@ -316,4 +316,22 @@ test('format 10 round trips the images a run lists, remapped with the board, and
   await assert.rejects(importBoardArchive(await pack(files), destination), /Invalid generation inputs/);
   // A run without a list (every local run, and cloud runs from before) keeps the older format.
   assert.equal(JSON.parse((await unpack(await collect(await exportBoardArchive(board, source)))).get('board.json')).version, 1);
+});
+
+
+test('format 11 retains video assets, historical posters and roles, and refuses older formats and malformed MP4', async t => {
+  const { source, destination } = await fixture(t), video = '44444444-4444-4444-4444-444444444444.mp4';
+  const bytes = Buffer.from([0,0,0,20,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109]);
+  await writeFile(path.join(source, video), bytes);
+  const saved = structuredClone(board), node = { id: 'video', type: 'video', position: { x: 800, y: 0 }, data: { asset: video, poster: historical, name: 'Flight', videoModel: 'minimax', videoResolution: '768P', duration: 5, usd: .3 } };
+  saved.graph.nodes.push(node); saved.graph.nodes.find(n => n.id === 'prompt').data = { text: 'Fly #1', task: 'video', videoRoles: { reference: 'start' } };
+  saved.graph.runs[0].snapshot.push(node); saved.graph.runs[0].inputs = [{ nodeId: 'reference', asset: current, role: 'start', number: 1 }];
+  const files = await unpack(await collect(await exportBoardArchive(saved, source))), manifest = JSON.parse(files.get('board.json'));
+  assert.equal(manifest.version, 11); assert.ok(files.has('assets/' + video));
+  const restored = await importBoardArchive(await pack(files), destination), result = restored.graph.nodes.find(n => n.id === 'video');
+  assert.notEqual(result.data.asset, video); assert.notEqual(result.data.poster, historical); assert.deepEqual(await readFile(path.join(destination, result.data.asset)), bytes);
+  assert.equal(restored.graph.runs[0].snapshot.find(n => n.id === 'video').data.asset, result.data.asset); assert.equal(restored.graph.runs[0].inputs[0].role, 'start');
+  assert.equal(restored.graph.nodes.find(n => n.id === 'prompt').data.videoRoles.reference, 'start');
+  const old = new Map(files); manifest.version = 10; old.set('board.json', Buffer.from(JSON.stringify(manifest))); await assert.rejects(importBoardArchive(await pack(old), destination), /video.*newer/);
+  await writeFile(path.join(source, video), Buffer.from('not an mp4')); const bad = await collect(await exportBoardArchive(saved, source)); await assert.rejects(importBoardArchive(bad, destination), /MP4/);
 });

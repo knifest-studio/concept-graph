@@ -1,3 +1,5 @@
+import { isVideo, videoTask, videoModels, videoRoles, videoAspects, videoResolutions, resolveVideo } from '../src/video-generation.mjs';
+import { nameImageConnections } from '../graph.mjs';
 // What an agent connected over MCP may do. It acts as the person who connected it, with that person's role on each
 // board. Board tools run inside the board's room (BoardRoom.mcp), so every edit reaches the people on the board at once.
 import { alignNodes, captureSections, detachArrows, estimatedSize, moveCaptured, moveGroup, pruneGroups, sectionContents, wrapBounds } from '../src/canvas.mjs';
@@ -51,7 +53,7 @@ function setGeneration(data, args) {
 const end = object({ x: number('Canvas x of a free end'), y: number('Canvas y of a free end'), nodeId: text('Node this end holds on to: a prompt, image, sticky or shape', { minLength: 1, maxLength: 120 }) }, [], { description: 'An arrow end: a node to hold on to, or a point' });
 const templateFields = { name: text('Custom node name', { minLength: 1, maxLength: 80 }), instructions: text('Instructions added to every prompt made from it', { maxLength: 100000 }),
   assets: array('Reference image asset IDs, in order', assetId, { maxItems: 10 }), color: hex('Tag colour', templatePalette) };
-const graphNode = { ...object({ id: itemId, type: text('text, image, model, drawing, sticky, stamp, shape or arrow'), position, page: pageId, z: layer, data: { type: 'object', properties: {}, additionalProperties: true } }, ['id', 'type', 'position', 'data']), additionalProperties: true };
+const graphNode = { ...object({ id: itemId, type: text('text, image, model, video, drawing, sticky, stamp, shape or arrow'), position, page: pageId, z: layer, data: { type: 'object', properties: {}, additionalProperties: true } }, ['id', 'type', 'position', 'data']), additionalProperties: true };
 const graphEdge = { ...object({ id: itemId, source: itemId, target: itemId }, ['id', 'source', 'target']), additionalProperties: true };
 const graphGroup = { ...object({ id: itemId, name: text('Group name', { minLength: 1, maxLength: 80 }), nodeIds: ids('Member node IDs'), collapsed: boolean('Folded'), slideshow: boolean('Folded, shows one image at a time'), slide: text('Image the folded slideshow shows', { minLength: 1, maxLength: 120 }) }, ['id', 'name', 'nodeIds', 'collapsed']), additionalProperties: true };
 const graphSection = object({ id: itemId, name: text('Section name', { minLength: 1, maxLength: 80 }), x: number('Left edge'), y: number('Top edge'), width: number('Width', { minimum: sectionMinimum.width }), height: number('Height', { minimum: sectionMinimum.height }), color: hex('Background', sectionPalette), page: pageId }, ['id', 'name', 'x', 'y', 'width', 'height']);
@@ -148,7 +150,7 @@ define('upload_image', 'Upload a PNG, JPEG, WebP or GIF (at most 20 MB) and get 
 define('upload_model', 'Upload a base64 GLB (at most 20 MB) for a cloud board you can edit. No generator access or cost. Then place it with add_model_node.', { boardId, data: text('GLB file, base64-encoded', { minLength: 8, maxLength: 28 * 1024 * 1024 }) }, ['boardId', 'data'], { account: true });
 define('get_image', 'Look at images: returns each as image content. Uses the board preview (at most 1024 px) when one exists; pass original for full size.', { boardId, nodeId: itemId, assets: array('Image asset IDs from image nodes or poster IDs from model nodes', assetId, { minItems: 1, maxItems: 6, uniqueItems: true }), original: boolean('Return the original files instead of previews') }, [], { access: 'view', account: true });
 
-define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. Models have a GLB asset, name, optional poster, modeler (hunyuan/trellis/rodin/tripo), uploaded (boolean), fileName (original upload name), source {nodeId, name}, bytes (GLB size), usd (per-model charged estimate), createdAt and author. Older models may lack these facts; recent runs can supply generator and timing. get_image with boardId and nodeId shows their poster. A section holds whatever lies inside it and stores no member list.',
+define('get_board', 'Read a board as it is now: pages, nodes (each with its page and estimated size on the canvas), connections, groups, sections, custom nodes and recent generations, plus the revision apply_graph needs. Prompts are text nodes; images are image nodes whose asset get_image shows. Video outputs have an MP4 asset, optional poster, videoModel, duration, videoResolution, endpoint and approximate usd. Models have a GLB asset, name, optional poster, modeler (hunyuan/trellis/rodin/tripo), uploaded (boolean), fileName (original upload name), source {nodeId, name}, bytes (GLB size), usd (per-model charged estimate), createdAt and author. Older models may lack these facts; recent runs can supply generator and timing. get_image with boardId and nodeId shows their poster. A section holds whatever lies inside it and stores no member list.',
   { pageId: text('Only this page', { minLength: 1, maxLength: 120 }), runs: integer('How many recent generations to include (default 20)', { minimum: 0, maximum: 500 }) }, [], { access: 'view', run: ctx => {
     const { graph, args } = ctx, pages = boardPages(graph);
     if (args.pageId !== undefined && !pages.some(page => page.id === args.pageId)) fail(`Page not found: ${args.pageId}.`);
@@ -178,6 +180,19 @@ define('add_upscale_node', 'Add an upscale node fed by images on the board, then
     for (const nodeId of args.imageIds) graph.edges.push({ id: id(), source: nodeId, target: added.nodeId });
     return added;
   } });
+define('add_video_node', 'Add one Video generator with a model picker (minimax, omni, kling, seedance). Costs are approximate per second; use start_run to spend the team fal key. Each run counts as one daily image and toward the shared budget. Input roles are stored by image node ID; the first defaults to Start, the second to End, later inputs to Reference. Incompatible roles block Run; settings are kept and visibly clamped. Alt-drag duplicates for model comparison.',
+  { prompt: text('Video prompt; use #1, #2 for connected image numbers', { minLength: 1, maxLength: 100000 }), model: choice('Video model', Object.keys(videoModels)),
+    settings: object({ duration: integer('Requested seconds (kept when clamped)', { minimum: 1, maximum: 120 }), resolution: choice('Requested resolution', videoResolutions), aspectRatio: choice('Requested shape', videoAspects), audio: boolean('Generate audio where supported; otherwise the soundtrack is unchanged') }),
+    imageInputs: array('Image nodes with persistent roles, in connection order', object({ nodeId: itemId, role: choice('Image role', videoRoles) }, ['nodeId']), { maxItems: 30 }), position: at, pageId }, ['prompt'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
+      const { args, graph } = ctx, inputs = args.imageInputs || [], ids = inputs.map(input => input.nodeId), found = ensure(graph.nodes, ids, 'Node');
+      if (!ctx.prepared.fal) fail('Video generation isn’t set up on this site. Ask the site owner to add a fal.ai key.');
+      if (new Set(ids).size !== ids.length || inputs.some(input => found.get(input.nodeId).type !== 'image')) fail('Video inputs must be distinct image nodes.');
+      const settings = args.settings || {}, data = { text: args.prompt, task: videoTask, videoModel: args.model || 'minimax', videoRoles: Object.fromEntries(inputs.map((input, index) => [input.nodeId, input.role || (index === 0 ? 'start' : index === 1 ? 'end' : 'reference')])) };
+      for (const [from, to] of [['duration', 'duration'], ['resolution', 'videoResolution'], ['aspectRatio', 'videoAspectRatio'], ['audio', 'videoAudio']]) if (settings[from] !== undefined) data[to] = settings[from];
+      const added = addNode(ctx, 'text', data, targetPage(graph, args.pageId, ids), args.position, { author: false });
+      for (const source of ids) graph.edges.push({ id: id(), source, target: added.nodeId });
+      return { ...added, generation: resolveVideo({ data }, inputs.map((input, index) => ({ nodeId: input.nodeId, number: index + 1 }))) };
+    } });
 define('add_model3d_node', 'Add a 3D model generator fed by 1–4 image nodes on one page. Each image becomes one separate GLB model beside it. Run with start_run. hunyuan (default) costs $0.375, trellis $0.30, rodin $0.40, tripo (Tripo H3.1) $0.30 per model, through fal.ai on the team key and shared daily/monthly limits. No text prompts or multi-view input.',
   { imageIds: array('Images to turn into separate 3D models', itemId, { minItems: 1, maxItems: maxModel3dImages, uniqueItems: true }), modeler: choice('3D generator', Object.values(modelers)), position: at }, ['imageIds'], { prepare: async (args, env) => ({ fal: upscaleSettings(env).fal }), run: ctx => {
     const { args, graph } = ctx, found = ensure(graph.nodes, args.imageIds, 'Node');
@@ -435,7 +450,7 @@ define('clear_node_template', 'Turn a prompt made from a custom node back into a
   ctx.graph.nodes = ctx.graph.nodes.map(value => value.id === item.id ? switchNodeTemplate(value, null) : value);
   return { nodeId: item.id };
 } });
-define('start_run', 'Generate from a prompt, as the person’s Generate button would. 3D nodes run through fal.ai; each model counts as one daily image. Nano Banana and GPT Image run on the team’s API keys with shared access, daily images and monthly budget. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
+define('start_run', 'Generate from a prompt, as the person’s Generate button would. Video nodes run through fal.ai with separate per-person Video access, one daily image per video and their estimated cost against the shared budget. 3D nodes run through fal.ai; each model counts as one daily image. Nano Banana and GPT Image run on the team’s API keys with shared access, daily images and monthly budget. Codex runs on the person’s own computer: the board must be open in their browser with the helper connected (and their Codex, or a teammate’s they were granted, ready); that tab starts it. The images (or, for a describe node, the description) appear beside the prompt; poll get_run for the status.', { nodeId: itemId }, ['nodeId']);
 define('list_versions', 'List the board’s saved versions, newest first: a copy every ten minutes while it changes, one kept just before any large deletion or restore, and a daily backup. Each says when, why, how many nodes and images it held, and who edited.', { limit: integer('How many (1–500, default 50)', { minimum: 1, maximum: 500 }) }, [], { access: 'view' });
 define('restore_version', 'Put the whole board back as it was in a saved version, for everyone. The board as it is now is saved first, so this can be undone by restoring that copy. Generation history is kept. Ask the user first.', { versionId: text('Version ID from list_versions', { minLength: 1, maxLength: 64 }) }, ['versionId'], { destructive: true });
 define('cancel_run', 'Stop a generation this person started. A Codex run is stopped through their open board. Images that already arrived stay.', { runId }, ['runId'], { destructive: true });
@@ -460,6 +475,7 @@ export function runBoardTool(tool, ctx) {
   ctx.graph = structuredClone(before);
   const result = tool.run(ctx);
   const graph = reconcileStampGraph(before, ctx.graph);
+  graph.nodes = nameImageConnections(graph.nodes, before.edges, graph.edges.filter(edge => graph.nodes.some(node => node.id === edge.target && isVideo(node)) && !before.edges.some(old => old.id === edge.id)));
   try { validateGraph(graph); }
   catch (cause) { fail(`That would leave the board invalid: ${cause.message}`); }
   return { result, graph };

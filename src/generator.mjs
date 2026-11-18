@@ -2,7 +2,7 @@ import { codexGenerator, describeTask, generators, isSiteGenerator, upscaleTask,
 import { t } from './i18n.mjs';
 
 // Upscaling always runs on the site, whatever the node's generator says.
-export const usesSiteGenerator = data => isSiteGenerator(data?.generator) || [upscaleTask, model3dTask].includes(data?.task);
+export const usesSiteGenerator = data => isSiteGenerator(data?.generator) || [upscaleTask, model3dTask, 'video'].includes(data?.task);
 export const dollars = value => `$${value.toFixed(2).replace(/\.00$/, '')}`;
 
 // Exhausted site models stay visible, so limits never masquerade as a missing model. Codex is also the setup fallback.
@@ -55,4 +55,12 @@ export function nanoState(status, generator = generators.nanoBanana, access = st
   if (!left) return { selectable: true, ready: false, note: t('Daily limit reached ({used}/{limit})', { used: Math.min(status.usedToday, status.dailyImages), limit: status.dailyImages }), budget, fal };
   if (status.teamSpentUsd >= status.monthlyUsd) return { selectable: true, ready: false, note: t('Team budget for this month is used up'), budget, fal };
   return { selectable: true, ready: true, note: t('{left} of {limit} left today', { left, limit: status.dailyImages }), budget, fal };
+}
+
+export function videoState(status, access) {
+  const state = nanoState(status, model3dTask, access);
+  if (!status) return { ...state, note: t('Video generation runs on the site, not in Codex.') };
+  if (!status.configured) return { ...state, note: t('Video generation isn’t set up on this site. Ask the site owner to add a fal.ai key.') };
+  if (!status.allowed) return { ...state, note: t('Video generation isn’t available for your account. Ask a site admin for access.') };
+  return state;
 }
