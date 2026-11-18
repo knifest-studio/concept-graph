@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VoiceMesh, micError, iceSummary, voiceConnectDeadline } from '../src/voice-mesh.mjs';
+import { VoiceMesh, micError, iceSummary, mediaSummary, voiceConnectDeadline, voiceMediaDelay } from '../src/voice-mesh.mjs';
 import { browserIceServers, maxSignalBytes, voiceHasSpace, voiceIce, voiceSignal } from '../cloud/voice.mjs';
 
 class Peer {
@@ -158,4 +158,22 @@ test('each peer reports once how it connected or why not, with candidate kinds a
   assert.equal(stuck[0][1].path, undefined); assert.equal(stuck[0][1].remote, 'relay');
   quiet.mesh.leave(); deadline(); await new Promise(setImmediate); assert.equal(stuck.length, 1);
   assert.deepEqual(await iceSummary({ getStats: async () => { throw new Error('closed'); } }), { local: '', remote: '' });
+});
+test('a connected peer reports packets and audio energy each way a few seconds in, once', async () => {
+  const reports = [], env = setup(1, { report: (name, data) => reports.push([name, data]) });
+  await env.mesh.join([{ urls: 'stun:x' }], [2]);
+  const pc = env.peers[0];
+  pc.getStats = async () => new Map([
+    ['o', { id: 'o', type: 'outbound-rtp', kind: 'audio', packetsSent: 400 }],
+    ['i', { id: 'i', type: 'inbound-rtp', kind: 'audio', packetsReceived: 390, packetsLost: 2, totalAudioEnergy: .8 }],
+    ['s', { id: 's', type: 'media-source', kind: 'audio', totalAudioEnergy: 1.5 }],
+    ['v', { id: 'v', type: 'inbound-rtp', kind: 'video', packetsReceived: 9999 }],
+  ]);
+  pc.getReceivers = () => [{ track: { kind: 'audio', muted: false } }];
+  pc.connectionState = 'connected'; pc.onconnectionstatechange(); pc.onconnectionstatechange();
+  const checks = env.timers.filter(timer => timer.delay === voiceMediaDelay); assert.equal(checks.length, 1);
+  await checks[0](); await new Promise(setImmediate);
+  assert.deepEqual(reports.find(([name]) => name === 'voice_media')[1], { sent: 400, received: 390, lost: 2, energyIn: .8, energyOut: 1.5, trackMuted: false, muted: false });
+  env.mesh.leave(); await checks[0](); assert.equal(reports.filter(([name]) => name === 'voice_media').length, 1);
+  assert.deepEqual(await mediaSummary({ getStats: async () => { throw new Error('closed'); } }), {});
 });

@@ -27,6 +27,22 @@ export async function iceSummary(pc) {
   return { local: kinds(local), remote: kinds(remote), ...(ends?.every(kind => candidateKinds.includes(kind)) ? { path: ends.join('-') } : {}) };
 }
 const peerStatus = pc => [pc.connectionState, pc.iceConnectionState, pc.signalingState].join('/');
+// A connected call can still be silent. A few seconds in, packet counts and audio energy each way tell a sender that
+// sends nothing or silence from a receiver that gets sound: https://w3c.github.io/webrtc-stats/#dom-rtcinboundrtpstreamstats-totalaudioenergy
+export const voiceMediaDelay = 8000;
+export async function mediaSummary(pc) {
+  const result = {};
+  try {
+    (await pc.getStats()).forEach(report => {
+      if (report.kind !== 'audio') return;
+      if (report.type === 'outbound-rtp') result.sent = report.packetsSent;
+      else if (report.type === 'inbound-rtp') Object.assign(result, { received: report.packetsReceived, lost: report.packetsLost, energyIn: report.totalAudioEnergy });
+      else if (report.type === 'media-source') result.energyOut = report.totalAudioEnergy;
+    });
+  } catch { /* A closed connection reports nothing. */ }
+  const muted = pc.getReceivers?.().find(receiver => receiver.track?.kind === 'audio')?.track.muted;
+  return { ...Object.fromEntries(Object.entries(result).filter(([, value]) => Number.isFinite(value))), ...(typeof muted === 'boolean' ? { trackMuted: muted } : {}) };
+}
 
 // MDN perfect negotiation: https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
 // Browser objects are created only on join, and injectable for port-free tests.
@@ -122,7 +138,13 @@ export class VoiceMesh {
       else if (pc.connectionState === 'disconnected') state.timer = this.timeout(restart, 4000);
       else if (pc.connectionState === 'connected') {
         state.restarts = 0;
-        if (!state.connected) { state.connected = true; this.cancel(state.deadline); diagnose('voice_connected', {}); }
+        if (!state.connected) {
+          state.connected = true; this.cancel(state.deadline); diagnose('voice_connected', {});
+          state.media = this.timeout(async () => {
+            const media = await mediaSummary(pc);
+            if (live()) this.report('voice_media', { ...media, muted: this.muted });
+          }, voiceMediaDelay);
+        }
       }
     };
     for (const track of this.stream.getAudioTracks()) pc.addTrack(track, this.stream);
@@ -155,7 +177,7 @@ export class VoiceMesh {
   }
   remove(id) {
     const state = this.peers.get(id); if (!state) return;
-    this.peers.delete(id); this.cancel(state.timer); this.cancel(state.wait); this.cancel(state.deadline);
+    this.peers.delete(id); this.cancel(state.timer); this.cancel(state.wait); this.cancel(state.deadline); this.cancel(state.media);
     state.pc.onicecandidate = state.pc.onnegotiationneeded = state.pc.onconnectionstatechange = state.pc.ontrack = null;
     state.pc.close(); this.remote(id, null);
   }
