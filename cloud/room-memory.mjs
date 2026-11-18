@@ -1,5 +1,7 @@
 const mb = 1024 * 1024;
 export const roomMemoryBudget = 64 * mb;
+// One 32 MiB multipart buffer plus stream chunks and the small URL request.
+export const videoMemoryBytes = 40 * mb;
 export const base64Bytes = bytes => Math.ceil(bytes / 3) * 4;
 // Count UTF-8 without allocating another request-sized buffer.
 export function requestBytes(text) {

@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { videoModels } from '../src/video-generation.mjs';
 // Local fal queue fake; never contacts fal.ai. FAL_KEY may be any nonempty value, FAL_ENDPOINT=http://127.0.0.1:8790.
 // node scripts/fake-fal.mjs (PORT changes the port). Each job stays pending briefly so the board shows its waiting state.
 import { createServer } from 'node:http';
@@ -8,9 +10,15 @@ import { picture, send } from './fake-image.mjs';
 import { model3dModels, topazModel, seedvrModel } from '../graph.mjs';
 
 export function fakeFalHandler({ delay = 2000 } = {}) {
-  const jobs = new Map(), endpoints = new Set([topazModel, seedvrModel, ...Object.values(model3dModels)]);
+  const videos = new Set(Object.values(videoModels).flatMap(model => ['text', 'image', 'reference'].map(mode => `${model.path}/${mode}-to-video`)));
+  videos.add('minimax/h3-max/reference-to-video'); videos.delete('minimax/h3/reference-to-video');
+  const jobs = new Map(), endpoints = new Set([...videos, topazModel, seedvrModel, ...Object.values(model3dModels)]);
   return async (request, response) => {
     const origin = `http://${request.headers.host}`, path = new URL(request.url, origin).pathname;
+    if (request.method === 'GET' && path === '/video.mp4') {
+      const bytes = process.env.FAKE_FAL_VIDEO ? await readFile(process.env.FAKE_FAL_VIDEO) : Buffer.from([0,0,0,20,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109]);
+      response.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': bytes.length }); return response.end(bytes);
+    }
     if (request.method === 'GET' && ['/cube.glb', '/thumbnail.png', '/upscaled.png'].includes(path)) {
       const glb = path === '/cube.glb', bytes = glb ? cubeGlb() : picture('Concept Graph fal queue fake');
       response.writeHead(200, { 'Content-Type': glb ? 'model/gltf-binary' : 'image/png', 'Content-Length': bytes.length }); return response.end(bytes);
@@ -21,7 +29,7 @@ export function fakeFalHandler({ delay = 2000 } = {}) {
       try { const parts = []; let size = 0; for await (const part of request) { size += part.length; if (size > 32 * 1024 * 1024) return send(response, 413, { detail: 'Input too large.' }); parts.push(part); } input = JSON.parse(Buffer.concat(parts)); }
       catch { return send(response, 400, { detail: 'Body is not JSON.' }); }
       const model = path.slice(1), image = input.input_image_url || input.image_url || input.image_urls?.[0];
-      if (typeof image !== 'string' || !image.startsWith('data:image/')) return send(response, 422, { detail: 'Expected an image data URI.' });
+      if (!videos.has(model) && (typeof image !== 'string' || !image.startsWith('data:image/'))) return send(response, 422, { detail: 'Expected an image data URI.' });
       const id = randomUUID(), url = `${origin}/requests/${id}`;
       jobs.set(id, { model, at: Date.now(), cancelled: false });
       console.log(`${new Date().toISOString()} queued ${model} ${id}`);
@@ -48,6 +56,7 @@ export function fakeFalHandler({ delay = 2000 } = {}) {
     }
     if (!complete) return send(response, 400, { detail: 'Still running.' });
     if ([topazModel, seedvrModel].includes(job.model)) return send(response, 200, { image: { url: `${origin}/upscaled.png` } });
+    if (videos.has(job.model)) return send(response, 200, { video: { url: `${origin}/video.mp4` } });
     const file = { url: `${origin}/cube.glb` };
     if (job.model === model3dModels.tripo) return send(response, 200, { model_mesh: file, rendered_image: { url: `${origin}/thumbnail.png` } });
     return send(response, 200, job.model === model3dModels.rodin ? { model_mesh: file } : { model_glb: file, ...(job.model === model3dModels.hunyuan ? { thumbnail: { url: `${origin}/thumbnail.png` } } : {}) });

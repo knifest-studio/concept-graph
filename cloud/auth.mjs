@@ -198,3 +198,10 @@ export async function googleCallback(request, env) {
 export function devLoginEnabled(request, env) {
   return env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(new URL(request.url).hostname);
 }
+
+// A fal job may fetch only the one image named here, for 20 minutes; this token is never a sign-in session.
+export const signVideoInput = (asset, secret, now) => signPayload({ purpose: 'video-input', asset }, secret, now);
+export async function verifyVideoInput(token, asset, secret, now) {
+  const value = await verifyPayload(token, secret, 20 * 60, now);
+  return value?.purpose === 'video-input' && value.asset === asset;
+}

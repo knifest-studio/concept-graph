@@ -1,3 +1,5 @@
+import { videoStatus } from './video.mjs';
+import { verifyVideoInput } from './auth.mjs';
 import { getServerByName, routePartykitRequest } from 'partyserver';
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider';
 import { devLoginEnabled, googleCallback, googleSignIn, recordLogin, sessionCookie, sessionIdentity, sessionUser, signSession, validateName } from './auth.mjs';
@@ -89,7 +91,7 @@ async function teamRoute(request, env, user, url) {
   if (request.method !== 'PATCH') return error('Method not allowed.', 405);
   const origin = request.headers.get('Origin');
   if (origin && origin !== url.origin) return error('Invalid origin.', 403);
-  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, admin: input.admin, request: input.request });
+  const input = await body(request), result = await store.changeTeamAccess(user.email, { nano: input.nano, model3d: input.model3d, video: input.video, admin: input.admin, request: input.request });
   return result.error ? error(result.error, result.status) : shown(result.access);
 }
 
@@ -112,7 +114,7 @@ async function nanoRoute(request, env, user, url, boardId, runId) {
   if (input.generator !== undefined && !isSiteGenerator(input.generator)) return error('Choose a site generator.', 400);
   // `settings: 1` comes from pages that show generation settings; the room refuses older pages a run that uses them, in
   // the browser's language, since those pages cannot translate the refusal.
-  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, generator: input.generator, view: input.view, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
+  const result = await (await getServerByName(env.BoardRoom, boardId)).startNano({ nodeId: input.nodeId, generator: input.generator, view: input.view, client: counter(input.client), clock: counter(input.clock), requester: user, settings: input.settings === 1, siteOrigin: url.origin, languages: request.headers.get('Accept-Language')?.slice(0, 200) });
   return result.error ? json({ error: result.error, ...(result.resizeAssets ? { resizeAssets: result.resizeAssets } : {}) }, result.status) : json({ run: result.run }, 202);
 }
 
@@ -190,6 +192,14 @@ async function route(request, env) {
     await recordLogin(user, env);
     return json({ user, siteRole: await directory(env).siteRole(user.email) }, 200, { 'Set-Cookie': cookie });
   }
+  if (path.startsWith('/api/video-inputs/')) {
+    const asset = path.slice('/api/video-inputs/'.length);
+    if (!/^[\da-f-]{36}\.(png|jpg|webp)$/.test(asset) || !await verifyVideoInput(url.searchParams.get('token'), asset, env.SESSION_SECRET)) return error('Image link expired or invalid.', 403);
+    if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
+    const object = await env.FILES.get(`assets/${asset}`);
+    if (!object) return error('Asset not found.', 404);
+    return new Response(method === 'HEAD' ? null : object.body, { headers: { 'Content-Type': assetTypes[asset.split('.').pop()], 'Content-Length': String(object.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+  }
   const protectedPath = path.startsWith('/api/') || path.startsWith('/assets/') || path.startsWith('/downloads/') || path.startsWith('/parties/');
   const user = protectedPath ? await sessionUser(request, env.SESSION_SECRET) : null;
   if (protectedPath && !user) return error('Sign in required.', 401);
@@ -203,9 +213,9 @@ async function route(request, env) {
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/nano') {
     if (method !== 'GET') return error('Method not allowed.', 405);
-    const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store) };
+    const store = directory(env), status = { ...await nanoStatus(user, env, store), gptImage: await gptImageStatus(user, env, store), fal: upscaleSettings(env).fal, model3d: await model3dStatus(user, env, store), video: await videoStatus(user, env, store) };
     // Someone without access learns whom to ask, and whether they already asked.
-    if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed)) Object.assign(status, await store.accessHelp(user.email));
+    if ((status.configured && !status.allowed) || (status.model3d.configured && !status.model3d.allowed) || (status.video.configured && !status.video.allowed)) Object.assign(status, await store.accessHelp(user.email));
     return json(status);
   }
   if (path === '/api/nano/request') {
@@ -364,7 +374,7 @@ async function route(request, env) {
     const asset = path.slice('/assets/'.length);
     if (!assetPattern.test(asset)) return error('Asset not found.', 404);
     if (!['GET', 'HEAD'].includes(method)) return error('Method not allowed.', 405);
-    const object = await env.FILES.get(`assets/${asset}`);
+    const object = await env.FILES.get(`assets/${asset}`, asset.endsWith('.mp4') ? { range: request.headers } : undefined);
     if (!object) return error('Asset not found.', 404);
     const headers = {
       'Content-Type': assetTypes[asset.split('.').pop()],
@@ -373,6 +383,12 @@ async function route(request, env) {
       'X-Content-Type-Options': 'nosniff'
     };
     if (request.headers.get('If-None-Match')?.split(',').some(tag => ['*', object.httpEtag, `W/${object.httpEtag}`].includes(tag.trim()))) return new Response(null, { status: 304, headers });
+    // R2 range: Headers and R2Object.range, read 2026-11-18:
+    // https://developers.cloudflare.com/r2/api/workers/workers-api-reference/#ranged-reads
+    if (asset.endsWith('.mp4')) {
+      headers['Accept-Ranges'] = 'bytes';
+      if (object.range) { const { offset, length } = object.range; headers['Content-Range'] = `bytes ${offset}-${offset + length - 1}/${object.size}`; return new Response(method === 'HEAD' ? null : object.body, { status: 206, headers: { ...headers, 'Content-Length': String(length) } }); }
+    }
     return new Response(method === 'HEAD' ? null : object.body, { headers: { ...headers, 'Content-Length': String(object.size) } });
   }
   if (path.startsWith('/downloads/')) {

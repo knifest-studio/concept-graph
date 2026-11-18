@@ -55,6 +55,13 @@ A newcomer is first pointed at **+ Text prompt** to write and run a first prompt
 
 Find **CUSTOM NODES** in **Create**: choose **+ New custom node**, or select a plain prompt and use **Save as custom node** in its floating toolbar or right-click menu. On team boards, **Copy from another board…** copies chosen custom nodes into this board; each copy can be edited independently. Open the board-name menu for board actions, including **Version history** on team boards.
 
+
+### Video (cloud boards)
+
+One **Video** node switches between MiniMax H3 (default), Gemini Omni Flash 1.2, Kling 4.0 and Seedance 2.5 through the site’s fal.ai key. Search the sidebar for a model, or choose **Make a video** on an image. Connected images keep their numbers and stored Start / End / Middle / Reference roles. Unsupported combinations block Generate; model changes keep settings and show applied clamps and an approximate cost. Alt-drag duplicates the node with its inputs for comparison.
+
+Typical 720p-class estimates are MiniMax $0.06/s ($0.08/s in reference mode), Omni $0.0819/s, Kling $0.157/s and Seedance $0.473/s; prices are approximate and reference/token charges can vary. Video requires separate per-person **Video** access in **Team access**; each run counts as one daily image and charges its estimate against the shared team budget. MP4 results (up to 128 MB) have a player, download, fullscreen and generation information; low-zoom cards show a poster. Exports and version history retain video assets (archive format 11). Phase 1 takes image inputs only; model-specific extras and parallel generation are not offered.
+
 ## Desktop preview
 
 The desktop preview includes Node.js and looks for an existing Codex CLI. If it cannot find one, it offers to download a separate verified copy; boards remain available if you decline. Sign in with your own ChatGPT account when prompted. Apple Silicon macOS has been tested locally; the public Apple Silicon download is signed with Developer ID and notarized by Apple. The Windows x64 preview requires WebView2 Runtime and has been cross-compiled but not tested on Windows. Windows builds are unsigned portable ZIPs and may show an operating-system security warning. The previews do not update automatically. See [desktop preview setup and build instructions](docs/desktop-preview.md).

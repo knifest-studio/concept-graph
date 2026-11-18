@@ -1,3 +1,4 @@
+import { resolveVideo } from './video-generation.mjs';
 import { codexGenerator, describeModel, gptDescribeModel, describeTask, generationSettings, generatorOf, generators, gptImageModel, isSiteGenerator, model3dModels, model3dTask, modelerOf, nanoModel, promptVariants, runInputList, runInputs, seedvrModel, topazModel, upscalerOf, upscalers, upscaleTask, withGenerator } from '../graph.mjs';
 
 // What usage analytics records about a generation: the service and model that ran it, the kind of run, how many images
@@ -10,15 +11,16 @@ const terminal = status => ['completed', 'failed', 'cancelled'].includes(status)
 // From a run record, which decides: the room writes its own (provider, model, task, variants above one), and a Codex run
 // is written in the tab that starts it (its model, a describe's task, the variants its strict count asks for).
 export function recordedKind(run) {
-  const task = [describeTask, upscaleTask, model3dTask].includes(run.task) ? run.task : 'image';
-  const generator = task === model3dTask ? falGenerator : task === upscaleTask ? run.model === nanoModel ? generators.nanoBanana : falGenerator
+  const task = [describeTask, upscaleTask, model3dTask, 'video'].includes(run.task) ? run.task : 'image';
+  const generator = ['video', model3dTask].includes(task) ? falGenerator : task === upscaleTask ? run.model === nanoModel ? generators.nanoBanana : falGenerator
     : isSiteGenerator(run.provider) ? run.provider : codexGenerator;
   return { generator, model: typeof run.model === 'string' ? run.model : undefined, task, variants: task === 'image' && Number.isInteger(run.variants) && run.variants > 1 ? run.variants : 1 };
 }
 // From a prompt the board's site route is starting, read the way the room reads it: any prompt that is not GPT Image runs
 // on Nano Banana there.
-export function siteKind(node) {
-  const task = [describeTask, upscaleTask, model3dTask].includes(node?.data?.task) ? node.data.task : 'image';
+export function siteKind(node, inputs = []) {
+  const task = [describeTask, upscaleTask, model3dTask, 'video'].includes(node?.data?.task) ? node.data.task : 'image';
+  if (task === 'video') return { generator: falGenerator, model: resolveVideo(node, inputs).endpoint, task, variants: 1 };
   if (task === model3dTask) return { generator: falGenerator, model: model3dModels[modelerOf(node)], task, variants: 1 };
   if (task === upscaleTask) { const upscaler = upscalerOf(node); return { generator: upscaler === upscalers.nanoBanana ? generators.nanoBanana : falGenerator, model: upscaleModels[upscaler], task, variants: 1 }; }
   const gpt = generatorOf(node) === generators.gptImage;
@@ -31,9 +33,9 @@ const images = list => ({ references: list.length, masked: list.some(image => !!
 // A prompt as Generate would run it now, on the site route or in Codex, for a start that never became a run (blocked by
 // the helper or site access, or refused at the start).
 export function promptAnalytics(graph, nodeId, { site = true } = {}) {
-  const node = graph?.nodes?.find(item => item.id === nodeId);
-  const kind = site ? siteKind(node) : { generator: codexGenerator, model: generationSettings.model, task: node?.data?.task === describeTask ? describeTask : 'image', variants: node?.data?.task === describeTask ? 1 : promptVariants(node) };
-  return { ...kind, ...images(sent(graph, nodeId)) };
+  const node = graph?.nodes?.find(item => item.id === nodeId), inputs = sent(graph, nodeId);
+  const kind = site ? siteKind(node, inputs) : { generator: codexGenerator, model: generationSettings.model, task: node?.data?.task === describeTask ? describeTask : 'image', variants: node?.data?.task === describeTask ? 1 : promptVariants(node) };
+  return { ...kind, ...images(inputs) };
 }
 // A site run's start answers with its ID alone; its record follows over the board's socket, sometimes later. The caller
 // adds the prompt's ID, so until the record arrives the prompt stands in for it.

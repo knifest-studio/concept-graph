@@ -1,3 +1,4 @@
+import { videoStatus } from './video.mjs';
 // The cloud MCP endpoint: Streamable HTTP answered with plain JSON, without sessions or event streams. OAuthProvider has
 // checked the agent's token before a request gets here; ctx.props is the person who connected the agent.
 import { getServerByName } from 'partyserver';
@@ -39,7 +40,7 @@ const boardName = value => { try { return validateName(value, 80); } catch (caus
 
 // Account tools: what the Worker answers without opening a board.
 const account = {
-  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), model3d: await model3dStatus(user, env, directory(env)) }),
+  whoami: async (env, user) => ({ user: { name: user.name, email: user.email }, nanoBanana: await nanoStatus(user, env, directory(env)), gptImage: await gptImageStatus(user, env, directory(env)), model3d: await model3dStatus(user, env, directory(env)), video: await videoStatus(user, env, directory(env)) }),
   list_boards: async (env, user) => ({ boards: (await directory(env).boardsFor(user.email)).map(brief) }),
   create_board: async (env, user, args) => {
     const store = directory(env), board = await store.createBoard(boardName(args.name), user);
@@ -88,7 +89,7 @@ const account = {
       const answer = await (await getServerByName(env.BoardRoom, board.id)).mcp({ tool: 'get_board', args: { boardId: board.id, runs: 0 }, user });
       if (answer.error) fail(answer.error);
       const node = answer.value.nodes.find(item => item.id === args.nodeId);
-      const asset = node?.type === 'model' ? node.data.poster : node?.type === 'image' ? node.data.asset : null;
+      const asset = ['model', 'video'].includes(node?.type) ? node.data.poster : node?.type === 'image' ? node.data.asset : null;
       if (!asset) fail('This node has no image or model poster.');
       assets = [asset];
     }
@@ -104,18 +105,18 @@ const account = {
   },
 };
 
-async function call(env, user, name, args) {
+async function call(env, user, name, args, siteOrigin) {
   const tool = toolByName.get(name);
   if (!tool) return null;
   checkArgs(args, tool.inputSchema);
   if (tool.account) return account[name](env, user, args);
   const board = await boardAccess(env, user, args.boardId, tool.access);
-  const answer = await (await getServerByName(env.BoardRoom, board.id)).mcp({ tool: name, args, user });
+  const answer = await (await getServerByName(env.BoardRoom, board.id)).mcp({ tool: name, args, user, siteOrigin });
   if (answer.error) fail(answer.error);
   return name === 'get_board' ? { board: { id: board.id, name: board.name, role: board.role, access: board.access, ownerName: board.ownerName }, ...answer.value } : answer.value;
 }
 
-async function answer(message, env, user) {
+async function answer(message, env, user, siteOrigin) {
   if (!message || typeof message !== 'object' || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
     // Responses to requests this server never sends need no answer.
     return message && typeof message === 'object' && !('method' in message) && ('result' in message || 'error' in message) ? null : rpcError(message?.id ?? null, -32600, 'Invalid request.');
@@ -129,7 +130,7 @@ async function answer(message, env, user) {
   if (method !== 'tools/call') return rpcError(id, -32601, 'Method not found.');
   if (typeof params?.name !== 'string') return rpcError(id, -32602, 'Tool name is required.');
   try {
-    const value = await call(env, user, params.name, params.arguments ?? {});
+    const value = await call(env, user, params.name, params.arguments ?? {}, siteOrigin);
     return value === null ? rpcError(id, -32602, `Unknown tool: ${params.name}`) : rpc(id, value?.content ? value : json(value));
   } catch (cause) {
     if (!cause?.expected) console.error('MCP tool failed:', params.name, cause);
@@ -147,7 +148,7 @@ export const mcpApi = {
     try { messages = JSON.parse(new TextDecoder().decode(await readBody(request, maxRequest))); }
     catch (cause) { return Response.json(rpcError(null, cause.status === 413 ? -32600 : -32700, cause.status === 413 ? 'Request is too large.' : 'Invalid JSON.'), { status: cause.status === 413 ? 413 : 400 }); }
     const batch = Array.isArray(messages);
-    const answers = (await Promise.all((batch ? messages : [messages]).map(message => answer(message, env, user)))).filter(Boolean);
+    const answers = (await Promise.all((batch ? messages : [messages]).map(message => answer(message, env, user, new URL(request.url).origin)))).filter(Boolean);
     if (!answers.length) return new Response(null, { status: 202 });
     return Response.json(batch ? answers : answers[0], { headers: { 'Cache-Control': 'no-store' } });
   }

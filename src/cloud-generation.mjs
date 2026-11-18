@@ -59,10 +59,11 @@ export class CloudGeneration {
   async start(nodeId, owner, view) {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
     const graph = withGenerator(this.read(), nodeId, codexGenerator), key = `codex:${nodeId}`;
-    if (this.starting.has(key) || graph.runs.some(run => run.nodeId === nodeId && (!run.provider || ['upscale', 'model3d'].includes(run.task)) && ['running', 'queued'].includes(run.status))) return;
+    if (this.starting.has(key) || graph.runs.some(run => run.nodeId === nodeId && (!run.provider || ['upscale', 'model3d', 'video'].includes(run.task)) && ['running', 'queued'].includes(run.status))) return;
     this.starting.add(key);
     try {
       const { prompt, images, target, task, variants } = collectInputs(graph, nodeId);
+      if (task === 'video') throw new Error('Video generation runs on the site, not in Codex.');
       if (task === 'model3d') throw new Error('3D generation runs on the site, not in Codex.');
       if (task === 'upscale') throw new Error('Upscaling runs on the site, not in Codex.');
       if (task && owner === undefined && !this.can(task)) throw new Error(t(outdatedHelper));
@@ -98,13 +99,13 @@ export class CloudGeneration {
   // The room first waits for this client's own latest edits (its clock), so it reads the prompt as it is shown here.
   async startNano(nodeId, generator, view) {
     if (!this.ready()) throw new Error(t('Wait for a live board connection before generating.'));
-    const node = this.read().nodes.find(node => node.id === nodeId), special = ['upscale', 'model3d'].includes(node?.data.task);
+    const node = this.read().nodes.find(node => node.id === nodeId), special = ['upscale', 'model3d', 'video'].includes(node?.data.task);
     generator ??= generatorOf(node);
     if (!isSiteGenerator(generator)) generator = 'nano-banana';
     // Special nodes keep their own one-run rule and always use the site's existing route.
     if (special) generator = 'nano-banana';
     const key = `${generator}:${nodeId}`;
-    if (this.starting.has(key) || [...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && (special || ['upscale', 'model3d'].includes(run.task) || run.provider === generator) && ['running', 'queued'].includes(run.status))) return;
+    if (this.starting.has(key) || [...this.doc.getMap('runs').values()].some(run => run.nodeId === nodeId && (special || ['upscale', 'model3d', 'video'].includes(run.task) || run.provider === generator) && ['running', 'queued'].includes(run.status))) return;
     this.starting.add(key);
     try {
       const { run } = await this.api(`/api/boards/${this.boardId}/nano`, { method: 'POST', headers: { 'Content-Type': 'application/json' },

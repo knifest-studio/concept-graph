@@ -4,7 +4,7 @@ import { accessModes, boardRole, canEdit, shareRoles } from './access.mjs';
 import { normalizeEmail } from './auth.mjs';
 import { nanoAllowed } from './nano-banana.mjs';
 
-const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
+const nanoReservationTtl = 15 * 60 * 1000, maxInvited = 200, maxNanoEntries = 1000, maxAccessRequests = 500, maxBoardRequests = 100, maxModel3dEntries = 1000, maxVideoEntries = 1000, trashDays = 30, dayMs = 24 * 60 * 60 * 1000;
 const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdAt) AS updatedAt, b.imageCount, b.covers, b.owner, b.ownerName, b.access, b.linkRole';
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, requestCount, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role, ...(role === 'owner' && requestCount ? { requests: requestCount } : {}) });
@@ -45,6 +45,7 @@ export class Directory extends DurableObject {
     // Who may use the site's Gemini and OpenAI keys (emails and @domains), and the admins who decide it. The list used to be the
     // NANO_BANANA_ALLOWED variable: it is copied in once, and from then on admins keep it on the site.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS video_access (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS model3d_access (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS site_admins (email TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
     // People without image access who asked for it, shown to admins in Team access until access is given or the request dismissed.
@@ -55,6 +56,11 @@ export class Directory extends DurableObject {
       const now = new Date().toISOString();
       if (siteOwner) ctx.storage.sql.exec('INSERT OR IGNORE INTO model3d_access (email, addedBy, addedAt) VALUES (?, NULL, ?)', siteOwner, now);
       ctx.storage.sql.exec("INSERT INTO site_settings (key, value) VALUES ('model3dImported', ?)", JSON.stringify({ at: now }));
+    }
+    if (!ctx.storage.sql.exec("SELECT 1 FROM site_settings WHERE key = 'videoImported'").toArray().length) {
+      const now = new Date().toISOString();
+      if (siteOwner) ctx.storage.sql.exec('INSERT OR IGNORE INTO video_access (email, addedBy, addedAt) VALUES (?, NULL, ?)', siteOwner, now);
+      ctx.storage.sql.exec("INSERT INTO site_settings (key, value) VALUES ('videoImported', ?)", JSON.stringify({ at: now }));
     }
     // Anyone with a Google account can sign in, so the boards made before sharing, open to everyone who signs in, move once
     // to "anyone with the link": people who opened them keep them, editing included, and strangers no longer see them.
@@ -81,6 +87,8 @@ export class Directory extends DurableObject {
   nanoAllowed(person) { return nanoAllowed(person, this.nanoEntries().map(row => row.entry).join(',')); }
   model3dEntries() { return this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM model3d_access ORDER BY email').toArray().map(row => ({ ...row })); }
   model3dAllowed(person) { const address = email(person); return !!address && !!this.ctx.storage.sql.exec('SELECT 1 FROM model3d_access WHERE email = ?', address).toArray().length; }
+  videoEntries() { return this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM video_access ORDER BY email').toArray().map(row => ({ ...row })); }
+  videoAllowed(person) { const address = email(person); return !!address && !!this.ctx.storage.sql.exec('SELECT 1 FROM video_access WHERE email = ?', address).toArray().length; }
 
   // Display names of the people who give generation access (the owner first, then admins by seniority), shown to people
   // who lack it so they know whom to ask. Names only, as boards show them; never emails.
@@ -125,11 +133,11 @@ export class Directory extends DurableObject {
     const day = new Date(now).toISOString().slice(0, 10), imported = JSON.parse(this.ctx.storage.sql.exec("SELECT value FROM site_settings WHERE key = 'nanoImported'").toArray()[0]?.value || '{}');
     const usage = this.ctx.storage.sql.exec('SELECT email, SUM(images) AS images FROM nano_usage WHERE day = ? AND (open = 0 OR createdAt > ?) GROUP BY email', day, now - nanoReservationTtl).toArray();
     return { role, owner: email(this.env?.SITE_OWNER_EMAIL), admins: this.ctx.storage.sql.exec('SELECT email, addedBy, addedAt FROM site_admins ORDER BY email').toArray().map(row => ({ ...row })),
-      nano: this.nanoEntries(), model3d: this.model3dEntries(), usedToday: Object.fromEntries(usage.map(row => [row.email, row.images])), imported, requests: this.accessRequests() };
+      nano: this.nanoEntries(), model3d: this.model3dEntries(), video: this.videoEntries(), usedToday: Object.fromEntries(usage.map(row => [row.email, row.images])), imported, requests: this.accessRequests() };
   }
 
   // Admins grant and revoke image and 3D access; only the owner appoints and removes admins.
-  changeTeamAccess(person, { nano, model3d, admin, request } = {}) {
+  changeTeamAccess(person, { nano, model3d, video, admin, request } = {}) {
     const role = this.siteRole(person), now = new Date().toISOString();
     if (!role) return { error: 'Only site admins can change generation access.', status: 403 };
     if (nano !== undefined) {
@@ -147,6 +155,13 @@ export class Directory extends DurableObject {
       if (model3d.allowed && !this.model3dAllowed(address) && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM model3d_access').toArray()[0].count >= maxModel3dEntries) return { error: `At most ${maxModel3dEntries} people can use 3D generation.`, status: 400 };
       if (model3d.allowed) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO model3d_access (email, addedBy, addedAt) VALUES (?, ?, ?)', address, email(person), now);
       else this.ctx.storage.sql.exec('DELETE FROM model3d_access WHERE email = ?', address);
+    }
+    if (video !== undefined) {
+      const address = email(video?.email);
+      if (!address || typeof video.allowed !== 'boolean') return { error: 'Enter a valid email address.', status: 400 };
+      if (video.allowed && !this.videoAllowed(address) && this.ctx.storage.sql.exec('SELECT COUNT(*) AS count FROM video_access').toArray()[0].count >= maxVideoEntries) return { error: `At most ${maxVideoEntries} people can use video generation.`, status: 400 };
+      if (video.allowed) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO video_access (email, addedBy, addedAt) VALUES (?, ?, ?)', address, email(person), now);
+      else this.ctx.storage.sql.exec('DELETE FROM video_access WHERE email = ?', address);
     }
     if (request !== undefined) {
       const address = email(request?.email);

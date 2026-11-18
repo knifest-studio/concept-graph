@@ -26,6 +26,14 @@ export function setLanguage(value) {
 const fill = (text, values) => values ? text.replace(/\{(\w+)\}/g, (match, key) => Object.hasOwn(values, key) ? String(values[key]) : match) : text;
 // t('Go to {name}', { name }): the current language's text with the values filled in.
 export function t(text, values) {
+  if (!values && typeof text === 'string') {
+    let match = /^The video generator could not use this image: (.*)$/s.exec(text);
+    if (match) return t('The video generator could not use this image: {error}', { error: match[1] });
+    match = /^The video generator failed \((\d+)\)\. Try again\.$/.exec(text);
+    if (match) return t('The video generator failed ({status}). Try again.', { status: match[1] });
+    match = /^Could not store the generated video: (.*)$/s.exec(text);
+    if (match) return t('Could not store the generated video: {error}', { error: t(match[1]) });
+  }
   if (!values && typeof text === 'string' && text.startsWith('The mask on “')) {
     const match = /^The mask on “(.*)” no longer matches the image\. Paint it again\.$/s.exec(text);
     if (match) return t('The mask on “{name}” no longer matches the image. Paint it again.', { name: match[1] });

@@ -16,7 +16,7 @@ export function validateImageEdits(data) {
 }
 
 // All node assets, including 3D models and their image posters, must survive copies and archives.
-export const imageAssets = node => node?.type === 'model' ? [node.data.asset, node.data.poster].filter(Boolean) : node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key]), node.data.unresized?.asset, node.data.unresized?.uncropped?.asset].filter(Boolean) : node?.data?.template?.assets || [];
+export const imageAssets = node => ['model', 'video'].includes(node?.type) ? [node.data.asset, node.data.poster].filter(Boolean) : node?.type === 'image' ? [node.data.asset, node.data.uncropped?.asset, ...['asset', 'marked', 'base', 'source'].map(key => node.data.mask?.[key]), node.data.unresized?.asset, node.data.unresized?.uncropped?.asset].filter(Boolean) : node?.data?.template?.assets || [];
 // The file a person thinks of as the original: before any resize, then before any crop.
 export const originalAsset = data => data.unresized?.uncropped?.asset || data.unresized?.asset || data.uncropped?.asset || data.asset;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));

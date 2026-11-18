@@ -1,3 +1,5 @@
+import { isVideo, videoTask, validateVideo, roleVideoInputs, videoModels } from './src/video-generation.mjs';
+import { maxVideoBytes } from './src/video-assets.mjs';
 import { isAnnotation, shiftArrow, validColor, validateAnnotation, validateAuthor, boardAuthor, annotationSize, canAttachStamp, detachMissingStampTargets, reconcileStampAttachments } from './src/annotations.mjs';
 import { boardPages, defaultPageId, pageResolver, resolvePage, validatePages, validPageId } from './src/pages.mjs';
 import { layerIndex, maxLayer, topLayer, validLayer } from './src/layers.mjs';
@@ -24,7 +26,7 @@ export const modelers = Object.freeze({ hunyuan: 'hunyuan', trellis: 'trellis', 
 export const modelerOf = node => Object.values(modelers).includes(node?.data?.modeler) ? node.data.modeler : modelers.hunyuan;
 export const maxModel3dImages = 4;
 export const model3dModels = Object.freeze({ hunyuan: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', trellis: 'fal-ai/trellis-2', rodin: 'fal-ai/hyper3d/rodin/v2.5', tripo: 'tripo3d/h3.1/image-to-3d' });
-export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node) && !isModel3d(node);
+export const isGptImage = node => node?.type === 'text' && node.data?.generator === generators.gptImage && !isDescribe(node) && !isUpscale(node) && !isModel3d(node) && !isVideo(node);
 // A prompt switched to GPT Image keeps a connected main image, or takes the first image connected to it.
 export function mainImageFor(nodes, edges, node) {
   if (!isGptImage(node)) return undefined;
@@ -163,7 +165,7 @@ export const codexSettingLines = applied => [
 // Describe nodes without Codex use Gemini or GPT with image input on the respective site key.
 export const describeModel = 'gemini-3.5-flash-lite', gptDescribeModel = 'gpt-6.1-terra';
 export const topazModel = 'fal-ai/topaz/upscale/image', seedvrModel = 'fal-ai/seedvr/upscale/image';
-export const modelNames = Object.freeze({ [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [gptDescribeModel]: 'GPT-6.1 Terra', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5', [model3dModels.tripo]: 'Tripo H3.1' });
+export const modelNames = Object.freeze({ ...Object.fromEntries(Object.values(videoModels).flatMap(model => ['text', 'image', 'reference'].map(mode => [`${model.path}/${mode}-to-video`, model.name]))), ['minimax/h3-max/reference-to-video']: 'MiniMax H3 Max', [nanoModel]: 'Nano Banana 2.1', [gptImageModel]: 'GPT Image', [describeModel]: 'Gemini 3.5 Flash-Lite', [gptDescribeModel]: 'GPT-6.1 Terra', [topazModel]: 'Topaz', [seedvrModel]: 'SeedVR2', [model3dModels.hunyuan]: 'Hunyuan 3D 3.1 Pro', [model3dModels.trellis]: 'TRELLIS 2', [model3dModels.rodin]: 'Rodin Gen-2.5', [model3dModels.tripo]: 'Tripo H3.1' });
 export const templatePalette = Object.freeze(['#7c3aed', '#2563eb', '#0f766e', '#b45309', '#be185d', '#b91c1c', '#4d7c0f', '#4338ca', '#0369a1', '#9a3412']);
 
 export function templateColor(template) {
@@ -204,7 +206,7 @@ export function validateGraph(value) {
   for (const node of value.nodes) {
     if (!node || typeof node.id !== 'string' || node.id.length > 120 || ids.has(node.id)) throw new Error('Invalid or duplicate node.');
     ids.add(node.id);
-    if (!['text', 'image', 'model', 'drawing', 'sticky', 'stamp', 'shape', 'arrow'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
+    if (!['text', 'image', 'model', 'video', 'drawing', 'sticky', 'stamp', 'shape', 'arrow'].includes(node.type) || !Number.isFinite(node.position?.x) || !Number.isFinite(node.position?.y)
       || !node.data || typeof node.data !== 'object' || Array.isArray(node.data)) throw new Error('Invalid node.');
     if (node.page !== undefined && !validPageId(node.page)) throw new Error('Invalid node page.');
     if (node.z !== undefined && !validLayer(node.z)) throw new Error('Invalid node layer.');
@@ -219,10 +221,19 @@ export function validateGraph(value) {
     if (node.type === 'text' && node.data.labelOutputs !== undefined && typeof node.data.labelOutputs !== 'boolean') throw new Error('Invalid image caption setting.');
     if (node.type === 'text' && node.data.generator !== undefined && !isSiteGenerator(node.data.generator)) throw new Error('Invalid image generator.');
     if (node.type === 'text' && node.data.mainImage !== undefined && (typeof node.data.mainImage !== 'string' || node.data.mainImage.length > 120)) throw new Error('Invalid main image.');
-    if (node.type === 'text' && node.data.generator === generators.gptImage && [upscaleTask, model3dTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
-    if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask, model3dTask].includes(node.data.task)) throw new Error('Invalid node task.');
+    if (node.type === 'text' && node.data.generator === generators.gptImage && [upscaleTask, model3dTask, videoTask].includes(node.data.task)) throw new Error('GPT Image only generates images.');
+    if (node.type === 'text' && node.data.task !== undefined && ![describeTask, upscaleTask, model3dTask, videoTask].includes(node.data.task)) throw new Error('Invalid node task.');
     if (node.type === 'text' && node.data.upscaler !== undefined && !Object.values(upscalers).includes(node.data.upscaler)) throw new Error('Invalid upscaler.');
     if (node.type === 'text' && node.data.modeler !== undefined && !Object.values(modelers).includes(node.data.modeler)) throw new Error('Invalid 3D modeler.');
+    if (isVideo(node)) validateVideo(node.data);
+    if (node.type === 'video') {
+      if (!/^[\da-f-]{36}\.mp4$/.test(node.data.asset || '')) throw new Error('Invalid video asset.');
+      if (node.data.poster !== undefined && !assetPattern.test(node.data.poster)) throw new Error('Invalid video poster.');
+      if (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120) throw new Error('Invalid video name.');
+      if (node.data.bytes !== undefined && (!Number.isSafeInteger(node.data.bytes) || node.data.bytes < 12 || node.data.bytes > maxVideoBytes)) throw new Error('Invalid video size.');
+      if (node.data.usd !== undefined && (!Number.isFinite(node.data.usd) || node.data.usd < 0 || node.data.usd > 1000)) throw new Error('Invalid video cost.');
+      validateVideo(node.data, true);
+    }
     if (node.type === 'model' && !/^[\da-f-]{36}\.glb$/.test(node.data.asset || '')) throw new Error('Invalid model asset.');
     if (node.type === 'model' && node.data.poster !== undefined && !/^[\da-f-]{36}\.(png|jpg|webp|gif)$/.test(node.data.poster)) throw new Error('Invalid model poster.');
     if (node.type === 'model' && (typeof node.data.name !== 'string' || !node.data.name.trim() || node.data.name.length > 120)) throw new Error('Invalid model name.');
@@ -312,8 +323,9 @@ export function duplicateNodes(graph, nodeIds, { offset = { x: 40, y: 40 }, ids 
   const nodes = nodeIds.map(id => {
     const node = originals.get(id);
     // A model copy keeps its generation facts; copying it did not generate a new GLB.
-    const data = { ...structuredClone(node.data), ...(node.type === 'model' ? {} : { createdAt }) };
+    const data = { ...structuredClone(node.data), ...(['model', 'video'].includes(node.type) ? {} : { createdAt }) };
     if (node.type === 'model' && data.source && ids.has(data.source.nodeId)) data.source.nodeId = ids.get(data.source.nodeId);
+    if (isVideo(node) && data.videoRoles) data.videoRoles = Object.fromEntries(Object.entries(data.videoRoles).map(([source, role]) => [ids.get(source) || source, role]));
     if (node.type === 'text' && data.mainImage !== undefined) {
       if (graph.edges.some(edge => edge.source === data.mainImage && edge.target === id)) data.mainImage = ids.get(data.mainImage) || data.mainImage;
       else delete data.mainImage;
@@ -372,6 +384,13 @@ export function nameImageConnections(nodes, edges, added) {
   for (const edge of added) {
     const source = nodes.find(node => node.id === edge.source), target = nodes.find(node => node.id === edge.target);
     if (source?.type === 'image' && target?.type === 'text') {
+      if (isVideo(target) && !target.data.videoRoles?.[source.id]) {
+        // A new image takes the first free frame, start then end, and later ones are references. The role is stored, so
+        // connecting or removing other images never changes it.
+        const taken = new Set(connected.filter(item => item.target === target.id && item.source !== source.id && nodes.some(node => node.id === item.source && node.type === 'image')).map(item => target.data.videoRoles?.[item.source] || 'reference'));
+        const videoRoles = { ...target.data.videoRoles, [source.id]: !taken.has('start') ? 'start' : !taken.has('end') ? 'end' : 'reference' };
+        nodes = nodes.map(node => node === target ? { ...node, data: { ...node.data, videoRoles } } : node);
+      }
       const peers = new Set(connected.filter(item => item.target === edge.target && item.source !== edge.source).map(item => item.source));
       if (!source.data.caption?.trim() || nodes.some(node => node.type === 'image' && peers.has(node.id) && imageName(node) === imageName(source))) {
         const caption = uniqueImageName(nodes, imageName(source), source.id);
@@ -426,11 +445,16 @@ export function runInputs(graph, nodeId) {
   let number = 0;
   let images = ordered.flatMap(node => node.type === 'image' ? [{ ...imageReference(node), number: ++number }]
     : (node.type === 'text' ? node.data.template?.assets || [] : []).map((asset, index) => ({ asset, label: `${node.data.template.name} reference ${index + 1}` })));
-  if (isDescribe(target) || isUpscale(target) || isModel3d(target)) images = images.map(({ mask, ...image }) => image);
+  if (isDescribe(target) || isUpscale(target) || isModel3d(target) || isVideo(target)) images = images.map(({ mask, ...image }) => image);
   else {
     if (images.filter(image => image.mask).length > 1) throw new Error('Only one masked image per prompt. Remove the mask from the others or duplicate the node.');
     const stale = images.find(image => image.mask && image.mask.source !== image.asset);
     if (stale) throw new Error(`The mask on “${stale.label}” no longer matches the image. Paint it again.`);
+  }
+  if (isVideo(target)) {
+    images = images.filter(image => image.nodeId);
+    const context = ordered.filter(node => node.type === 'text' && node.id !== nodeId && !isDescribe(node));
+    return { target, ordered, images: roleVideoInputs(target, images), context };
   }
   if (isUpscale(target) || isModel3d(target)) {
     const model3d = isModel3d(target), limit = model3d ? maxModel3dImages : maxUpscaleImages;
@@ -456,23 +480,25 @@ export function runInputs(graph, nodeId) {
 // can show them later: each image node with its ID, so the details can open it while it exists, its file and its name,
 // and whether its mask went along; a custom node's references name that custom node. Runs send at most 10 images; the
 // cap only bounds what a run stored in the shared document can hold.
-export const maxRunInputs = 16;
-const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template', 'number']);
+export const maxRunInputs = 32;
+const runInputKeys = new Set(['nodeId', 'asset', 'label', 'mask', 'template', 'number', 'role']);
 const validRunInput = input => !!input && typeof input === 'object' && !Array.isArray(input) && Object.keys(input).every(key => runInputKeys.has(key))
   && typeof input.asset === 'string' && assetPattern.test(input.asset)
   && (input.nodeId === undefined || (typeof input.nodeId === 'string' && input.nodeId.length > 0 && input.nodeId.length <= 120))
   && (input.label === undefined || (typeof input.label === 'string' && input.label.length <= 120))
+  && (input.role === undefined || ['start', 'end', 'middle', 'reference'].includes(input.role))
   && (input.mask === undefined || input.mask === true)
   && (input.number === undefined || (Number.isInteger(input.number) && input.number >= 1 && input.number <= 999))
   && (input.template === undefined || (typeof input.template === 'string' && !!input.template.trim() && input.template.length <= 80));
 export function runInputRecord(graph, nodeId) {
-  const { target, ordered, mainImage } = runInputs(graph, nodeId), picturesOnly = isUpscale(target) || isModel3d(target), masks = !picturesOnly && !isDescribe(target);
+  const { target, ordered, mainImage } = runInputs(graph, nodeId), picturesOnly = isUpscale(target) || isModel3d(target), masks = !picturesOnly && !isDescribe(target) && !isVideo(target);
   // Mirrors runInputs: connected image nodes, with the numbers the prompt used, and, except for an upscale or 3D model,
   // the references of custom nodes.
   let number = 0;
-  const record = ordered.flatMap(node => node.type === 'image'
+  let record = ordered.flatMap(node => node.type === 'image'
     ? [{ nodeId: node.id, asset: node.data.asset, label: imageName(node).slice(0, 120), ...(picturesOnly ? {} : { number: ++number }), ...(masks && node.data.mask ? { mask: true } : {}) }]
     : !picturesOnly && node.type === 'text' && node.data.template ? node.data.template.assets.map(asset => ({ asset, template: node.data.template.name.trim().slice(0, 80) })) : []);
+  if (isVideo(target)) record = roleVideoInputs(target, record.filter(input => input.nodeId));
   // GPT Image edits its main image, which it receives first.
   if (mainImage) record.sort((a, b) => (b.nodeId === mainImage.nodeId) - (a.nodeId === mainImage.nodeId));
   return record.slice(0, maxRunInputs);
@@ -488,7 +514,7 @@ export const promptText = node => [node.data.template?.instructions.trim() ? `Cu
 export function collectInputs(graph, nodeId, { maskInput = false } = {}) {
   const { target, ordered, images, context } = runInputs(graph, nodeId);
   // An upscale has no prompt; this shape only lets the editor notice changed inputs. Codex never runs it.
-  if (isUpscale(target) || isModel3d(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: target.data.task };
+  if (isUpscale(target) || isModel3d(target) || isVideo(target)) return { prompt: '', images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: target.data.task };
   if (isDescribe(target)) return { prompt: describePrompt(target, images, context), images: images.map(image => image.asset), snapshot: structuredClone(ordered), target: structuredClone(target), task: describeTask };
   const attachments = generationReferences(images, maskInput), variants = promptVariants(target);
   if (attachments.length > 10) throw new Error('Use at most 10 connected reference images per run.');
@@ -604,13 +630,14 @@ export function onePromptImages(nodes, edges = [], runs = []) {
 
 export const captionHeight = node => node.type === 'image' && !node.data?.collapsed ? 24 : 0;
 export const nodeSize = node => isAnnotation(node) ? annotationSize(node) : node.data?.collapsed === true ? { width: 72, height: 72 }
-  : node.type === 'model' ? { width: 310, height: 386 }
+  : ['model', 'video'].includes(node.type) ? { width: 310, height: 386 }
   : { width: node.measured?.width || 310, height: node.measured?.height || (node.type === 'text' ? node.data?.height || 80 : 310 * (node.data?.aspect || 1)) };
 
 // Prompt buttons sit below settings; describe nodes have the same model row, while upscale/3D keep their own controls.
 export const promptRowHeight = node => (takesGenerationSettings(node) ? 28 : 0) + (isUpscale(node) || isModel3d(node) ? 0 : 39);
 // Shared with the canvas, so a server can reserve a prompt's text, settings row and Inputs row without browser measurements.
 export function textNodeSize(node, inputs = false) {
+  if (isVideo(node)) return { width: 310, height: 440 };
   if (isModel3d(node)) return { width: 310, height: 180 };
   if (node.data?.height) return { width: 310, height: node.data.height };
   const lines = String(node.data?.text || '').split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 44)), 0);

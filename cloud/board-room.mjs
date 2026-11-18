@@ -1,3 +1,6 @@
+import { isVideo, resolveVideo, videoInput, videoModels } from '../src/video-generation.mjs';
+import { falVideo, videoRequest, videoFile, storeVideoMp4 } from './video.mjs';
+import { signVideoInput } from './auth.mjs';
 import { YServer } from 'y-partyserver';
 import { applyUpdate, Doc, encodeStateAsUpdate, encodeStateVector, getState } from 'yjs';
 import { boardStats } from './board-stats.mjs';
@@ -20,7 +23,7 @@ import { couldNotReduce, derivedKey, fallbackSides, fitsLimits, headerBytes, ins
 import { falModel3d, model3dFile, model3dInput, model3dPoster, model3dPrices, model3dRequest, storeModelGlb } from './model3d.mjs';
 import { falInput, falUpscale, nanoContent, nanoFrame, nanoUpscaleFormat, nanoUpscalePrompt, upscaleCost, upscaleEstimate, upscaleFactor, upscaleModels, upscaleRequest, upscaleSettings } from './upscale.mjs';
 import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreDocument, shownVersion, unpack, versionEvery, versionKey, versionMetadata, versionPrefixes } from './versions.mjs';
-import { base64Bytes, callMemoryBytes, expectedOutputBytes, MemoryBudget, model3dMemoryBytes, queueWaitTimeout, requestBytes, roomBusy, upscaleOutputBytes } from './room-memory.mjs';
+import { base64Bytes, callMemoryBytes, expectedOutputBytes, videoMemoryBytes, MemoryBudget, model3dMemoryBytes, queueWaitTimeout, requestBytes, roomBusy, upscaleOutputBytes } from './room-memory.mjs';
 
 const chunkSize = 512 * 1024, maxAgentDeletes = 200;
 // One call every 4 seconds per tab, and one to everyone every 15 seconds; answers are accepted for two minutes.
@@ -31,7 +34,7 @@ const coordinate = value => Number.isFinite(value) && Math.abs(value) <= 1e7;
 const origin = 'nano-banana', mcpOrigin = 'mcp', restoreOrigin = 'restore', timestamp = () => new Date().toISOString();
 const active = run => ['running', 'queued'].includes(run?.status);
 // A prompt's image run: its calls are variants of one request (not images to upscale or turn into 3D, nor a description).
-const variantRun = request => !request.upscale && !request.model3d && !request.describe;
+const variantRun = request => !request.upscale && !request.model3d && !request.describe && !request.video;
 // A run of variants sends only a few of its reserved calls at a time. Its reservations, and how many calls it has sent,
 // stay in the room's storage until they are settled, so a room that stops mid-run can refund the calls it never sent.
 const variantsKey = 'variants:reserved';
@@ -375,25 +378,25 @@ export class BoardRoom extends YServer {
   // Worker RPC for a signed-in person on the allowed list. Reserves their quota, puts the run on the board and returns;
   // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes). `settings` says the
   // request comes from a page that shows generation settings (agents always do); `languages` is its Accept-Language.
-  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages }) {
+  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages, siteOrigin }) {
     if (generator !== undefined && !isSiteGenerator(generator)) return { error: 'Choose a site generator.', status: 400 };
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
     const saved = readCloudGraph(this.document), target = saved.nodes.find(item => item.id === nodeId);
-    const special = isUpscale(target) || isModel3d(target), graph = generator === undefined || special ? saved : withGenerator(saved, nodeId, generator), node = graph.nodes.find(item => item.id === nodeId);
-    const gpt = !isUpscale(node) && !isModel3d(node) && node?.data.generator === generators.gptImage, name = isModel3d(node) ? '3D generation' : gpt ? isDescribe(node) ? 'GPT' : 'GPT Image' : isDescribe(node) ? 'Gemini' : 'Nano Banana';
+    const special = isUpscale(target) || isModel3d(target) || isVideo(target), graph = generator === undefined || special ? saved : withGenerator(saved, nodeId, generator), node = graph.nodes.find(item => item.id === nodeId);
+    const gpt = !isUpscale(node) && !isModel3d(node) && !isVideo(node) && node?.data.generator === generators.gptImage, name = isVideo(node) ? 'Video generation' : isModel3d(node) ? '3D generation' : gpt ? isDescribe(node) ? 'GPT' : 'GPT Image' : isDescribe(node) ? 'Gemini' : 'Nano Banana';
     const settings = gpt ? gptImageSettings(this.env) : nanoSettings(this.env);
     // Older pages omit the provider; new clicks carry it independently of subsequent changes to the default.
-    const model3d = isModel3d(node), fal = model3d || (isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana);
-    if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: model3d ? '3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.' : fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : `${name} isn’t set up on this site.`, status: 503 };
-    if (model3d ? !await this.directory().model3dAllowed(requester.email) : !await this.directory().nanoAllowed(requester.email)) return { error: model3d ? '3D generation isn’t available for your account. Ask a site admin for access.' : `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
+    const model3d = isModel3d(node), video = isVideo(node), fal = video || model3d || (isUpscale(node) && upscalerOf(node) !== upscalers.nanoBanana);
+    if (fal ? !upscaleSettings(this.env).fal : !settings.configured) return { error: video ? 'Video generation isn’t set up on this site. Ask the site owner to add a fal.ai key.' : model3d ? '3D generation isn’t set up on this site. Ask the site owner to add a fal.ai key.' : fal ? 'Topaz and SeedVR2 aren’t set up on this site yet. Choose Nano Banana, or ask the site owner to add a fal.ai key.' : `${name} isn’t set up on this site.`, status: 503 };
+    if (video ? !await this.directory().videoAllowed(requester.email) : model3d ? !await this.directory().model3dAllowed(requester.email) : !await this.directory().nanoAllowed(requester.email)) return { error: video ? 'Video generation isn’t available for your account. Ask a site admin for access.' : model3d ? '3D generation isn’t available for your account. Ask a site admin for access.' : `${name} is not available for your account. Ask a site admin for access.`, status: 403 };
     const provider = gpt ? generators.gptImage : generators.nanoBanana, key = JSON.stringify([nodeId, special ? null : provider]);
-    const busy = () => this.nanoStarting.has(key) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run) && (special || run.task === 'upscale' || run.task === 'model3d' || run.provider === provider));
+    const busy = () => this.nanoStarting.has(key) || [...this.document.getMap('runs').values()].some(run => run?.nodeId === nodeId && active(run) && (special || run.task === 'upscale' || run.task === 'model3d' || run.task === 'video' || run.provider === provider));
     if (busy()) return { error: 'This prompt is already generating.', status: 409 };
     this.nanoStarting.add(key);
     try {
       // `inputs` lists the images the run is given, for its results' details; it is read before anything is reserved.
       let request, inputs;
-      try { request = model3d ? model3dRequest(graph, nodeId) : isUpscale(node) ? upscaleRequest(graph, nodeId) : !isDescribe(node) && gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); inputs = runInputRecord(graph, nodeId); }
+      try { request = video ? videoRequest(graph, nodeId) : model3d ? model3dRequest(graph, nodeId) : isUpscale(node) ? upscaleRequest(graph, nodeId) : !isDescribe(node) && gpt ? gptImagePrompt(graph, nodeId) : nanoPrompt(graph, nodeId); inputs = runInputRecord(graph, nodeId); }
       catch (cause) { return { error: cause.message, status: 400 }; }
       // A describe node gets one written description; it costs the team's budget but no daily images. An upscale makes one
       // image per connected image, each reserved at the largest size it could come out.
@@ -405,19 +408,20 @@ export class BoardRoom extends YServer {
       const lanes = variants ? variantLanesFor({ gpt, imageSize: generation?.applied.imageSize }) : variantLanes;
       const measure = { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0),
         ...(generation ? gpt ? { quality: generation.gpt.quality, megapixels: generation.gpt.megapixels } : { imageSize: generation.applied.imageSize, thinking: generation.applied.nanoThinking } : {}) };
-      const sources = request.upscale ? await this.imageSizes(request.images) : [];
-      const calls = request.upscale || model3d ? request.images.length : describe ? 1 : promptVariants(request.target);
-      const estimates = Array.from({ length: calls }, (_, index) => model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? (gpt ? gptDescribeEstimate : describeEstimate)(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
-      const reservations = [], release = async () => {
-        if (variants) await this.directory().settleNanoMany(reservations.map(id => ({ id, images: 0, usd: 0 })));
-        else for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 });
-      };
       // Images that are missing, or too large to send and to reduce, fail here, before anything is reserved or run.
       const problem = await this.referencesProblem(request, gpt, name);
       if (problem) {
         const resizeAssets = resizeRecovery(referenceInputs(request), request.inspected || [], problem);
         return { error: problem, status: 400, ...(resizeAssets.length ? { resizeAssets } : {}) };
       }
+      if (video) request.generation = resolveVideo(request.target, request.images);
+      const sources = request.upscale ? await this.imageSizes(request.images) : [];
+      const calls = request.upscale || model3d ? request.images.length : describe || video ? 1 : promptVariants(request.target);
+      const estimates = Array.from({ length: calls }, (_, index) => video ? request.generation.usd : model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? (gpt ? gptDescribeEstimate : describeEstimate)(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
+      const reservations = [], release = async () => {
+        if (variants) await this.directory().settleNanoMany(reservations.map(id => ({ id, images: 0, usd: 0 })));
+        else for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 });
+      };
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       // Variants are reserved together, all or none, in one call to the directory however many there are.
       if (variants) {
@@ -432,8 +436,8 @@ export class BoardRoom extends YServer {
         }
         reservations.push(reserved.reservation);
       }
-      const task = model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
-      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), inputs, provider: gpt ? generators.gptImage : generators.nanoBanana, model: model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? gpt ? gptDescribeModel : describeModel : gpt ? gptImageModel : nanoModel, ...(startView(view) ? { view: startView(view) } : {}), status: 'queued', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d ? { variants: calls } : {}), variantsStarted: 0,
+      const task = video ? { task: 'video', videoModel: request.generation.model, settings: { requested: request.generation.requested, applied: request.generation.applied, unsupported: request.generation.unsupported }, usd: request.generation.usd } : model3d ? { task: 'model3d', modeler: request.modeler } : describe ? { task: 'describe' } : request.upscale ? { task: 'upscale', scale: request.scale } : {};
+      const run = { id: crypto.randomUUID(), nodeId, ...runSummary(graph, request.target), inputs, provider: gpt ? generators.gptImage : generators.nanoBanana, model: video ? request.generation.endpoint : model3d ? model3dModels[request.modeler] : request.upscale ? upscaleModels[request.upscaler] : describe ? gpt ? gptDescribeModel : describeModel : gpt ? gptImageModel : nanoModel, ...(startView(view) ? { view: startView(view) } : {}), status: 'queued', by: boardAuthor(requester) || { name: 'Teammate' }, startedAt: timestamp(), ...(calls > 1 && !request.upscale && !model3d && !video ? { variants: calls } : {}), variantsStarted: 0,
         ...runSettings(generation), ...task };
       run.createdAt = run.startedAt;
       // The prompt may have been deleted while the quota was checked.
@@ -442,7 +446,7 @@ export class BoardRoom extends YServer {
         return { error: 'This prompt was deleted.', status: 404 };
       }
       this.document.transact(() => this.document.getMap('runs').set(run.id, run), origin);
-      const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, measure, lanes, controller: new AbortController(), next: 0 };
+      const job = { run, email: requester.email, reservations, estimates, estimateUsd: estimates[0], request, measure, lanes, siteOrigin, controller: new AbortController(), next: 0 };
       this.nanoJobs.set(run.id, job);
       if (variants) this.trackVariants(run.id, { reservations, started: 0 });
       this.ctx.waitUntil(this.runNano(job));
@@ -465,7 +469,7 @@ export class BoardRoom extends YServer {
 
   // Worker RPC for an agent connected over MCP; the Worker has checked the person's role. A tool reads and changes the
   // board in one turn, so no other edit lands in between, and the board is saved at once in case nobody is connected.
-  async mcp({ tool: name, args, user }) {
+  async mcp({ tool: name, args, user, siteOrigin }) {
     const tool = toolByName.get(name);
     if (!tool || tool.account) return { error: 'Unknown tool.' };
     try {
@@ -475,7 +479,7 @@ export class BoardRoom extends YServer {
         this.broadcastCustomMessage(JSON.stringify({ type: 'chat-message', message }));
         return { value: { message } };
       }
-      if (name === 'start_run') return await this.mcpStart(args.nodeId, user);
+      if (name === 'start_run') return await this.mcpStart(args.nodeId, user, siteOrigin);
       if (name === 'cancel_run') return await this.mcpCancel(args.runId, user);
       if (name === 'list_versions') return { value: { versions: (await this.listVersions()).slice(0, args.limit || 50) } };
       if (name === 'restore_version') { const result = await this.restoreVersion({ id: args.versionId, user }); return result.error ? { error: result.error } : { value: result.restored }; }
@@ -502,16 +506,16 @@ export class BoardRoom extends YServer {
   }
 
   // Site providers run here; Codex runs on the person's own computer, so their open board starts it as Generate would.
-  async mcpStart(nodeId, user) {
+  async mcpStart(nodeId, user, siteOrigin) {
     const node = readCloudGraph(this.document).nodes.find(item => item.id === nodeId);
     if (!node) return { error: `Node not found: ${nodeId}` };
     if (node.type !== 'text') return { error: 'Generate from a prompt (a text node).' };
-    if (!isSiteGenerator(node.data.generator) && !isUpscale(node) && !isModel3d(node)) {
+    if (!isSiteGenerator(node.data.generator) && !isUpscale(node) && !isModel3d(node) && !isVideo(node)) {
       const answer = await this.askTabs(user, { type: 'agent-generate', nodeId });
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
     }
-    const result = await this.startNano({ nodeId, requester: user, settings: true });
+    const result = await this.startNano({ nodeId, requester: user, settings: true, siteOrigin });
     return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: this.document.getMap('runs').get(result.run.id).provider, status: 'running' } };
   }
 
@@ -665,6 +669,16 @@ export class BoardRoom extends YServer {
   // Checked before a run starts; what was read is kept on the request for the run itself. A 3D run sends each image on
   // its own, so each is checked on its own.
   async referencesProblem(request, gpt, name) {
+    if (request.video) {
+      for (const [index, image] of request.images.entries()) {
+        const [info] = await this.inspectReferences([image]);
+        if (!info || !info.size || !['png', 'jpg', 'webp'].includes(info.format)) return 'Video inputs must be stored PNG, JPEG or WebP images.';
+        if (info.bytes > 30 * 1024 * 1024) return 'Video input images can be at most 30 MB.';
+        if (request.generation.model === 'kling' && (Math.min(info.size.width, info.size.height) < 300 || info.size.width / info.size.height < .4 || info.size.width / info.size.height > 2.5)) return 'Kling images need at least 300 px per side and an aspect ratio from 0.4 to 2.5.';
+        request.images[index].aspect = info.size.height / info.size.width;
+      }
+      return null;
+    }
     const images = referenceInputs(request), purpose = referencePurpose(request, gpt), limits = referenceLimits[purpose];
     // Storage trouble here leaves the check to the run, which reads the images again.
     try { request.inspected = await this.inspectReferences(images); }
@@ -924,19 +938,53 @@ export class BoardRoom extends YServer {
     } finally { clearTimeout(timer); parent.removeEventListener('abort', stop); }
   }
 
-  placeOutput(job, index, asset, dimensions, model) {
+  placeOutput(job, index, asset, dimensions, model, video) {
     let placed = false;
     this.document.transact(() => {
       const before = readCloudGraph(this.document);
-      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index, ...(job.request.upscale ? { caption: `${job.request.images[index]?.label || 'Image'} upscaled` } : {}) }, asset, dimensions, model });
+      const graph = placeRunOutput(before, { runId: job.run.id, nodeId: job.run.nodeId, run: this.document.getMap('runs').get(job.run.id), author: job.run.by, output: { index, ...(job.request.upscale ? { caption: `${job.request.images[index]?.label || 'Image'} upscaled` } : {}) }, asset, dimensions, model, video });
       if (graph) { applyLocalGraph(this.document, graph, before, origin); placed = true; }
     }, origin);
     return placed;
   }
 
-  // One request per variant, a few side by side, never retried automatically: a retry could be billed twice. Images join
-  // the run as each call answers; each call's usage is settled with what it cost.
+  // Reserve the unknown-length download's multipart buffer, including while the queue is pending.
+  async runVideo(job) {
+    const { run, request, controller } = job, signal = controller.signal;
+    let timer, lease, placed = 0, usd = 0, outcome = { status: 'completed' };
+    try {
+      timer = setTimeout(() => { job.queueTimedOut = true; controller.abort(); }, 60000);
+      lease = await this.memory.acquire(videoMemoryBytes, signal);
+      clearTimeout(timer); signal.throwIfAborted();
+      const current = this.document.getMap('runs').get(run.id);
+      if (current && active(current)) this.document.transact(() => this.document.getMap('runs').set(run.id, { ...current, status: 'running', variantsStarted: 1, startedAt: timestamp() }), origin);
+      timer = setTimeout(() => { job.timedOut = true; controller.abort(); }, 14 * 60 * 1000);
+      if (!job.siteOrigin) throw new NanoError('config', 'The video input origin is missing. Reload the site and try again.');
+      const urls = await Promise.all(request.images.map(async image => `${job.siteOrigin}/api/video-inputs/${image.asset}?token=${await signVideoInput(image.asset, this.env.SESSION_SECRET)}`));
+      const input = videoInput(request.generation, request.prompt, urls), options = { endpoint: upscaleSettings(this.env).endpoint, signal };
+      const video = await falVideo({ ...options, key: this.env.FAL_KEY, model: request.generation.endpoint, images: request.images.length, input, onQueued: () => { usd = job.estimates[0]; } });
+      signal.throwIfAborted();
+      const asset = `${crypto.randomUUID()}.mp4`;
+      let bytes;
+      try { bytes = await storeVideoMp4(await videoFile(video.url, options), this.env.FILES, asset, signal); }
+      catch (cause) { if (signal.aborted || cause instanceof NanoError) throw cause; throw new NanoError('upstream', `Could not store the generated video: ${String(cause.message).slice(0, 200)}`); }
+      if (job.cancelled || terminalRun(this.document.getMap('runs').get(run.id)?.status)) return;
+      const a = request.generation.applied, start = request.images.find(image => image.role === 'start') || request.images.find(image => image.role === 'end');
+      if (this.placeOutput(job, 0, asset, undefined, undefined, { name: request.target.data.text.trim().slice(0, 120) || videoModels[a.videoModel].name, ...a, endpoint: request.generation.endpoint, usd, bytes, ...(start ? { poster: start.asset, aspect: start.aspect } : {}) })) placed = 1;
+    } catch (cause) {
+      outcome = { status: 'failed', error: job.queueTimedOut ? roomBusy : job.timedOut ? 'Video generation took longer than 14 minutes. Try again.' : cause instanceof NanoError ? cause.message : 'Video generation failed. Try again.' };
+      if (!(cause instanceof NanoError) && !signal.aborted) console.error('Video generation failed:', cause);
+    } finally {
+      clearTimeout(timer); lease?.release(); this.nanoJobs.delete(run.id);
+      this.writeRun(run.id, { ...(job.cancelled ? { status: 'cancelled' } : outcome), count: placed, usd });
+      try { await this.directory().settleNano(job.reservations[0], { images: placed, usd }); } catch (cause) { console.error('Could not record video usage:', cause); }
+      await this.onSave().catch(cause => console.error('Could not save video board:', cause));
+    }
+  }
+
+  // One request per variant, a few side by side, never retried automatically: a retry could be billed twice.
   async runNano(job) {
+    if (job.request.video) return this.runVideo(job);
     const { run, request, controller } = job, fallback = job.measure || { promptLength: request.prompt?.length || 0, references: request.images.length + (request.mask ? 1 : 0) };
     const name = request.model3d ? '3D generation' : request.upscale ? 'The upscale' : run.provider === generators.gptImage ? request.describe ? 'GPT' : 'GPT Image' : request.describe ? 'Gemini' : 'Nano Banana';
     const variants = variantRun(request), limit = request.model3d ? 14 * 60 * 1000 : variants ? variantRunTimeout(job.reservations.length, job.lanes) : nanoTimeout;

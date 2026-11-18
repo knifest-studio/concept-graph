@@ -59,7 +59,7 @@ const wait = (milliseconds, signal) => new Promise((resolve, reject) => {
 
 // Queue API read 2026-11-14: https://fal.ai/docs/documentation/model-apis/inference/queue.
 // onQueued marks the point where a call may be billed; cancellation also cancels the accepted job.
-export async function falQueue({ key, endpoint = falHost, model, input, signal, onQueued = () => {}, fetcher = fetch, name = 'upscaler' }) {
+export async function falQueue({ key, endpoint = falHost, model, input, signal, onQueued = () => {}, fetcher = fetch, name = 'upscaler', maxStreams = streamTries }) {
   endpoint = safeFalEndpoint(endpoint);
   const error = (status, detail) => falError(status, detail, name);
   const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
@@ -76,7 +76,7 @@ export async function falQueue({ key, endpoint = falHost, model, input, signal, 
   try {
     let done = null;
     for (let attempt = 0; !done; attempt++) {
-      if (attempt === streamTries) throw new NanoError('busy', `The ${name} is taking too long. Try again.`);
+      if (attempt === maxStreams) throw new NanoError('busy', `The ${name} is taking too long. Try again.`);
       const stream = await fetcher(`${statusUrl}/stream`, { headers, signal, redirect: 'manual' });
       if (stream.ok && stream.body) done = await completedFrom(stream.body, signal);
       else await stream.body?.cancel();

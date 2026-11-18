@@ -10,7 +10,7 @@ import './node-context-menu.css';
 const layers = [['front', 'Bring to front', 'layer.front'], ['forward', 'Bring forward', 'layer.forward'], ['backward', 'Send backward', 'layer.backward'], ['back', 'Send to back', 'layer.back']];
 // Drawn only while a menu is open, so reading the person's current shortcuts here costs closed menus nothing.
 const Key = ({ id }) => { const label = shortcutHint(id); return label ? <kbd>{label}</kbd> : null; };
-const menuNames = { text: 'Prompt options', image: 'image options', model: '3D model options', group: 'group options', section: 'section options', sticky: 'sticky options', shape: 'shape options', stamp: 'stamp options', arrow: 'arrow options', drawing: 'drawing options' };
+const menuNames = { text: 'Prompt options', image: 'image options', model: '3D model options', video: 'Video options', group: 'group options', section: 'section options', sticky: 'sticky options', shape: 'shape options', stamp: 'stamp options', arrow: 'arrow options', drawing: 'drawing options' };
 
 export function NodeContextMenu({ children, id, type, actions, slideshow, masked, resized }) {
   const [position, setPosition] = useState(null);
@@ -73,10 +73,11 @@ export function NodeContextMenu({ children, id, type, actions, slideshow, masked
     {position && createPortal(<div ref={menu} className="node-context-menu" data-analytics-area="context-menu" role="menu" aria-label={Object.hasOwn(menuNames, type) ? t(menuNames[type]) : t('{name} options', { name: type })} onContextMenu={event => event.preventDefault()} onKeyDown={onKeyDown}>
       {type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.copyImage)}><span>{t('Copy image')}</span><Key id="edit.copy"/></button>}
       {!readOnly && <>{type === 'image' && <button type="button" role="menuitem" onClick={() => choose(actions.describeImage)}>{t('Describe image')}</button>}
+      {type === 'image' && actions.video && <button type="button" role="menuitem" onClick={() => choose(actions.videoImage)}>{t('Make a video')}</button>}
       {type === 'image' && actions.model3d && <button type="button" role="menuitem" onClick={() => choose(actions.model3dImage)}>{t('3D model')}</button>}
       {type === 'image' && actions.upscale && <button type="button" role="menuitem" onClick={() => choose(actions.upscaleImage)}>{t('Upscale image')}</button>}
       {type === 'image' && actions.imageEditing && <><button type="button" role="menuitem" onClick={() => choose(actions.cropImage)}>{t('Crop')}</button><button type="button" role="menuitem" onClick={() => choose(actions.resizeImage)}>{t('Resize…')}</button>{resized && <button type="button" role="menuitem" onClick={() => choose(actions.restoreImageSize)}>{t('Restore original size')}</button>}<button type="button" role="menuitem" onClick={() => choose(actions.maskImage)}>{masked ? t('Edit mask') : t('Mask')}</button>{masked && <button type="button" role="menuitem" onClick={() => choose(actions.removeMask)}>{t('Remove mask')}</button>}</>}
-      {type === 'model' && <button type="button" role="menuitem" onClick={() => choose(actions.duplicateNode)}>{t('Duplicate')}</button>}
+      {['model', 'video'].includes(type) && <button type="button" role="menuitem" onClick={() => choose(actions.duplicateNode)}>{t('Duplicate')}</button>}
       {type === 'text' && <><button type="button" role="menuitem" onClick={() => choose(actions.duplicateNode)}>{t('Duplicate')}</button><button type="button" role="menuitem" onClick={() => choose(actions.saveTemplateFromNode)}>{t('Save as custom node')}</button></>}
       {type === 'group' && <button type="button" role="menuitem" onClick={() => choose(actions.renameGroup)}>{t('Rename')}</button>}
       {type === 'group' && slideshow !== undefined && <button type="button" role="menuitem" onClick={() => choose(actions.toggleSlideshow)}>{slideshow ? t('Show as group') : t('Show as slideshow')}</button>}

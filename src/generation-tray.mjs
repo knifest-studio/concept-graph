@@ -32,10 +32,10 @@ function rowKind(run) {
 
 function rowStatus(run, kind, count) {
   const describe = run.task === 'describe';
-  if (kind === 'active') return { status: run.status === 'queued' ? t('Queued') : describe ? t('Describing') : run.task === 'model3d' ? t('Generating 3D') : run.task === 'upscale' ? t('Upscaling') : t('Generating') };
+  if (kind === 'active') return { status: run.status === 'queued' ? t('Queued') : describe ? t('Describing') : run.task === 'video' ? t('Generating video') : run.task === 'model3d' ? t('Generating 3D') : run.task === 'upscale' ? t('Upscaling') : t('Generating') };
   if (kind === 'failed') return { status: t('Failed · {error}', { error: t(run.error || 'Generation failed').split(/\r?\n/)[0] }) };
   if (kind === 'cancelled') return { status: t('Cancelled') };
-  const done = describe ? t('Done · description') : run.task === 'model3d' ? plural(count, 'Done · {count} model', 'Done · {count} models') : plural(count, 'Done · {count} image', 'Done · {count} images');
+  const done = run.task === 'video' ? t('Done · video') : describe ? t('Done · description') : run.task === 'model3d' ? plural(count, 'Done · {count} model', 'Done · {count} models') : plural(count, 'Done · {count} image', 'Done · {count} images');
   if (kind === 'done') return { status: done };
   const partial = partialFailure(run.error);
   if (!partial) return { status: done, reason: t(run.error).split(/\r?\n/)[0] };

@@ -136,3 +136,18 @@ runtimeTest('when the sign-in list cannot be read, Team access says so instead o
   const seen = (await (await request('/api/cloud/team', { email: 'owner@studio.example' })).json()).access;
   assert.equal(seen.people, null); assert.equal(seen.role, 'owner'); assert.equal(errors.mock.callCount(), 1);
 });
+
+
+runtimeTest('Video seeds only the owner once and admins grant/revoke it independently of images and 3D', async t => {
+  const { directory, sql, env, request } = setup(t, { FAL_KEY: 'test-fal' });
+  assert.equal(directory.videoAllowed('owner@studio.example'), true); assert.equal(directory.videoAllowed('solo@mail.example'), false);
+  assert.equal(directory.changeTeamAccess('solo@mail.example', { video: { email: 'solo@mail.example', allowed: true } }).status, 403);
+  for (const address of ['@studio.example', 'not-an-email', null]) assert.equal(directory.changeTeamAccess('owner@studio.example', { video: { email: address, allowed: true } }).status, 400);
+  directory.changeTeamAccess('owner@studio.example', { admin: { email: 'admin@studio.example', admin: true } });
+  const granted = directory.changeTeamAccess('admin@studio.example', { video: { email: 'Video@Studio.example', allowed: true } });
+  assert.ok(granted.access.video.some(person => person.email === 'video@studio.example')); assert.equal(directory.nanoAllowed('video@studio.example'), false); assert.equal(directory.model3dAllowed('video@studio.example'), false);
+  const status = await (await request('/api/nano', { email: 'video@studio.example' })).json(); assert.equal(status.video.allowed, true); assert.equal(status.video.dailyImages, 300);
+  directory.changeTeamAccess('owner@studio.example', { video: { email: 'owner@studio.example', allowed: false } });
+  const reopened = new Directory({ storage: { sql } }, env); assert.equal(reopened.videoAllowed('owner@studio.example'), false); assert.equal(reopened.videoAllowed('video@studio.example'), true);
+  directory.changeTeamAccess('admin@studio.example', { video: { email: 'video@studio.example', allowed: false } }); assert.equal(directory.videoAllowed('video@studio.example'), false);
+});
