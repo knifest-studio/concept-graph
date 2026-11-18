@@ -181,7 +181,7 @@ function PromptInputs({ data, light = false }) {
   // The unnamed handle must stay first: old edges use the first target bounds.
   return <>
     {light ? <i {...lodHandleProps('target')} style={main ? { top: '68%' } : undefined}/> : <Handle type="target" position={Position.Left} style={main ? { top: '68%' } : undefined} aria-label={t('Connect input to prompt')}/>}
-    {main && <>{light ? <i {...lodHandleProps('target')} style={{ top: 16 }}/> : <Handle type="target" id="main" position={Position.Left} style={{ top: 16 }} aria-label={t('Main image')}/>}<span className="main-image-label">{t('Main image')}</span></>}
+    {main && <>{light ? <i {...lodHandleProps('target', 'main')} style={{ top: 16 }}/> : <Handle type="target" id="main" position={Position.Left} style={{ top: 16 }} aria-label={t('Main image')}/>}<span className="main-image-label">{t('Main image')}</span></>}
   </>;
 }
 

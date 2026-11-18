@@ -636,6 +636,8 @@ export default {
   'check stamp': 'Штамп «галочка»',
   'question stamp': 'Штамп «питання»',
   'fire stamp': 'Штамп «вогонь»',
+  'laugh stamp': 'Штамп «сміх»',
+  'clown stamp': 'Штамп «клоун»',
   'pen options': 'Параметри олівця',
   'Board tools': 'Інструменти дошки',
   'New shape color': 'Колір нової фігури',

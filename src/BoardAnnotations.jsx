@@ -197,7 +197,7 @@ const toolKeys = (value, shortcuts) => toolNames[value][1].map(id => shortcutHin
 const sectionHint = shortcuts => { const key = shortcutHint('section.wrap', shortcuts); return key ? t('drag on the canvas to draw; with a selection, {key} wraps it', { key }) : t('drag on the canvas to draw'); };
 const toolHint = (value, shortcuts) => value === 'select' ? '' : value === 'section' ? ` · ${sectionHint(shortcuts)}`
   : value === 'shape' ? ` · ${t('click to place or drag to size')}` : value === 'arrow' ? ` · ${t('drag between things to connect them')}` : ` · ${t('click canvas to place')}`;
-const stampNames = { like: 'like stamp', heart: 'heart stamp', star: 'star stamp', check: 'check stamp', question: 'question stamp', fire: 'fire stamp' };
+const stampNames = { like: 'like stamp', heart: 'heart stamp', star: 'star stamp', check: 'check stamp', question: 'question stamp', fire: 'fire stamp', laugh: 'laugh stamp', clown: 'clown stamp' };
 const stampName = kind => Object.hasOwn(stampNames, kind) ? t(stampNames[kind]) : `${kind} stamp`;
 const toolOptions = { pen: 'pen options', shape: 'shape options', arrow: 'arrow options', sticky: 'sticky options', stamp: 'stamp options' };
 const lineIcon = (paths, size = 22) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths}</svg>;

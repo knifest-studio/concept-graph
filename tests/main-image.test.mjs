@@ -26,7 +26,10 @@ test('prompt input ports keep the unnamed handle first and localize the visible 
       assert.ok(html.indexOf('data-port="default"') < html.indexOf('data-port="main"'));
       assert.match(html, /top:68%/); assert.match(html, /top:16px/);
       assert.ok(html.includes(`aria-label="${label}"`)); assert.ok(html.includes(`>${label}</span>`));
-      assert.ok(renderToStaticMarkup(React.createElement(Inputs, { data: prompt().data, light: true })).includes(`>${label}</span>`));
+      const light = renderToStaticMarkup(React.createElement(Inputs, { data: prompt().data, light: true }));
+      assert.ok(light.includes(`>${label}</span>`));
+      // The zoomed-out card names its main-image dot too, or the link to it is not drawn.
+      assert.ok(light.indexOf('class="lod-handle target"') < light.indexOf('data-handleid="main"'));
     }
     for (const data of [{ text: '' }, { text: '', generator: 'nano-banana' }, { text: '', generator: 'gpt-image', task: 'describe' }, { text: '', generator: 'gpt-image', task: 'upscale' }]) {
       assert.doesNotMatch(renderToStaticMarkup(React.createElement(Inputs, { data })), /data-port="main"|main-image-label/);
