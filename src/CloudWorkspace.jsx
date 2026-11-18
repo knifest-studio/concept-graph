@@ -141,7 +141,7 @@ function BoardsHome({ user, siteRole, accessRequests, setAccessRequests, boards,
   return <div className="cloud-home" data-analytics-area="boards">
     <header className="app-header cloud-home-header" data-analytics-area="top-bar"><div className="brand"><img src="/favicon.svg" alt=""/><strong>Concept Graph</strong></div><div className="header-right">
       <Preferences analytics theme={theme} setTheme={setTheme} sounds={sounds} toggleSounds={toggleSounds} waiting={waiting}/>
-      <AccountMenu user={user} siteRole={siteRole} requests={accessRequests} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
+      <AccountMenu user={user} siteRole={siteRole} requests={accessRequests} services={services} onTeam={() => setTeamOpen(true)} onSignOut={onLogout}/>
     </div></header>
     {teamOpen && <TeamAccessDialog services={services} onRequests={setAccessRequests} onClose={() => { setTeamOpen(false); document.querySelector('.account-button')?.focus(); }}/>}
     <main className="cloud-home-main"><div className="cloud-home-heading"><div><h1>{t('Boards')}</h1><p>{t('New boards are private. Share each one by link or with the people you invite.')}</p></div><button ref={createButton} type="button" className="primary-button" onClick={start}><span aria-hidden="true">+</span> {t('New board')}</button></div>
@@ -455,7 +455,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
   session.generationSharing = editable ? <CodexSharingDetails view={sharingView} {...sharingActions}/> : null;
   session.boardMenuButton = historyButton;
   session.openHistory = () => setHistoryOpen(true);
-  session.account = <AccountMenu user={account} siteRole={siteRole} requests={accessRequests} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
+  session.account = <AccountMenu user={account} siteRole={siteRole} requests={accessRequests} services={services} onTeam={() => setTeamOpen(true)} onSignOut={() => session.leave?.(onLogout)}/>;
   session.panels = <>{chatOpen && <BoardChatPanel session={session} onClose={() => { setChatOpen(false); chatButton.current?.focus(); }}/>}<VoiceAudio session={session}/></>;
   return <>
     <ReactFlowProvider><Editor key={boardId} boardId={boardId} cloudSession={session} {...editorProps}/></ReactFlowProvider>

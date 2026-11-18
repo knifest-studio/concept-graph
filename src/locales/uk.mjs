@@ -1071,6 +1071,25 @@ export default {
   'MCP CONNECTION': 'ПІДКЛЮЧЕННЯ MCP',
   'Connect MCP': 'Підключити MCP',
 
+  // Spending (site owner only)
+  'Spending': 'Витрати',
+  'Month': 'Місяць',
+  'Who spent what on the team’s API keys. Amounts are estimates from the providers’ prices; the actual bill is in Google, OpenAI and fal.ai.': 'Хто скільки витратив на API-ключах команди. Суми — оцінка за цінами провайдерів; точний рахунок — у Google, OpenAI та fal.ai.',
+  'of {limit} this month': 'з {limit} цього місяця',
+  'of {limit} a month': 'з {limit} на місяць',
+  'today': 'сьогодні',
+  'Team budget used': 'Використано бюджету команди',
+  'today {images} of {limit} images, {spent}': 'сьогодні {images} з {limit} зображень, {spent}',
+  'Made before the site recorded what each generation was.': 'Зроблено до того, як сайт почав записувати тип кожної генерації.',
+  'No spending in this month.': 'У цьому місяці витрат немає.',
+  'Nano Banana: {count} image': ['Nano Banana: {count} зображення','Nano Banana: {count} зображення','Nano Banana: {count} зображень','Nano Banana: {count} зображення'],
+  'GPT Image: {count} image': ['GPT Image: {count} зображення','GPT Image: {count} зображення','GPT Image: {count} зображень','GPT Image: {count} зображення'],
+  '{count} description': ['{count} опис','{count} описи','{count} описів','{count} опису'],
+  '{count} upscale': ['{count} апскейл','{count} апскейли','{count} апскейлів','{count} апскейлу'],
+  '{count} 3D model': ['{count} 3D-модель','{count} 3D-моделі','{count} 3D-моделей','{count} 3D-моделі'],
+  '{count} video': ['{count} відео','{count} відео','{count} відео','{count} відео'],
+  '{count} earlier, not split': ['{count} раніше, без розбивки','{count} раніше, без розбивки','{count} раніше, без розбивки','{count} раніше, без розбивки'],
+
   // Team access
   'Team access': 'Доступ команди',
   'Account: {name}': 'Обліковий запис: {name}',

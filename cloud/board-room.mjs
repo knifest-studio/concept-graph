@@ -418,6 +418,8 @@ export class BoardRoom extends YServer {
       const sources = request.upscale ? await this.imageSizes(request.images) : [];
       const calls = request.upscale || model3d ? request.images.length : describe || video ? 1 : promptVariants(request.target);
       const estimates = Array.from({ length: calls }, (_, index) => video ? request.generation.usd : model3d ? model3dPrices[request.modeler] : request.upscale ? upscaleEstimate(request.upscaler, request.scale, sources[index]) : describe ? (gpt ? gptDescribeEstimate : describeEstimate)(measure) : gpt ? gptImageEstimate(measure) : nanoEstimate(measure));
+      // What the calls make, for the owner's Spending window.
+      const kind = video ? 'video' : model3d ? 'model3d' : request.upscale ? 'upscale' : describe ? 'describe' : gpt ? 'gpt' : 'nano';
       const reservations = [], release = async () => {
         if (variants) await this.directory().settleNanoMany(reservations.map(id => ({ id, images: 0, usd: 0 })));
         else for (const id of reservations) await this.directory().settleNano(id, { images: 0, usd: 0 });
@@ -425,11 +427,11 @@ export class BoardRoom extends YServer {
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       // Variants are reserved together, all or none, in one call to the directory however many there are.
       if (variants) {
-        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates });
+        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates, kind });
         if (reserved.error) return { error: reserved.fit ? `${reserved.error} Only ${reserved.fit} of ${calls} variants fit; choose fewer.` : reserved.error, status: reserved.status };
         reservations.push(...reserved.reservations);
       } else for (let index = 0; index < calls; index++) {
-        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1 });
+        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1, kind });
         if (reserved.error) {
           await release();
           return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} images fit; connect fewer.` } : reserved;

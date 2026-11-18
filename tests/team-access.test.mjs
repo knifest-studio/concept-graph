@@ -151,3 +151,35 @@ runtimeTest('Video seeds only the owner once and admins grant/revoke it independ
   const reopened = new Directory({ storage: { sql } }, env); assert.equal(reopened.videoAllowed('owner@studio.example'), false); assert.equal(reopened.videoAllowed('video@studio.example'), true);
   directory.changeTeamAccess('admin@studio.example', { video: { email: 'video@studio.example', allowed: false } }); assert.equal(directory.videoAllowed('video@studio.example'), false);
 });
+
+runtimeTest('only the owner sees spending: each person by month and by what they made, refunds and stale holds counted as the budget counts them', async t => {
+  const { sql, directory, request } = setup(t);
+  const now = Date.parse('2026-11-18T10:00:00.000Z'), limits = { dailyImages: 300, monthlyUsd: 300 };
+  // Usage recorded before kinds existed has none and is shown as earlier.
+  sql.exec("INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt) VALUES ('old', 'new@studio.example', '2026-11-02', '2026-11', 1, 0.04, 0, ?)", now - 16 * 86400000);
+  sql.exec("INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt) VALUES ('october', 'new@studio.example', '2026-10-30', '2026-10', 1, 1.5, 0, ?)", now - 19 * 86400000);
+  const gpt = directory.reserveNanoMany('new@studio.example', { ...limits, estimates: [0.2, 0.2], kind: 'gpt' }, now);
+  directory.settleNanoMany([{ id: gpt.reservations[0], images: 1, usd: 0.17 }, { id: gpt.reservations[1], images: 0, usd: 0 }]);
+  directory.settleNano(directory.reserveNano('admin@studio.example', { ...limits, estimateUsd: 2.4, kind: 'video' }, now).reservation, { images: 1, usd: 2.25 });
+  directory.reserveNano('admin@studio.example', { ...limits, estimateUsd: 0.01, images: 0, kind: 'describe' }, now);
+  directory.reserveNano('admin@studio.example', { ...limits, estimateUsd: 0.3, kind: 'not-a-kind' }, now - 20 * 60000);
+
+  const seen = directory.spending('Owner@Studio.example', undefined, now);
+  assert.equal(seen.month, '2026-11'); assert.deepEqual(seen.months, ['2026-11', '2026-10']);
+  assert.deepEqual(seen.people.map(person => [person.email, Math.round(person.usd * 100) / 100, person.made, person.todayImages]), [['admin@studio.example', 2.56, 3, 1], ['new@studio.example', 0.21, 2, 1]]);
+  assert.deepEqual(seen.people[0].kinds.map(item => [item.kind, item.made]), [['video', 1], ['earlier', 1], ['describe', 1]]);
+  assert.deepEqual(seen.people[1].kinds.map(item => [item.kind, item.made]), [['gpt', 1], ['earlier', 1]]);
+  assert.equal(Math.round(seen.team.usd * 100) / 100, Math.round(directory.nanoUsage('new@studio.example', now).teamSpentUsd * 100) / 100);
+  assert.deepEqual(directory.spending('owner@studio.example', '2026-10', now).people.map(person => person.usd), [1.5]);
+  assert.equal(directory.spending('owner@studio.example', '2027-01', now).month, '2026-11');
+  assert.equal(directory.spending('owner@studio.example', 'nonsense', now).month, '2026-11');
+
+  await request('/api/cloud/team', { method: 'PATCH', email: 'owner@studio.example', data: { admin: { email: 'admin@studio.example', admin: true } } });
+  assert.equal(directory.spending('admin@studio.example', undefined, now), null);
+  assert.equal((await request('/api/cloud/spending', { email: 'admin@studio.example' })).status, 403);
+  assert.equal((await request('/api/cloud/spending', { email: 'new@studio.example' })).status, 403);
+  const shown = await request('/api/cloud/spending?month=2026-10', { email: 'owner@studio.example' });
+  assert.equal(shown.status, 200);
+  const body = (await shown.json()).spending;
+  assert.equal(body.month, '2026-10'); assert.equal(body.dailyImages, 300); assert.equal(body.people[0].name, 'Newcomer');
+});
