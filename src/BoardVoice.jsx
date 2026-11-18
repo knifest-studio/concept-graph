@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalSto
 import { t } from './i18n.mjs';
 import { Avatar, VoiceMark } from './BoardPresence.jsx';
 import { popoverPosition } from './popover-position.mjs';
+import { track } from './analytics.mjs';
 
 function Microphone({ muted }) {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>{muted && <path d="m2 2 20 20"/>}</svg>;
@@ -57,10 +58,12 @@ function RemoteAudio({ stream, onBlocked }) {
   return <audio ref={audio} autoPlay playsInline/>;
 }
 export function VoiceAudio({ session }) {
-  const state = useSyncExternalStore(session.voiceStore.subscribe, session.voiceStore.get), [blocked, setBlocked] = useState(false), root = useRef(null);
-  useEffect(() => { if (!state.joined) setBlocked(false); }, [state.joined]);
+  const state = useSyncExternalStore(session.voiceStore.subscribe, session.voiceStore.get), [blocked, setBlocked] = useState(false), root = useRef(null), reported = useRef(false);
+  useEffect(() => { if (!state.joined) { setBlocked(false); reported.current = false; } }, [state.joined]);
+  // Once per call: the browser refused to play teammates' audio until a click, so they would seem silent.
+  const block = () => { setBlocked(true); if (!reported.current) { reported.current = true; track('voice_audio_blocked', {}, 'app', 'voice'); } };
   return <div className="voice-audio" ref={root}>
-    {state.streams.map(([id, stream]) => <RemoteAudio key={id} stream={stream} onBlocked={() => setBlocked(true)}/>)}
+    {state.streams.map(([id, stream]) => <RemoteAudio key={id} stream={stream} onBlocked={block}/>)}
     {blocked && state.joined && <button type="button" className="voice-play" onClick={async () => {
       const results = await Promise.allSettled([...root.current.querySelectorAll('audio')].map(element => element.play()));
       setBlocked(results.some(result => result.status === 'rejected'));

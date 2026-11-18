@@ -3,15 +3,40 @@ import { voiceHasSpace } from '../cloud/voice.mjs';
 export const micError = error => error?.name === 'NotAllowedError' || error?.name === 'SecurityError' ? 'Microphone access was denied. Allow it in your browser and try again.'
   : error?.name === 'NotFoundError' ? 'No microphone found. Connect one and try again.' : 'Could not open the microphone. Check that it is available.';
 
+// A peer that has not connected this long is reported as stuck: ICE gives up on its own after about 30 seconds.
+export const voiceConnectDeadline = 45000;
+// Which kinds of ICE candidates a connection gathered and received, and the kinds on the pair it uses, tell a network
+// that blocks direct audio (no relay offered) from a signalling fault (nothing received). Only kinds leave the browser,
+// never addresses: https://developer.mozilla.org/en-US/docs/Web/API/RTCIceCandidateStats/candidateType
+const candidateKinds = ['host', 'srflx', 'prflx', 'relay'];
+const kinds = set => candidateKinds.filter(kind => set.has(kind)).join(',');
+export async function iceSummary(pc) {
+  const local = new Set(), remote = new Set(), reports = new Map();
+  let pair;
+  try {
+    (await pc.getStats()).forEach(report => reports.set(report.id, report));
+    for (const report of reports.values()) {
+      if (report.type === 'local-candidate' && candidateKinds.includes(report.candidateType)) local.add(report.candidateType);
+      else if (report.type === 'remote-candidate' && candidateKinds.includes(report.candidateType)) remote.add(report.candidateType);
+      else if (report.type === 'transport' && report.selectedCandidatePairId) pair = reports.get(report.selectedCandidatePairId);
+    }
+    // Firefox has no transport stats; its chosen pair is the nominated one that succeeded.
+    pair ??= [...reports.values()].find(report => report.type === 'candidate-pair' && report.nominated && report.state === 'succeeded');
+  } catch { /* A closed or stats-less connection reports no kinds. */ }
+  const ends = pair && [reports.get(pair.localCandidateId)?.candidateType, reports.get(pair.remoteCandidateId)?.candidateType];
+  return { local: kinds(local), remote: kinds(remote), ...(ends?.every(kind => candidateKinds.includes(kind)) ? { path: ends.join('-') } : {}) };
+}
+const peerStatus = pc => [pc.connectionState, pc.iceConnectionState, pc.signalingState].join('/');
+
 // MDN perfect negotiation: https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
 // Browser objects are created only on join, and injectable for port-free tests.
 export class VoiceMesh {
-  constructor({ id, send, admit, release, publish, changed = () => {}, remote = () => {}, error = () => {},
+  constructor({ id, send, admit, release, publish, changed = () => {}, remote = () => {}, error = () => {}, report = () => {},
     media = constraints => navigator.mediaDevices.getUserMedia(constraints), peer = config => new RTCPeerConnection(config),
     audio = () => new (globalThis.AudioContext || globalThis.webkitAudioContext)(), clock = () => Date.now(),
     // Wrapped: these are called as methods of the mesh, and the browser's own timers refuse any other `this`.
     interval = (run, ms) => setInterval(run, ms), clearInterval: clear = id => clearInterval(id), timeout = (run, ms) => setTimeout(run, ms), clearTimeout: cancel = id => clearTimeout(id) }) {
-    Object.assign(this, { id, send, admit, release, publish, changed, remote, error, media, createPeer: peer, audio, clock, interval, clear, timeout, cancel });
+    Object.assign(this, { id, send, admit, release, publish, changed, remote, error, report, media, createPeer: peer, audio, clock, interval, clear, timeout, cancel });
     this.peers = new Map(); this.members = new Set(); this.epoch = 0; this.joined = false; this.joining = false; this.muted = false; this.speaking = false;
   }
   async join(iceServers, ids = []) {
@@ -28,6 +53,7 @@ export class VoiceMesh {
       await this.admit();
       if (epoch !== this.epoch) return;
       this.iceServers = iceServers; this.joined = true; this.muted = false; this.speaking = false;
+      this.turn = iceServers.some(server => [].concat(server.urls).some(url => /^turns?:/.test(url)));
       for (const track of this.stream.getTracks()) track.onended = () => { this.leave(); this.error('The microphone disconnected. Join voice again.'); };
       this.updateMembers(ids); this.publishVoice(); this.detect();
     } catch (cause) { if (epoch === this.epoch) this.leave(); throw cause; }
@@ -58,9 +84,21 @@ export class VoiceMesh {
   }
   ensure(id) {
     if (this.peers.has(id)) return this.peers.get(id);
-    const pc = this.createPeer({ iceServers: this.iceServers }), state = { pc, makingOffer: false, ignoreOffer: false, answering: false, candidates: [], queue: Promise.resolve(), restarts: 0, timer: 0, wait: 0, offers: this.id < id };
+    const pc = this.createPeer({ iceServers: this.iceServers }), state = { pc, makingOffer: false, ignoreOffer: false, answering: false, candidates: [], queue: Promise.resolve(), restarts: 0, timer: 0, wait: 0, offers: this.id < id,
+      created: this.clock(), retried: 0, connected: false, failed: false, deadline: 0 };
     this.peers.set(id, state);
     const live = () => this.joined && this.peers.get(id) === state;
+    // Each outcome is reported once per peer connection, so ICE restarts and flapping states cannot flood analytics.
+    const diagnose = async (name, details) => {
+      const summary = await iceSummary(pc);
+      if (live()) this.report(name, { ...details, ...summary, turn: this.turn, duration: this.clock() - state.created, count: state.retried });
+    };
+    const fail = errorKind => {
+      if (state.connected || state.failed) return;
+      state.failed = true;
+      diagnose('voice_failed', { errorKind, status: peerStatus(pc) });
+    };
+    state.deadline = this.timeout(() => { if (live()) fail('timeout'); }, voiceConnectDeadline);
     const send = data => { if (live()) this.send({ to: id, data }); };
     pc.onicecandidate = ({ candidate }) => { if (candidate) send({ candidate: candidate.toJSON?.() || candidate }); };
     // Both sides add their microphone at once, so both would offer. Chrome gathers no ICE candidates after rolling its own
@@ -75,14 +113,17 @@ export class VoiceMesh {
     pc.ontrack = ({ streams }) => { if (live() && streams[0]) this.remote(id, streams[0]); };
     const restart = () => {
       if (!live()) return;
-      if (state.restarts++ < 3) pc.restartIce();
+      if (state.restarts++ < 3) { state.retried++; pc.restartIce(); }
       else this.error('Voice connection failed. Leave and join again.');
     };
     pc.onconnectionstatechange = () => {
       this.cancel(state.timer);
-      if (pc.connectionState === 'failed') restart();
+      if (pc.connectionState === 'failed') { fail('ice_failed'); restart(); }
       else if (pc.connectionState === 'disconnected') state.timer = this.timeout(restart, 4000);
-      else if (pc.connectionState === 'connected') state.restarts = 0;
+      else if (pc.connectionState === 'connected') {
+        state.restarts = 0;
+        if (!state.connected) { state.connected = true; this.cancel(state.deadline); diagnose('voice_connected', {}); }
+      }
     };
     for (const track of this.stream.getAudioTracks()) pc.addTrack(track, this.stream);
     if (!state.offers) state.wait = this.timeout(() => { if (live() && !pc.remoteDescription) { state.offers = true; pc.onnegotiationneeded(); } }, 5000);
@@ -114,7 +155,7 @@ export class VoiceMesh {
   }
   remove(id) {
     const state = this.peers.get(id); if (!state) return;
-    this.peers.delete(id); this.cancel(state.timer); this.cancel(state.wait);
+    this.peers.delete(id); this.cancel(state.timer); this.cancel(state.wait); this.cancel(state.deadline);
     state.pc.onicecandidate = state.pc.onnegotiationneeded = state.pc.onconnectionstatechange = state.pc.ontrack = null;
     state.pc.close(); this.remote(id, null);
   }

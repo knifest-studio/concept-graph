@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cloud analytics records how voice calls go: whether each connection succeeded, failed or timed out, the kinds of network route tried and used (direct, through a router or a relay, never addresses), whether a relay was offered, fixed error codes and blocked call audio, so silent calls can be diagnosed.
+
 - Prompts and describe nodes show one button per available model; Codex, Nano Banana/Gemini and GPT Image/GPT can run the same prompt concurrently, each with independent progress, elapsed time and owner cancellation. Model options retain Codex connection, access requests and shared limits; keyboard/MCP use the last model clicked.
 
 - Cloud team boards: Describe image nodes now offer GPT alongside Codex and Gemini, using the site’s existing OpenAI key.

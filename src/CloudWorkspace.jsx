@@ -264,7 +264,7 @@ function CloudBoard({ boardId, boardName, role, sharing, onSharing, onAccess, on
     next.chat = new ChatClient({ boardId, email: account.email, storage: localStorage, hidden: () => document.hidden,
       send: value => { if (provider.wsconnected) provider.sendMessage(JSON.stringify(value)); }, sound: () => collaborationSound('chat'), changed: value => next.chatStore.set(value) });
     next.voiceStore = store({ online: false, busy: false, joined: false, muted: false, speaking: false, people: [], streams: [], error: '' });
-    const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => { if (value.joined && !next.voiceStore.get()?.joined) track('voice_joined'); next.voiceStore.set(value); }, sound: collaborationSound });
+    const voice = cloudVoice({ provider, id: doc.clientID, api: services.api, boardId, view: value => { if (value.joined && !next.voiceStore.get()?.joined) track('voice_joined'); next.voiceStore.set(value); }, sound: collaborationSound, report: (name, data) => track(name, data, 'app', 'voice') });
     next.voice = voice.mesh; next.joinVoice = voice.join; next.leaveVoice = voice.leave;
     // Generation analytics follow the runs this tab starts, from the record the room or this tab wrote.
     const ownRuns = runTracker({ runs: doc.getMap('runs'), read: () => reader.read(), track, enabled: analyticsEnabled });
