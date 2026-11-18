@@ -1,6 +1,7 @@
 import { track } from './analytics.mjs';
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { t } from './i18n.mjs';
+import { shortWhen } from './when.mjs';
 import { Avatar } from './BoardPresence.jsx';
 import { chatLinks } from './board-chat.mjs';
 
@@ -46,7 +47,7 @@ export function BoardChatPanel({ session, onClose }) {
           return <li key={message.id} className={grouped ? 'chat-grouped' : ''}>
             {!grouped && <div className="chat-author"><Avatar user={message.author}/><b>{message.author.name}</b>{message.agent && <small>{t('via agent')}</small>}</div>}
             <div className="chat-message-body">{message.deleted ? <em>{t('Message deleted')}</em> : <><p><LinkedText text={message.text}/></p>{message.nodeId && chip(message.nodeId)}</>}
-              <footer><time dateTime={message.time} title={new Date(message.time).toLocaleString()}>{new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+              <footer><time dateTime={message.time} title={new Date(message.time).toLocaleString()}>{shortWhen(message.time)}</time>
                 {!message.deleted && (message.author.email === chat.email || session.role === 'owner') && <button type="button" aria-label={t('Delete message')} onClick={() => chat.sendWire({ type: 'chat-delete', id: message.id })}>{t('Delete')}</button>}</footer>
             </div>
           </li>;
