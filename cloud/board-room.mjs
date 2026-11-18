@@ -26,6 +26,8 @@ import { backupKey, expiredVersions, keyOf, listAll, pack, removedMany, restoreD
 import { base64Bytes, callMemoryBytes, expectedOutputBytes, videoMemoryBytes, MemoryBudget, model3dMemoryBytes, queueWaitTimeout, requestBytes, roomBusy, upscaleOutputBytes } from './room-memory.mjs';
 
 const chunkSize = 512 * 1024, maxAgentDeletes = 200;
+// How long tabs show that someone's agent works on the board after its last tool call (src/BoardPresence.jsx agrees).
+export const agentShownMs = 3 * 60 * 1000;
 // One call every 4 seconds per tab, and one to everyone every 15 seconds; answers are accepted for two minutes.
 const callGap = 4000, everyoneGap = 15000, callLife = 2 * 60 * 1000;
 // y-partyserver keeps the presence IDs each connection controls in its state under this key.
@@ -113,6 +115,23 @@ export class BoardRoom extends YServer {
     connection.setState(state => ({ ...state, role: ['owner', 'edit', 'view'].includes(role) ? role : 'view', email: ctx.request.headers.get('x-concept-graph-email'), name, color: ctx.request.headers.get('x-concept-graph-color') }));
     super.onConnect(connection, ctx);
     this.sendCustomMessage(connection, JSON.stringify({ type: 'access', role: connection.state.role }));
+    // A tab that opens while someone's agent works here sees it at once, not only after the agent's next call.
+    for (const activity of this.recentAgents()) this.sendCustomMessage(connection, JSON.stringify(activity));
+  }
+
+  // People's AI agents (MCP) working on this board right now: kept in memory only, since it matters for minutes. Each
+  // tool call refreshes it; tabs hear of it at most every 20 seconds per person and drop it after agentShownMs.
+  recentAgents(now = Date.now()) {
+    this.agents ??= new Map();
+    for (const [email, activity] of this.agents) if (now - activity.at > agentShownMs) this.agents.delete(email);
+    return [...this.agents.values()].map(({ sent, ...activity }) => activity);
+  }
+  agentWorked(user, tool, now = Date.now()) {
+    const previous = this.recentAgents(now).find(activity => activity.email === user.email), sent = this.agents.get(user.email)?.sent || 0;
+    const activity = { type: 'agent-activity', email: user.email, name: user.name, color: user.color, tool, at: now };
+    const announce = !previous || now - sent >= 20000;
+    this.agents.set(user.email, { ...activity, sent: announce ? now : sent });
+    if (announce) this.broadcastCustomMessage(JSON.stringify(activity));
   }
 
   isReadOnly(connection) { return !canEdit(connection.state?.role); }
@@ -474,6 +493,7 @@ export class BoardRoom extends YServer {
   async mcp({ tool: name, args, user, siteOrigin }) {
     const tool = toolByName.get(name);
     if (!tool || tool.account) return { error: 'Unknown tool.' };
+    this.agentWorked(user, name);
     try {
       if (name === 'list_chat') return { value: this.chat().history(args, user.email) };
       if (name === 'send_chat') {

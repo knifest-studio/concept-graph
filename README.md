@@ -29,6 +29,9 @@ Cloud tabs offer **Reload** or **Later** when a new app version is available. Th
 
 - Connect text and image nodes to build context for a generation or edit.
 - Paste text or images directly onto the canvas; duplicate nodes, copy images, and copy node IDs for agents.
+- Hover an image card and press **Download** in its top-right corner to save the image at full size under its name.
+- A new section opens its name for typing. Select a section by its title (zoomed out too) to move it or resize it from its corners at any zoom.
+- On cloud team boards, the top bar shows a robot badge on the avatar of anyone whose AI agent (MCP) is working on the board, yours included. **Connect an AI agent (MCP)…** lists your connected agents, when one last worked, and lets you disconnect them.
 - Hold Alt (Option on a Mac) while dragging a card, a selection, a group or a section to drag out a copy and leave the original in place; Escape during the drag cancels the copy.
 - Branch by dragging an output into empty space, then type the next prompt.
 - Results appear right beside their prompt, level with its top, with one run’s images in a single column. If that spot is taken, a run started from the canvas goes to the nearest free spot to the prompt’s right or below it that is on your screen when you click (never to its left or above it); with no free space on screen, it lands on screen over other cards for you to drag away. A run’s images stay together in one column until it folds into its slideshow card. Runs started by an agent go under the prompt’s earlier results.

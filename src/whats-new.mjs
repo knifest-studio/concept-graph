@@ -1,11 +1,11 @@
 // The six newest updates, newest first. Keep IDs stable: seeing this list acknowledges only these entries.
 export const whatsNewEntries = [
+  { id: 'download-sections-agents', title: 'Download from the card, easier sections', benefit: 'Hover an image and press Download in its corner. Sections resize at any zoom, their title works zoomed out, and a new one asks for its name. The top bar shows when your AI agent works on the board, and Connect MCP lists and disconnects your agents.' },
   { id: 'video-node', title: 'One Video node, four models', benefit: 'Choose MiniMax, Omni, Kling or Seedance. Connect images and MP4 videos with stored roles; Seedance can edit or extend a video. See limits and an approximate cost, including input video, before generating.' },
   { id: 'cloud-update-notice', title: 'Know when the app updates', benefit: 'A small notice lets you reload for the latest version when you are ready.' },
   { id: 'resize-all-references', title: 'Resize all and generate', benefit: 'If references are too large to reduce automatically, resize them together and continue generating with one click. You can undo the resize.' },
   { id: 'quieter-generation-chip', title: 'Ready with the team key', benefit: 'The top bar shows Ready to generate when your chosen generator can use the team key. Click it any time to connect Codex or an AI agent.' },
   { id: 'team-key-start', title: 'Generate right away', benefit: 'With team access, new prompts start on Nano Banana when your Codex isn’t connected. Without it, Request access in the generator menu asks the admins for you. When several people generate at once, the board queues their runs instead of interrupting them.' },
-  { id: 'connection-numbers', title: 'Point at images by number', benefit: 'Select a prompt to see 1, 2, 3… on its image connections, in the order you connected them. Write “make image 2 like the first one” and every generator knows which is which.' },
 ];
 export const whatsNewSeenKey = 'concept-graph-whats-new-seen';
 export function readWhatsNewSeen(storage) {

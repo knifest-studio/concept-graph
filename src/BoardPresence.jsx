@@ -17,12 +17,18 @@ export function VoiceMark({ voice }) {
 }
 
 const Bell = ({ size = 14 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>;
+// Lucide's "bot": a person's AI agent (MCP) acting in their name.
+export const Bot = ({ size = 12 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>;
+// How long a person's agent is shown after its last tool call on the board (cloud/board-room.mjs agrees).
+export const agentShownMs = 3 * 60 * 1000;
 const Arrow = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>;
 
 // Who else is on the board, as in FigJam: overlapping avatars, the rest behind +N, which lists everyone with the page
 // they are on. A person's avatar offers going to them or calling them over; the bell calls everyone. A person with two
 // tabs open is shown once.
-export function BoardPresence({ peers, pages, onFollow, onCall }) {
+// Beside them, everyone whose AI agent works on the board now (it may work while its person is away), you included, so an
+// agent that edits or generates in someone's name never acts unseen.
+export function BoardPresence({ peers, agents = [], self = '', pages, onFollow, onCall }) {
   // Which menu is open: false, 'more' for everyone, or a person's ID; `left` places a person's menu under their avatar.
   const [open, setOpen] = useState(false), [left, setLeft] = useState(0), [narrow, setNarrow] = useState(() => matchMedia('(max-width: 900px)').matches);
   const container = useRef(null), opener = useRef(null), panel = useRef(null);
@@ -52,10 +58,13 @@ export function BoardPresence({ peers, pages, onFollow, onCall }) {
     else if (['ArrowDown', 'ArrowUp'].includes(event.key) && items.length) { event.preventDefault(); items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
     event.stopPropagation();
   };
-  if (!people.length) return null;
+  if (!people.length && !agents.length) return null;
+  const mine = agent => !!self && agent.email.toLowerCase() === self.toLowerCase();
+  const agentLabel = agent => mine(agent) ? t('Your AI agent is working on this board') : t('{name}’s AI agent is working on this board', { name: agent.user.name || t('Someone') });
   return <div className="cloud-presence" ref={container} aria-label={t('People on this board')} onKeyDown={keys} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
     {shown.map(peer => <button type="button" key={peer.id} className="presence-person" aria-haspopup="menu" aria-expanded={open === peer.id} data-tooltip={open === peer.id ? undefined : peer.user.name} aria-label={t('Teammate menu')} onClick={event => menu(event, peer.id)}><Avatar user={peer.user}/><VoiceMark voice={peer.voice}/></button>)}
     {hidden > 0 && <button type="button" className="presence-more" aria-haspopup="menu" aria-expanded={open === 'more'} aria-label={t('Everyone on this board')} data-tooltip={open ? undefined : t('Everyone on this board')} onClick={event => menu(event, 'more')}>+{hidden}</button>}
+    {[...agents].sort((a, b) => Number(mine(b)) - Number(mine(a))).map(agent => <span key={agent.email} className={`presence-agent${mine(agent) ? ' mine' : ''}`} role="img" aria-label={agentLabel(agent)} data-tooltip={agentLabel(agent)}><Avatar user={agent.user}/><span className="presence-agent-mark"><Bot/></span></span>)}
     {people.length > 0 && <button type="button" className="presence-call-all" aria-label={t('Call everyone here')} data-tooltip={t('Call everyone here')} onClick={() => call('all')}><Bell/></button>}
     {open && open !== 'more' && people.find(peer => peer.id === open) && (peer => <div ref={panel} className="presence-panel presence-person-menu" role="menu" aria-label={peer.user.name} style={{ left }}>
       <div className="presence-who"><Avatar user={peer.user}/><span><b>{peer.user.name}</b>{pageName(peer.page) && <small>{pageName(peer.page)}</small>}</span></div>

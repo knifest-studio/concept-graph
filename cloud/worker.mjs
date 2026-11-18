@@ -14,6 +14,7 @@ import { imageSize, isSiteGenerator, validateTemplate } from '../graph.mjs';
 import { helperDownloadType } from '../src/helper-download.mjs';
 import { clipPattern } from '../src/waiting-videos.mjs';
 import { mcpApi } from './mcp.mjs';
+import { agentsRoute } from './agents.mjs';
 import { agentScopes, authorize } from './oauth.mjs';
 import { purgeTrash } from './trash.mjs';
 import { voiceIce } from './voice.mjs';
@@ -226,6 +227,7 @@ async function route(request, env) {
     return json({ user, siteRole, ...(siteRole ? { accessRequests: await store.accessRequestCount(user.email) } : {}) });
   }
   if (path.startsWith('/api/analytics/')) return analyticsRoute(request, env, user, url, directory(env));
+  if (path === '/api/agents' || path.startsWith('/api/agents/')) return agentsRoute(request, env, user, url);
   if (path === '/api/cloud/team') return teamRoute(request, env, user, url);
   if (path === '/api/cloud/spending') return spendingRoute(request, env, user, url);
   if (path === '/api/nano') {
