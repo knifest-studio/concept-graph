@@ -1,4 +1,4 @@
-import { stripUserContent, privateControlLabel, errorMessage, referrerOrigin, ownScript, validErrorType } from './analytics-privacy.mjs';
+import { stripUserContent, privateControlLabel, sourceLabel, errorMessage, referrerOrigin, ownScript, validErrorType } from './analytics-privacy.mjs';
 import { isTextEntry, matchShortcut } from './shortcuts.mjs';
 
 // Shared rules for the browser and Worker, with no package dependencies. No client identity is accepted.
@@ -59,7 +59,9 @@ export function replayKey(day, session, seq) {
 export function retentionCutoffs(now = Date.now()) { return { replays: now - 30 * 86400000, events: now - 180 * 86400000 }; }
 export function controlName({ ariaLabel, tooltip, text: label, tag = 'control', role, type, id, private: hidden = false } = {}) {
   const labelName = hidden ? privateControlLabel : stripUserContent;
-  return text(labelName(ariaLabel), 60) || text(labelName(tooltip), 60) || (!hidden && text(stripUserContent(label), 60)) || text(`${tag}${role ? `[role=${role}]` : type ? `[type=${type}]` : !hidden && id ? `#${id}` : ''}`, 60);
+  // In a private part of the page a control's own text counts only when it is one of the interface's fixed labels (a
+  // "Done" or "Mute"), never a name or content; before Nov 18 such buttons were all logged as button[type=button].
+  return sourceLabel(text(labelName(ariaLabel), 60) || text(labelName(tooltip), 60) || text(hidden ? privateControlLabel(label) : stripUserContent(label), 60)) || text(`${tag}${role ? `[role=${role}]` : type ? `[type=${type}]` : !hidden && id ? `#${id}` : ''}`, 60);
 }
 // Only presses that trigger one of the app's actions are logged, by the action's ID: never the typed characters, so text
 // typed with AltGr or macOS Option is not collected either. In a text field only the actions that work there count.

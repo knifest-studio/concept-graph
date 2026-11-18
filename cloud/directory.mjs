@@ -9,6 +9,7 @@ const boardFields = 'b.id, b.name, b.createdAt, COALESCE(b.updatedAt, b.createdA
 // A board as one person sees it: their role, never the owner's email.
 const shown = ({ owner, invited, covers, requestCount, ...board }, role) => ({ ...board, covers: JSON.parse(covers), role, ...(role === 'owner' && requestCount ? { requests: requestCount } : {}) });
 const email = value => { try { return normalizeEmail(value); } catch { return null; } };
+const callSource = value => ['agent', 'browser'].includes(value) ? value : null;
 // What a paid call made, as the Spending window groups it; anything else is stored as unknown.
 export const spendKinds = ['nano', 'gpt', 'describe', 'upscale', 'model3d', 'video'];
 const spendKind = kind => spendKinds.includes(kind) ? kind : null;
@@ -47,6 +48,8 @@ export class Directory extends DurableObject {
     ctx.storage.sql.exec('CREATE INDEX IF NOT EXISTS nano_usage_month ON nano_usage (month, email, day)');
     // What each call made (see spendKinds), for the owner's Spending window; rows from before it was recorded have none.
     if (!ctx.storage.sql.exec('PRAGMA table_info(nano_usage)').toArray().some(column => column.name === 'kind')) ctx.storage.sql.exec('ALTER TABLE nano_usage ADD COLUMN kind TEXT');
+    // Where the call came from: 'browser' (Generate on the page) or 'agent' (an AI agent over MCP); rows from before Nov 18 2026 have none.
+    if (!ctx.storage.sql.exec('PRAGMA table_info(nano_usage)').toArray().some(column => column.name === 'via')) ctx.storage.sql.exec('ALTER TABLE nano_usage ADD COLUMN via TEXT');
     // Who may use the site's Gemini and OpenAI keys (emails and @domains), and the admins who decide it. The list used to be the
     // NANO_BANANA_ALLOWED variable: it is copied in once, and from then on admins keep it on the site.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS nano_access (entry TEXT PRIMARY KEY, addedBy TEXT, addedAt TEXT NOT NULL)');
@@ -202,12 +205,12 @@ export class Directory extends DurableObject {
 
   // Checks and reserves in one step, so two Generates at once cannot both pass a nearly used limit.
   // `images` is 0 for a description: it counts against the team's month, not the person's daily images.
-  reserveNano(email, { dailyImages, monthlyUsd, estimateUsd, images = 1, kind = null }, now = Date.now()) {
+  reserveNano(email, { dailyImages, monthlyUsd, estimateUsd, images = 1, kind = null, via = null }, now = Date.now()) {
     const { usedToday, teamSpentUsd } = this.nanoUsage(email, now);
     if (images && usedToday + images > dailyImages) return { error: `Daily limit reached (${Math.min(usedToday, dailyImages)}/${dailyImages}).`, status: 429 };
     if (teamSpentUsd + estimateUsd > monthlyUsd) return { error: 'Team budget for this month is used up.', status: 429 };
     const id = crypto.randomUUID(), day = new Date(now).toISOString().slice(0, 10);
-    this.ctx.storage.sql.exec('INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)', id, email, day, day.slice(0, 7), images ? 1 : 0, estimateUsd, now, spendKind(kind));
+    this.ctx.storage.sql.exec('INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind, via) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)', id, email, day, day.slice(0, 7), images ? 1 : 0, estimateUsd, now, spendKind(kind), callSource(via));
     return { reservation: id };
   }
 
@@ -219,7 +222,7 @@ export class Directory extends DurableObject {
   // Every call of a run of variants is reserved in one step, or none is, so a run never starts with only part of what was
   // asked; `fit` says how many would have fitted. The rows arrive as one JSON value because a Durable Object query
   // takes at most 100 bound values, and the room makes one call here instead of one per variant.
-  reserveNanoMany(email, { dailyImages, monthlyUsd, estimates, images = 1, kind = null }, now = Date.now()) {
+  reserveNanoMany(email, { dailyImages, monthlyUsd, estimates, images = 1, kind = null, via = null }, now = Date.now()) {
     const { usedToday, teamSpentUsd } = this.nanoUsage(email, now);
     let fit = 0, spent = teamSpentUsd;
     for (const estimateUsd of estimates) {
@@ -229,14 +232,24 @@ export class Directory extends DurableObject {
       spent += estimateUsd; fit++;
     }
     const day = new Date(now).toISOString().slice(0, 10), rows = estimates.map(usd => ({ id: crypto.randomUUID(), usd }));
-    this.ctx.storage.sql.exec(`INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind)
-      SELECT json_extract(value, '$.id'), ?, ?, ?, ?, json_extract(value, '$.usd'), 1, ?, ? FROM json_each(?)`, email, day, day.slice(0, 7), images ? 1 : 0, now, spendKind(kind), JSON.stringify(rows));
+    this.ctx.storage.sql.exec(`INSERT INTO nano_usage (id, email, day, month, images, usd, open, createdAt, kind, via)
+      SELECT json_extract(value, '$.id'), ?, ?, ?, ?, json_extract(value, '$.usd'), 1, ?, ?, ? FROM json_each(?)`, email, day, day.slice(0, 7), images ? 1 : 0, now, spendKind(kind), callSource(via), JSON.stringify(rows));
     return { reservations: rows.map(row => row.id) };
   }
 
   // Settles a run's reservations, each with what its call produced and cost, in one call from the room.
   settleNanoMany(entries) {
     for (const { id, ...usage } of entries) this.settleNano(id, usage);
+  }
+
+  // Product analytics for site admins: what each person made on the team's keys since `fromDay`, and how much of it an AI
+  // agent (MCP) started. Browser analytics cannot see an agent's runs (no page is open), while every call on the team's
+  // keys already has a row here for limits and Spending. A failed call settled to nothing is left out. Null for non-admins.
+  teamKeyUse(person, fromDay, now = Date.now()) {
+    if (!this.siteRole(person)) return null;
+    const live = now - nanoReservationTtl;
+    return this.ctx.storage.sql.exec(`SELECT email, kind, COALESCE(via, '') AS via, COUNT(*) AS made, COALESCE(SUM(images), 0) AS images FROM nano_usage
+      WHERE day >= ? AND (images > 0 OR usd > 0) AND (open = 0 OR createdAt > ?) GROUP BY email, kind, via`, String(fromDay || ''), live).toArray();
   }
 
   // The owner's Spending window: each person's share of the team's month (UTC), split by what they made. Money counts every

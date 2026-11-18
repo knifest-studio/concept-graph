@@ -36,7 +36,7 @@ export function elementName(element) {
   const hidden = !!element.closest(privateTextSelector);
   // Text inside a private part of a public control (a page tab's name and people) is left out, not only private controls.
   return element.dataset?.analyticsName ? stripUserContent(element.dataset.analyticsName).slice(0, 60) : controlName({ private: hidden, ariaLabel: element.getAttribute('aria-label'), tooltip: element.dataset?.tooltip,
-    text: hidden ? '' : publicText(['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) ? element.labels?.[0] : element),
+    text: (field => hidden ? field?.textContent?.trim() || '' : publicText(field))(['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) ? element.labels?.[0] : element),
     tag: element.tagName?.toLowerCase(), role: element.getAttribute('role'), type: element.getAttribute('type'), id: element.id });
 }
 export function elementArea(element) {
