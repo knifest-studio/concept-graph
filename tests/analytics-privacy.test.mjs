@@ -166,3 +166,12 @@ test('new private-control names remain useful in English and Ukrainian without a
   assert.match(main, /className="helper-browser-warning" role="alert" data-analytics-notice="helper_browser_compatibility"/);
   assert.equal(errorMessage('Open this page in ChromeSafari and in-app browsers such as Telegram’s block websites from reaching the helper on your computer, so pairing cannot work here.'), 'Open');
 });
+
+test('a private control is named by its own text only when that text is a fixed interface label', async () => {
+  const { controlName } = await import('../src/analytics-core.mjs');
+  assert.equal(controlName({ private: true, text: 'Done', tag: 'button', type: 'button' }), 'Done');
+  assert.equal(controlName({ private: true, text: 'Пізніше', tag: 'button', type: 'button' }), 'Later');
+  assert.equal(controlName({ ariaLabel: 'Перейменувати секцію', tag: 'strong', role: 'button' }), 'Rename section');
+  assert.equal(controlName({ private: true, text: 'Anna Smith', tag: 'button', type: 'button' }), 'button[type=button]');
+  assert.equal(controlName({ private: true, text: 'anna@example.test', tag: 'button', type: 'button' }), 'button[type=button]');
+});

@@ -23,6 +23,9 @@ export function publicText(element) {
 const userSlot = /\{(?:name|label|email|owner|names|domain|prompt|text|message|error|file|filename|path|caption|page)\}/;
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const phrases = Object.entries(uk).flatMap(([english, translation]) => [english, ...[translation].flat()]);
+// Controls are counted under the interface's English words, so one button is one row whichever language people use.
+const englishOf = new Map(Object.entries(uk).flatMap(([english, translation]) => [translation].flat().filter(value => typeof value === 'string').map(value => [value, english])));
+export const sourceLabel = value => englishOf.get(value) ?? value;
 const patternFor = value => new RegExp('^' + value.split(/(\{\w+\})/).map(part => /^\{\w+\}$/.test(part) ? '[\\s\\S]+?' : escape(part)).join('') + '$');
 const fixedPart = value => value.replace(/\{\w+\}$/, '').replace(/\{\w+\}/g, '…').trim();
 const templates = phrases.filter(value => userSlot.test(value)).map(value => ({
@@ -55,7 +58,7 @@ const fixedMessages = new Set([...phrases, 'Failed', 'Error', 'Failed to fetch',
 export function errorMessage(value) {
   const clean = stripUserContent(value);
   // A provider or arbitrary exception can echo an unquoted prompt; only known UI message structure is safe.
-  return fixedMessages.has(clean) ? clean : 'Error (details hidden)';
+  return fixedMessages.has(clean) ? sourceLabel(clean) : 'Error (details hidden)';
 }
 // Error facts that carry no content: the error's type, where in our own scripts it was thrown (file name, line and column
 // only) and known noise. Message and stack text never leave the browser.

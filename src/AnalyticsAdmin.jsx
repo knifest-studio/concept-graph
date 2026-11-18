@@ -63,6 +63,16 @@ function Session({ id, services, onClose }) {
       {data.events.length > 0 && data.events.length % 1000 === 0 && <button type="button" disabled={loading} onClick={more}>{t('Load more events')}</button>}</>}
   </section>;
 }
+// One row per person, most calls first; `via` is empty for calls made before the source was recorded (Nov 18 2026).
+export function teamKeyRows(rows) {
+  const people = new Map();
+  for (const row of rows || []) {
+    const entry = people.get(row.email) || { email: row.email, made: 0, images: 0, agent: 0, browser: 0, earlier: 0 };
+    entry.made += row.made; entry.images += row.images; entry[row.via === 'agent' ? 'agent' : row.via === 'browser' ? 'browser' : 'earlier'] += row.made;
+    people.set(row.email, entry);
+  }
+  return [...people.values()].sort((a, b) => b.made - a.made || a.email.localeCompare(b.email));
+}
 export default function AnalyticsAdmin({ services }) {
   const [data, setData] = useState(null), [error, setError] = useState(''), [days, setDays] = useState(7), [selected, setSelected] = useState(null), [refresh, setRefresh] = useState(0), [least, setLeast] = useState(false), [area, setArea] = useState('');
   useEffect(() => {
@@ -80,6 +90,8 @@ export default function AnalyticsAdmin({ services }) {
       <section><h2>{t('Rage clicks')}</h2><Table columns={[["area","Area"],["name","Control"],["count","Count"],["users","Unique users"]]} rows={data.rage}/></section>
       <section><h2>{t('Errors')}</h2><Table columns={[["name","Event"],["errorType","Type"],["location","Where"],["message","Message"],["noise","Noise"],["count","Count"],["users","Unique users"]]} rows={data.errors}/></section>
       <section><h2>{t('Generations')}</h2><Table columns={[["generator","Generator"],["started","Started"],["finished","Finished"],["failed","Failed"],["duration","Average duration"]]} rows={data.generations.map(row => ({ ...row, duration: duration(row.duration) }))}/></section>
+      {data.teamKeys && <section><h2>{t('Team-key generations')}</h2><p>{t('Every call on the team’s keys (Nano Banana, GPT Image, fal), including calls an AI agent started over MCP, which the events above cannot see. Personal Codex runs are not included.')}</p>
+        <Table columns={[["email","Person"],["made","Calls"],["images","Images"],["agent","Through an agent"],["browser","On the page"],["earlier","Source not recorded"]]} rows={teamKeyRows(data.teamKeys)}/></section>}
       <Heatmap points={data.heatmap}/>
       <section><h2>{t('Recent sessions')}</h2><p>{t('Newest 100 sessions in the selected period.')}</p><Table columns={[["user","User"],["started","Started"],["duration","Duration"],["active","Active time"],["event_count","Events"],["recording","Recording"],["open","Details"]]} rows={data.sessions.map(row => ({ ...row, started: date(row.started), duration: duration(row.duration || row.last_seen - row.started), active: duration(row.active), recording: row.replay_chunks ? t('Available') : '—', open: <button type="button" onClick={() => setSelected(row.id)}>{t('Open session')}</button> }))}/></section>
       {selected && <Session key={selected} id={selected} services={services} onClose={() => setSelected(null)}/>}</>}

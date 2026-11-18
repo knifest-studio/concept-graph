@@ -397,7 +397,7 @@ export class BoardRoom extends YServer {
   // Worker RPC for a signed-in person on the allowed list. Reserves their quota, puts the run on the board and returns;
   // the paid call continues in the background (waitUntil keeps the room alive for up to 15 minutes). `settings` says the
   // request comes from a page that shows generation settings (agents always do); `languages` is its Accept-Language.
-  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages, siteOrigin }) {
+  async startNano({ nodeId, generator, view, client, clock, requester, settings: knowsSettings = false, languages, siteOrigin, via = 'browser' }) {
     if (generator !== undefined && !isSiteGenerator(generator)) return { error: 'Choose a site generator.', status: 400 };
     if (!await this.caughtUp(client, clock)) return { error: 'Your latest edits have not reached the board yet. Try again in a moment.', status: 409 };
     const saved = readCloudGraph(this.document), target = saved.nodes.find(item => item.id === nodeId);
@@ -446,11 +446,11 @@ export class BoardRoom extends YServer {
       // Each variant (or image to upscale) is its own call, so each takes its own share of the person's day and the team's month.
       // Variants are reserved together, all or none, in one call to the directory however many there are.
       if (variants) {
-        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates, kind });
+        const reserved = await this.directory().reserveNanoMany(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimates, kind, via });
         if (reserved.error) return { error: reserved.fit ? `${reserved.error} Only ${reserved.fit} of ${calls} variants fit; choose fewer.` : reserved.error, status: reserved.status };
         reservations.push(...reserved.reservations);
       } else for (let index = 0; index < calls; index++) {
-        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1, kind });
+        const reserved = await this.directory().reserveNano(requester.email, { dailyImages: settings.dailyImages, monthlyUsd: settings.monthlyUsd, estimateUsd: estimates[index], images: describe ? 0 : 1, kind, via });
         if (reserved.error) {
           await release();
           return index ? { ...reserved, error: `${reserved.error} Only ${index} of ${calls} images fit; connect fewer.` } : reserved;
@@ -537,7 +537,7 @@ export class BoardRoom extends YServer {
       if (answer.error) return { error: answer.error };
       return answer.runId ? { value: { runId: answer.runId, generator: 'codex', status: 'started' } } : { error: 'This prompt is already generating.' };
     }
-    const result = await this.startNano({ nodeId, requester: user, settings: true, siteOrigin });
+    const result = await this.startNano({ nodeId, requester: user, settings: true, siteOrigin, via: 'agent' });
     return result.error ? { error: result.error } : { value: { runId: result.run.id, generator: this.document.getMap('runs').get(result.run.id).provider, status: 'running' } };
   }
 
