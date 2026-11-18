@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cloud team boards: invite people to voice from the voice panel — each person on the board who isn’t in voice gets an Invite button and a card with Join voice, Invite everyone reaches the whole board, and Copy invite link opens the board with the voice panel ready.
+
 - Cloud analytics records how voice calls go: whether each connection succeeded, failed or timed out, the kinds of network route tried and used (direct, through a router or a relay, never addresses), whether a relay was offered, audio packet counts and overall loudness each way and whether playback ran a few seconds in, fixed error codes and blocked call audio, so silent calls can be diagnosed.
 
 - Prompts and describe nodes show one button per available model; Codex, Nano Banana/Gemini and GPT Image/GPT can run the same prompt concurrently, each with independent progress, elapsed time and owner cancellation. Model options retain Codex connection, access requests and shared limits; keyboard/MCP use the last model clicked.

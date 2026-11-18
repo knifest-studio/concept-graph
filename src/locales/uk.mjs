@@ -347,6 +347,18 @@ export default {
   'Voice connection failed. Leave and join again.': 'Голосове з’єднання втрачено. Вийдіть із чату та приєднайтеся знову.',
   'Voice disconnected. Join again when the board reconnects.': 'Голосове з’єднання втрачено. Приєднайтеся знову після відновлення з’єднання з дошкою.',
   'Voice join cancelled.': 'Приєднання до голосового чату скасовано.',
+  'Invite to voice': 'Запросити в голосовий чат',
+  'Invited': 'Запрошено',
+  'Invite everyone': 'Запросити всіх',
+  'Copy invite link': 'Скопіювати посилання-запрошення',
+  'Everyone on this board is in voice.': 'Усі, хто зараз на дошці, уже в голосовому чаті.',
+  'Invite link copied. People need access to this board to join.': 'Посилання скопійовано. Щоб приєднатися, потрібен доступ до цієї дошки.',
+  '{name} invites everyone to voice chat': '{name} запрошує всіх у голосовий чат',
+  '{name} invites you to voice chat': '{name} запрошує вас у голосовий чат',
+  'Your microphone turns on when you join.': 'Мікрофон увімкнеться, коли ви приєднаєтеся.',
+  'Invited {count} person to voice': ['Запросили в голосовий чат {count} людину', 'Запросили в голосовий чат {count} людини', 'Запросили в голосовий чат {count} людей', 'Запросили в голосовий чат {count} людини'],
+  'Invited {name} to voice': 'Запросили в голосовий чат: {name}',
+  'Joining voice: {names}': 'Приєднуються: {names}',
   'Language': 'Мова',
 
   // Pages
