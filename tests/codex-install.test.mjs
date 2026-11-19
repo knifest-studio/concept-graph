@@ -158,7 +158,8 @@ test('a failed connection recovers with the installed CLI and existing ChatGPT l
   t.after(() => { for (const key of ['PATH', 'CODEX_BIN', 'CONCEPT_GRAPH_CODEX_INSTALL_DIR']) {
     if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key];
   } });
-  process.env.PATH = '';
+  // Only system folders, like a Mac app opened from Finder: no Codex there, but GNU tar on Linux still finds gzip.
+  process.env.PATH = ['/usr/bin', '/bin'].join(path.delimiter);
   process.env.CODEX_BIN = path.join(f.temporary, 'missing-codex');
   process.env.CONCEPT_GRAPH_CODEX_INSTALL_DIR = f.options.root;
   const codex = new Codex(f.temporary);
