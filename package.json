@@ -56,6 +56,11 @@
   "bugs": {
     "url": "https://github.com/knifest-studio/concept-graph/issues"
   },
+  "overrides": {
+    "y-partyserver": {
+      "@cloudflare/workers-types": "$@cloudflare/workers-types"
+    }
+  },
   "engines": {
     "node": ">=22.0.0"
   }
